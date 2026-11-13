@@ -1,9 +1,9 @@
 /**
  * Self-contained HTML report (no external scripts; fonts from Google Fonts with fallbacks).
  */
-import { tokenize } from './lexer.js';
-import type { CondResult, Metric, ObjectResult } from './analyze.js';
-import type { RunReport } from './run.js';
+import { tokenize } from '@pltest/core';
+import type { CondResult, Metric, ObjectResult } from '@pltest/coverage';
+import type { RunReport } from '@pltest/coverage';
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const pctNum = (m: Metric) => (m.total ? (m.covered / m.total) * 100 : null);

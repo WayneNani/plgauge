@@ -1,3 +1,5 @@
 node_modules/
-demo/report/coverage.json
 corpus/.cache/
+.env.local
+examples/order_pricing/report/coverage.json
+examples/order_pricing/plcov.local.json

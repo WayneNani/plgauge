@@ -1,0 +1,3 @@
+Dateien 747 · Bodies 280 · Spezifikationen 343 · Latin-1-Dateien 2
+Geparst und instrumentiert: 280/280
+Anweisungen 25496 · Entscheidungen 2891 · Teilbedingungen 3383 · nicht gemessen 754

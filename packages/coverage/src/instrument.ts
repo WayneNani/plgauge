@@ -10,7 +10,7 @@
  * Instrumentation is purely additive and never inserts line breaks, so line
  * numbers in error stacks and reports stay identical to the original source.
  */
-import { tokenize, type Token } from './lexer.js';
+import { tokenize, type Token } from '@pltest/core';
 import type {
   Branch, CondNode, Condition, Construct, ConstructKind, Decision, DecisionKind,
   Gap, IdCounters, LoopProbe, ObjectMap, Span, StatementProbe,

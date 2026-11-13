@@ -1,0 +1,19 @@
+{
+  "name": "@pltest/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/cli.ts"
+  },
+  "dependencies": {
+    "@pltest/core": "*",
+    "@pltest/coverage": "*",
+    "@pltest/report": "*",
+    "@pltest/mutation": "*",
+    "oracledb": "^26.0.0"
+  },
+  "bin": {
+    "pltest": "src/cli.ts"
+  }
+}

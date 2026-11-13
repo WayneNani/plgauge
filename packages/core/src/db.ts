@@ -1,0 +1,165 @@
+/**
+ * Database access shared by coverage and mutation: loading code objects with their
+ * compiler settings, compiling with those settings, restoring the original.
+ *
+ * Every change to a code object goes through `replaceSource`, which records the
+ * original in the restore journal first (see journal.ts). A run that dies leaves
+ * the journal behind, and `pltest restore` puts the originals back.
+ */
+import oracledb from 'oracledb';
+import { createHash } from 'node:crypto';
+import { journalForget, journalRemember } from './journal.js';
+
+export interface ConnectConfig {
+  user: string;
+  password: string;
+  connectString: string;
+}
+
+/** A PL/SQL unit as stored in the database. */
+export interface SourceObject {
+  owner: string;
+  name: string;
+  type: string;
+  /** ALL_SOURCE text, lines joined. */
+  original: string;
+  /** DBMS_PREPROCESSOR output: conditional compilation resolved, line numbers kept. */
+  processed: string;
+  /** Compiler settings from ALL_PLSQL_OBJECT_SETTINGS. */
+  settings: Record<string, string>;
+}
+
+export function connect(cfg: ConnectConfig): Promise<oracledb.Connection> {
+  return oracledb.getConnection({ user: cfg.user, password: cfg.password, connectString: cfg.connectString });
+}
+
+export function dbIdent(s: string): string {
+  if (!/^[A-Za-z][A-Za-z0-9_$#]*$/.test(s)) throw new Error(`Ungültiger Bezeichner: ${s}`);
+  return s.toUpperCase();
+}
+
+export function sha256(s: string): string {
+  return createHash('sha256').update(s, 'utf8').digest('hex');
+}
+
+export interface DatabaseInfo {
+  banner: string;
+  major: number;
+}
+
+export async function databaseInfo(conn: oracledb.Connection): Promise<DatabaseInfo> {
+  const ver = await conn.execute<[string]>(`select banner_full from v$version where rownum = 1`);
+  const banner = ver.rows?.[0]?.[0]?.split('\n')[0] ?? 'Oracle Database';
+  const major = Number(
+    (await conn.execute<[number]>(`select to_number(regexp_substr(version_full, '^\\d+')) from product_component_version where rownum = 1`)).rows?.[0]?.[0] ?? 19,
+  );
+  return { banner, major };
+}
+
+export interface ObjectFilter {
+  /** Regular expressions on object names. */
+  include?: string;
+  exclude?: string;
+  /** Object names never loaded (runtime packages). */
+  skip?: string[];
+}
+
+/**
+ * Loads the code objects of a schema that tests can exercise: package and type
+ * bodies, procedures, functions, triggers. utPLSQL test packages are left out.
+ */
+export async function loadObjects(conn: oracledb.Connection, schema: string, filter: ObjectFilter = {}): Promise<SourceObject[]> {
+  const res = await conn.execute<[string, string]>(
+    `select o.object_name, o.object_type
+       from all_objects o
+      where o.owner = :s
+        and o.object_type in ('PACKAGE BODY', 'PROCEDURE', 'FUNCTION', 'TYPE BODY', 'TRIGGER')
+        and not exists (
+              select 1 from all_source s
+               where s.owner = o.owner and s.name = o.object_name and s.type = 'PACKAGE'
+                 and regexp_like(s.text, '--\\s*%suite', 'i'))
+      order by o.object_name, o.object_type`,
+    { s: schema },
+  );
+  const skip = new Set((filter.skip ?? []).map((s) => s.toUpperCase()));
+  const out: SourceObject[] = [];
+  for (const [name, type] of res.rows ?? []) {
+    if (skip.has(name)) continue;
+    if (filter.include && !new RegExp(filter.include, 'i').test(name)) continue;
+    if (filter.exclude && new RegExp(filter.exclude, 'i').test(name)) continue;
+    out.push(await loadObject(conn, schema, name, type));
+  }
+  return out;
+}
+
+export async function loadObject(conn: oracledb.Connection, owner: string, name: string, type: string): Promise<SourceObject> {
+  const src = await conn.execute<[string]>(
+    `select text from all_source where owner = :o and name = :n and type = :t order by line`, { o: owner, n: name, t: type },
+  );
+  const original = (src.rows ?? []).map((r) => r[0]).join('');
+  const pp = await conn.execute(
+    `declare l dbms_preprocessor.source_lines_t; s clob; begin
+       l := dbms_preprocessor.get_post_processed_source(:t, :o, :n);
+       for i in 1 .. l.count loop s := s || l(i); end loop;
+       :x := s;
+     end;`,
+    { t: type, o: owner, n: name, x: { dir: oracledb.BIND_OUT, type: oracledb.DB_TYPE_CLOB } },
+  );
+  const lob = (pp.outBinds as { x: oracledb.Lob | null }).x;
+  const processed = lob ? String(await lob.getData()) : original;
+  const st = await conn.execute<[number, string, string, string]>(
+    `select plsql_optimize_level, plsql_code_type, plsql_ccflags, nls_length_semantics
+       from all_plsql_object_settings where owner = :o and name = :n and type = :t`, { o: owner, n: name, t: type },
+  );
+  const s = st.rows?.[0];
+  return {
+    owner, name, type, original, processed,
+    settings: s ? { plsql_optimize_level: String(s[0]), plsql_code_type: s[1], plsql_ccflags: s[2] ?? '', nls_length_semantics: s[3] } : {},
+  };
+}
+
+/** Compiles source (without CREATE) with the object's original settings. Returns error text or null. */
+export async function compile(conn: oracledb.Connection, obj: SourceObject, source: string): Promise<string | null> {
+  const st = obj.settings;
+  if (st.plsql_optimize_level) await conn.execute(`alter session set plsql_optimize_level = ${Number(st.plsql_optimize_level)}`);
+  if (st.plsql_code_type) await conn.execute(`alter session set plsql_code_type = '${st.plsql_code_type.replace(/'/g, '')}'`);
+  await conn.execute(`alter session set plsql_ccflags = '${(st.plsql_ccflags ?? '').replace(/'/g, "''")}'`);
+  if (st.nls_length_semantics) await conn.execute(`alter session set nls_length_semantics = ${st.nls_length_semantics === 'CHAR' ? 'CHAR' : 'BYTE'}`);
+  try {
+    await conn.execute(`create or replace ${source.replace(/\s*$/, '')}`);
+  } catch (e) {
+    // ORA-24344: success with compilation error -> read the errors below
+    if (!(e as Error).message.includes('ORA-24344')) return (e as Error).message.split('\n')[0];
+  }
+  const err = await conn.execute<[number, string]>(
+    `select line, text from all_errors where owner = :o and name = :n and type = :t and attribute = 'ERROR' order by sequence`,
+    { o: obj.owner, n: obj.name, t: obj.type },
+  );
+  if (err.rows?.length) return err.rows.slice(0, 3).map((r) => `Zeile ${r[0]}: ${r[1].trim()}`).join('; ');
+  return null;
+}
+
+/**
+ * Replaces an object's code (instrumented or mutated). The original goes into the
+ * restore journal before the first change, so it survives a crashed run.
+ */
+export async function replaceSource(conn: oracledb.Connection, obj: SourceObject, source: string, tool: string): Promise<string | null> {
+  await journalRemember(conn, obj, tool);
+  return compile(conn, obj, source);
+}
+
+/** Compiles the originals again and clears their journal entries. */
+export async function restoreAll(conn: oracledb.Connection, objs: SourceObject[], say: (m: string) => void): Promise<void> {
+  const schemas = new Set<string>();
+  for (const obj of objs) {
+    const err = await compile(conn, obj, obj.original);
+    if (err) {
+      say(`  ✗ Wiederherstellung von ${obj.name} fehlgeschlagen: ${err}`);
+      continue;
+    }
+    await journalForget(conn, obj);
+    schemas.add(obj.owner);
+  }
+  for (const s of schemas) await conn.execute(`begin dbms_utility.compile_schema(:s, compile_all => false); end;`, { s });
+  say(`Originalcode von ${objs.length} Objekten wiederhergestellt`);
+}

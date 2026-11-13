@@ -1,24 +1,20 @@
 #!/usr/bin/env -S npx tsx
 /**
- * plcov – prototype CLI
+ * pltest – coverage and mutation testing for PL/SQL
  *
- *   plcov run --config plcov.json [--out report]     measure coverage, write report
- *   plcov instrument <file.sql> [--no-sql]           print instrumented source (offline)
- *   plcov deploy <file.sql ...> --config plcov.json  run SQL*Plus-style scripts (demo setup)
- *   plcov report <coverage.json> [--out report]      re-render HTML from saved JSON
- *   plcov export <coverage.json> [--out file]         write the exchange format plcov-coverage/1
- *   plcov corpus <dir ...> [--db plcov.json]          robustness check on a corpus of PL/SQL files
+ *   pltest coverage --config plcov.json [--out report]  measure coverage, write report ("run" is the old name)
+ *   pltest instrument <file.sql> [--no-sql]             print instrumented source (offline)
+ *   pltest deploy <file.sql ...> --config plcov.json    run SQL*Plus-style scripts (demo setup)
+ *   pltest report <coverage.json> [--out report]        re-render HTML from saved JSON
+ *   pltest export <coverage.json> [--out file]          write the exchange format plcov-coverage/1
+ *   pltest corpus <dir ...> [--db plcov.json]           robustness check on a corpus of PL/SQL files
+ *   pltest restore --config plcov.json [--list]         put back code left changed by a killed run (journal)
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import oracledb from 'oracledb';
-import { instrument } from './instrument.js';
-import { preprocess } from './preprocess.js';
-import { newIds } from './model.js';
-import { runCoverage, type RunConfig, type RunReport } from './run.js';
-import { renderHtml } from './report.js';
-import { toCoverageExport } from './export.js';
-import { runCorpus } from './corpus.js';
+import { connect, ensureJournal, journalEntries, preprocess, restoreAll, splitScript } from '@pltest/core';
+import { instrument, newIds, runCoverage, toCoverageExport, runCorpus, type RunConfig, type RunReport } from '@pltest/coverage';
+import { renderHtml } from '@pltest/report';
 
 const args = process.argv.slice(2);
 const cmd = args.shift();
@@ -39,36 +35,13 @@ const flag = (name: string) => {
 function loadConfig(path: string | undefined): RunConfig {
   if (!path) throw new Error('--config fehlt');
   const cfg = JSON.parse(readFileSync(path, 'utf8')) as RunConfig;
-  cfg.password = process.env.PLCOV_PASSWORD ?? cfg.password;
+  cfg.password = process.env.PLTEST_PASSWORD ?? process.env.PLCOV_PASSWORD ?? cfg.password;
   return cfg;
-}
-
-/** Splits a SQL*Plus style script into statements ("/" on its own line ends PL/SQL, ";" ends SQL). */
-function splitScript(text: string): string[] {
-  const out: string[] = [];
-  let buf: string[] = [];
-  let plsql = false;
-  for (const line of text.split('\n')) {
-    if (!buf.length && !line.trim()) continue;
-    if (line.trim() === '/') {
-      if (buf.length) out.push(buf.join('\n'));
-      buf = [];
-      plsql = false;
-      continue;
-    }
-    if (!buf.length) plsql = /^\s*create\s+(or\s+replace\s+)?(editionable\s+|noneditionable\s+)?(package|procedure|function|trigger|type)\b/i.test(line) || /^\s*(declare|begin)\b/i.test(line);
-    buf.push(line);
-    if (!plsql && /;\s*$/.test(line)) {
-      out.push(buf.join('\n').replace(/;\s*$/, ''));
-      buf = [];
-    }
-  }
-  if (buf.join('').trim()) out.push(buf.join('\n'));
-  return out;
 }
 
 async function main() {
   switch (cmd) {
+    case 'coverage':
     case 'run': {
       const cfg = loadConfig(opt('config'));
       const out = resolve(opt('out') ?? 'plcov-report');
@@ -127,7 +100,7 @@ async function main() {
     }
     case 'deploy': {
       const cfg = loadConfig(opt('config'));
-      const conn = await oracledb.getConnection({ user: cfg.user, password: cfg.password, connectString: cfg.connectString });
+      const conn = await connect(cfg);
       try {
         for (const file of args) {
           for (const stmt of splitScript(readFileSync(file, 'utf8'))) {
@@ -148,8 +121,26 @@ async function main() {
       }
       break;
     }
+    case 'restore': {
+      const cfg = loadConfig(opt('config'));
+      const listOnly = flag('list');
+      const conn = await connect(cfg);
+      try {
+        await ensureJournal(conn);
+        const entries = await journalEntries(conn);
+        if (!entries.length) {
+          console.error('Journal leer: kein Objekt ist verändert.');
+          break;
+        }
+        for (const e of entries) console.error(`  ${e.type} ${e.owner}.${e.name} (${e.tool}, seit ${e.createdAt.toISOString()})`);
+        if (!listOnly) await restoreAll(conn, entries.map((e) => e.object), (m) => console.error(m));
+      } finally {
+        await conn.close();
+      }
+      break;
+    }
     default:
-      console.error('Verwendung: plcov run|report|export|instrument|deploy …  (siehe README.md)');
+      console.error('Verwendung: pltest coverage|report|export|instrument|deploy|corpus|restore …  (siehe README.md)');
       process.exitCode = 2;
   }
 }

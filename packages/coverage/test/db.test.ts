@@ -8,9 +8,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import oracledb from 'oracledb';
-import { instrument } from '../src/instrument.js';
-import { newIds } from '../src/model.js';
-import { installRuntime } from '../src/run.js';
+import { instrument } from '@pltest/coverage';
+import { newIds } from '@pltest/coverage';
+import { installRuntime } from '@pltest/coverage';
 
 const db = process.env.PLCOV_DB;
 const m = db ? /^([^/]+)\/([^@]+)@(.+)$/.exec(db) : null;
