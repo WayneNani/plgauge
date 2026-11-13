@@ -34,7 +34,12 @@ export class LexError extends Error {
   }
 }
 
-export function tokenize(src: string): Token[] {
+export interface LexOptions {
+  /** Unterminated strings, comments and quoted identifiers run to the end instead of throwing. */
+  tolerant?: boolean;
+}
+
+export function tokenize(src: string, opts: LexOptions = {}): Token[] {
   const tokens: Token[] = [];
   let pos = 0;
   let line = 1;
@@ -81,8 +86,8 @@ export function tokenize(src: string): Token[] {
     }
     if (ch === '/' && src[pos + 1] === '*') {
       const k = src.indexOf('*/', pos + 2);
-      if (k < 0) throw new LexError('Unterminated comment', startLine, startCol);
-      advance(k + 2);
+      if (k < 0 && !opts.tolerant) throw new LexError('Unterminated comment', startLine, startCol);
+      advance(k < 0 ? src.length : k + 2);
       push('trivia', start, pos, startLine, startCol);
       continue;
     }
@@ -94,8 +99,8 @@ export function tokenize(src: string): Token[] {
       const open = src[openPos];
       const close = Q_CLOSERS[open] ?? open;
       const k = src.indexOf(close + "'", openPos + 1);
-      if (k < 0) throw new LexError('Unterminated q-quoted string', startLine, startCol);
-      advance(k + 2);
+      if (k < 0 && !opts.tolerant) throw new LexError('Unterminated q-quoted string', startLine, startCol);
+      advance(k < 0 ? src.length : k + 2);
       push('string', start, pos, startLine, startCol);
       continue;
     }
@@ -109,7 +114,11 @@ export function tokenize(src: string): Token[] {
     if (src[pos] === "'") {
       let k = pos + 1;
       for (;;) {
-        if (k >= src.length) throw new LexError('Unterminated string', startLine, startCol);
+        if (k >= src.length) {
+          if (!opts.tolerant) throw new LexError('Unterminated string', startLine, startCol);
+          k = src.length - 1;
+          break;
+        }
         if (src[k] === "'") {
           if (src[k + 1] === "'") {
             k += 2;
@@ -127,8 +136,8 @@ export function tokenize(src: string): Token[] {
     // quoted identifiers
     if (ch === '"') {
       const k = src.indexOf('"', pos + 1);
-      if (k < 0) throw new LexError('Unterminated quoted identifier', startLine, startCol);
-      advance(k + 1);
+      if (k < 0 && !opts.tolerant) throw new LexError('Unterminated quoted identifier', startLine, startCol);
+      advance(k < 0 ? src.length : k + 1);
       push('qident', start, pos, startLine, startCol);
       continue;
     }

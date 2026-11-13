@@ -14,3 +14,4 @@ fetch utplsql-3.1.14 https://github.com/utPLSQL/utPLSQL.git          072dfbc1   
 fetch logger         https://github.com/OraOpenSource/Logger.git     600f0c44   # MIT
 fetch alexandria     https://github.com/mortenbra/alexandria-plsql-utils.git ada48755  # per-file licences
 fetch pljson         https://github.com/pljson/pljson.git            09a54e4e   # MIT
+fetch console        https://github.com/ogobrecht/console.git        72ff8f85   # MIT

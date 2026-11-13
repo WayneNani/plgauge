@@ -1,8 +1,6 @@
 /**
  * Mutation points and mutants, ported from plmut (internal/mutant/mutant.go).
- *
- * Until the core parser understands expressions (plan phase 3), the points come from
- * the Java finder (IslandSQL) through a JSON adapter: see finder.ts.
+ * The points come from find.ts, which walks the syntax tree of the core parser.
  */
 
 /** A compilation unit (CREATE … statement) in a source file. Offsets are UTF-8 bytes, end exclusive. */

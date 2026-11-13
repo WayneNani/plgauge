@@ -18,3 +18,25 @@ einen Aufruf teilen, hängt von den gemessenen Laufzeiten ab; deshalb schwankt d
 Fassungen. Zwei der sechs Fälle sind in beiden erkannt (Timeout gegen getötet).
 
 Dateien: `example-*.json`, `pljson-schema.json` (Go-Ausgaben); Vergleich mit `pltest mutate compare`.
+
+## Phase 3 und 4: eigener Parser statt Java-Finder
+
+Stand 13.11.2026. Der Finder (`packages/mutation/src/find.ts`) arbeitet auf dem Syntaxbaum des
+Kernparsers. Referenz ist die eingefrorene Ausgabe des Java-Finders auf dem Korpus
+(`finder-corpus.json.gz`, 790 Dateien inklusive console); Vergleich mit `npm run parity:finder`.
+
+| Vergleich | Ergebnis |
+| --- | --- |
+| Stellen des Java-Finders, die der neue Finder genauso findet | 33 202 von 33 219 (Position, Operator, Ersatztexte gleich; 4 375 davon jetzt mit Unterprogrammnamen) |
+| nur Java (17) | 8 Stellen in anonymen Blöcken außerhalb jeder Einheit, 7 LCR und 1 ROR aus IslandSQL-Fehllesungen (`0 and 255` aus BETWEEN, `$if`-Bedingung), 1 SBR aus einem falsch gelesenen q-String |
+| nur neu (1 540) | 888 RET in Type-Methoden und eigenständigen Prozeduren/Funktionen, 338 SBR für `SELECT … INTO`, 289 LCR/NUL, die IslandSQL bei `IS NULL`, `BETWEEN`, `IS OF`, `LIKE … ESCAPE` falsch schachtelte, 18 `assert(…)`-Aufrufe, 7 nach falsch gelesenem q-String |
+| Beispielprojekt | 48 Stellen, alle identisch; 75/75 Urteile in beiden Modi wie `expected.tsv` |
+| pljson, Schema-Modus, drei Datenbanken | alle 2 664 Go-Mutanten wieder vorhanden, 2 657 Urteile gleich; dazu 391 neue Mutanten; 332 s (`pljson-schema-ts.json`) |
+
+Die sieben pljson-Abweichungen: vier sind der bekannte `json_strict`-Zustand (siehe oben), drei
+sind in beiden Läufen erkannt (Timeout durch Schleifenwächter gegen getötet).
+
+Coverage auf demselben Parser: Für alle 295 Bodies des Korpus sind instrumentierter Text und
+Sondenkarte identisch mit dem Token-Parser von plcov (`baseline/plcov/corpus-instrumented.tsv`,
+`npm run parity:coverage`); die Korpuszahlen bleiben 280/280, 25 496 Anweisungen, 2 891
+Entscheidungen, 3 383 Teilbedingungen.

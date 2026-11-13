@@ -17,7 +17,7 @@ Umsetzungsplan: Claude Doc „PL/SQL-Testwerkzeuge – Umsetzungsplan für das g
 | --- | --- |
 | `packages/core` | Lexer, Präprozessor, Skripte, Datenbank (Objekte laden, kompilieren, wiederherstellen), Wiederherstellungs-Journal, utPLSQL-Lauf |
 | `packages/coverage` | Instrumentierung, Laufzeitpaket `cov$`, Metriken und MC/DC, Export `plcov-coverage/1`, Korpus-Prüfung |
-| `packages/mutation` | Mutation Testing: Java-Finder-Adapter (bis Phase 4), Schema- und Orakel-Umschreiber, Lauf, Berichte |
+| `packages/mutation` | Mutation Testing: Stellen-Finder auf dem Kernparser, Schema- und Orakel-Umschreiber, Lauf, Berichte |
 | `packages/report` | HTML-Bericht |
 | `packages/cli` | Befehl `pltest` |
 | `examples/` | `order_pricing` (Coverage-Demo), `shop_pricing` (Mutation, mit `expected.tsv`) |

@@ -6,6 +6,8 @@
     "typecheck": "tsc",
     "test": "node --import tsx --test packages/*/test/*.test.ts",
     "pltest": "tsx packages/cli/src/cli.ts",
+    "parity:finder": "tsx scripts/finder-parity.ts",
+    "parity:coverage": "tsx scripts/coverage-parity.ts",
     "demo": "tsx packages/cli/src/cli.ts coverage --config examples/order_pricing/plcov.json"
   },
   "license": "Apache-2.0",

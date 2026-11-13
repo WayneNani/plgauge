@@ -5,9 +5,9 @@ Portierung von plmut (Go) nach TypeScript. Abgeglichen gegen die Go-Fassung auf 
 
 ## Ablauf
 
-1. **Stellen finden:** Bis Phase 4 des Umsetzungsplans liefert der Java-Finder (`finder-java/`,
-   IslandSQL) die Mutationsstellen als JSON; `finder.ts` ist der Adapter. Bauen mit
-   `packages/mutation/finder-java/build.sh` (lädt IslandSQL von Maven Central, braucht Java 21+).
+1. **Stellen finden** (`find.ts`): auf dem Syntaxbaum des gemeinsamen Parsers (`@pltest/core`).
+   Bis Phase 4 kam das aus einem Java-Finder (IslandSQL); seine Ausgabe auf dem Korpus liegt
+   eingefroren in `baseline/plmut/finder-corpus.json.gz`, Vergleich mit `npm run parity:finder`.
 2. **Schema** (Standard, `--mode schema`): alle Mutanten hinter Schaltern in einem Build
    (`schema.ts`), Compiler-Filter über `ALL_ERRORS`, Aufzeichnungslauf mit Mutanten-ID −1,
    jeder Mutant nur gegen seine deckenden Tests, schnellster zuerst, Fail-Fast, Schleifenwächter.

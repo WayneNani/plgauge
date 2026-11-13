@@ -20,7 +20,7 @@ import {
   ensureJournal, loadObject, objectErrors, replaceSource, restoreAll, runScript, splitScript, type SourceObject,
 } from '@pltest/core';
 import { expand, mutatedUnit, objectName, unitKey, withoutCreate, type Mutant, type Point, type SourceFile } from './mutant.js';
-import { findPoints } from './finder.js';
+import { findPoints } from './find.js';
 import { buildSchema, locate, switchable, type SchemaUnit } from './schema.js';
 import {
   activate, aborted, failed, firstFailure, firstFailureMessage, firstLine, hits, installControl, installRuntime, isMemory,

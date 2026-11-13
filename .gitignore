@@ -3,8 +3,6 @@ corpus/.cache/
 .env.local
 examples/order_pricing/report/coverage.json
 examples/order_pricing/plcov.local.json
-packages/mutation/finder-java/lib/
-packages/mutation/finder-java/classes/
 eval/pljson
 eval/*.html
 examples/*/report.*

@@ -8,8 +8,17 @@
 import { tokenize } from './lexer.js';
 
 export function preprocess(src: string): string {
+  return preprocessBlocks(src).text;
+}
+
+/**
+ * Like preprocess, and also returns the ranges of the $IF ... $END blocks (offsets into
+ * the text, end exclusive). The text keeps every offset: one space per UTF-16 unit.
+ */
+export function preprocessBlocks(src: string): { text: string; blocks: [number, number][] } {
   const toks = tokenize(src).filter((t) => t.kind === 'ident' && t.up.startsWith('$'));
-  if (!toks.length) return src;
+  if (!toks.length) return { text: src, blocks: [] };
+  const blocks: [number, number][] = [];
   const blank: [number, number][] = [];
   type Frame = { kind: 'if' | 'error'; start: number; branches: [number, number][]; branchStart: number };
   const stack: Frame[] = [];
@@ -52,6 +61,7 @@ export function preprocess(src: string): string {
         if (!f) throw new Error(`$END ohne $IF (Zeile ${t.line})`);
         if (f.kind === 'error') blank.push([f.start, t.end]);
         else {
+          blocks.push([f.start, t.end]);
           for (const b of f.branches) blank.push(b); // all but the last branch
           blank.push([t.start, t.end]);
         }
@@ -64,5 +74,5 @@ export function preprocess(src: string): string {
   if (stack.length) throw new Error('$IF ohne $END');
   const chars = src.split('');
   for (const [a, b] of blank) for (let k = a; k < b; k++) if (chars[k] !== '\n') chars[k] = ' ';
-  return chars.join('');
+  return { text: chars.join(''), blocks };
 }
