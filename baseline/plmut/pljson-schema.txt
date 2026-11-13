@@ -1,0 +1,1392 @@
+
+Prüfung, die sich abschwächen lässt:
+  NOT_COVERED pljson.type.impl.sql:513  ROR    path(path_position).indx > self.json_data.count → path(path_position).indx >= self.json_data.count
+  NOT_COVERED pljson.type.impl.sql:513  ROR    path(path_position).indx > self.json_data.count → path(path_position).indx <> self.json_data.count
+  NOT_COVERED pljson.type.impl.sql:513  ROR    path(path_position).indx > self.json_data.count → FALSE
+  SURVIVED    pljson_ext.impl.sql:285  ROR  parsePath  buf = '[' → TRUE
+  SURVIVED    pljson_ext.impl.sql:320  ROR  parsePath  buf != ']' → FALSE
+  SURVIVED    pljson_ext.impl.sql:608  ROR  put_internal_preparsed  path.count = 0 → FALSE
+  NOT_COVERED pljson_ext.impl.sql:637  ROR  put_internal_original  path.count = 0 → path.count >= 0
+  NOT_COVERED pljson_ext.impl.sql:637  ROR  put_internal_original  path.count = 0 → FALSE
+  NOT_COVERED pljson_ext.impl.sql:655  ROR  put_internal_original  obj_temp.count < keynum → obj_temp.count <= keynum
+  NOT_COVERED pljson_ext.impl.sql:655  ROR  put_internal_original  obj_temp.count < keynum → obj_temp.count <> keynum
+  NOT_COVERED pljson_ext.impl.sql:655  ROR  put_internal_original  obj_temp.count < keynum → FALSE
+  SURVIVED    pljson_printer.package.sql:410  ROR  add_buf  lengthb(str)>32767-lengthb(buf) → lengthb(str)>=32767-lengthb(buf)
+  SURVIVED    pljson_printer.package.sql:410  ROR  add_buf  lengthb(str)>32767-lengthb(buf) → FALSE
+
+:
+  NOT_COVERED pljson_ext.impl.sql:394  RET  get_string   → RETURN NULL;
+  NOT_COVERED pljson_ext.impl.sql:394  RET  get_string   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_ext.impl.sql:405  RET  get_number   → RETURN NULL;
+  NOT_COVERED pljson_ext.impl.sql:405  RET  get_number   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_ext.impl.sql:416  RET  get_double   → RETURN NULL;
+  NOT_COVERED pljson_ext.impl.sql:416  RET  get_double   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_ext.impl.sql:427  RET  get_json   → RETURN NULL;
+  NOT_COVERED pljson_ext.impl.sql:427  RET  get_json   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_ext.impl.sql:449  RET  get_bool   → RETURN NULL;
+  NOT_COVERED pljson_ext.impl.sql:449  RET  get_bool   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_ext.impl.sql:460  RET  get_date   → RETURN NULL;
+  NOT_COVERED pljson_ext.impl.sql:460  RET  get_date   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_ext.impl.sql:475  RET  get_json_element_original   → RETURN NULL;
+  NOT_COVERED pljson_ext.impl.sql:475  RET  get_json_element_original   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_ext.impl.sql:583  RET  get_bool   → RETURN NULL;
+  NOT_COVERED pljson_ext.impl.sql:583  RET  get_bool   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_ext.impl.sql:635  RET  put_internal_original   → RETURN;
+  NOT_COVERED pljson_ext.impl.sql:635  RET  put_internal_original   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_ext.impl.sql:771  RET  put   → RETURN;
+  NOT_COVERED pljson_ext.impl.sql:771  RET  put   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_ext.impl.sql:780  RET  put   → RETURN;
+  NOT_COVERED pljson_ext.impl.sql:780  RET  put   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_ext.impl.sql:789  RET  put   → RETURN;
+  NOT_COVERED pljson_ext.impl.sql:789  RET  put   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_ext.impl.sql:798  RET  put   → RETURN;
+  NOT_COVERED pljson_ext.impl.sql:798  RET  put   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_ext.impl.sql:807  RET  put   → RETURN;
+  NOT_COVERED pljson_ext.impl.sql:807  RET  put   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_ext.impl.sql:825  RET  put   → RETURN;
+  NOT_COVERED pljson_ext.impl.sql:825  RET  put   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_ext.impl.sql:834  RET  put   → RETURN;
+  NOT_COVERED pljson_ext.impl.sql:834  RET  put   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_ext.impl.sql:872  RET  put   → RETURN;
+  NOT_COVERED pljson_ext.impl.sql:872  RET  put   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_ext.impl.sql:931  RET  pp   → RETURN NULL;
+  NOT_COVERED pljson_ext.impl.sql:931  RET  pp   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_ext.impl.sql:941  RET  pp   → RETURN;
+  NOT_COVERED pljson_ext.impl.sql:941  RET  pp   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_ext.impl.sql:948  RET  pp_htp   → RETURN;
+  NOT_COVERED pljson_ext.impl.sql:948  RET  pp_htp   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_ext.impl.sql:964  RET  base64   → RETURN NULL;
+  NOT_COVERED pljson_ext.impl.sql:964  RET  base64   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_ext.impl.sql:990  RET  base64   → RETURN NULL;
+  NOT_COVERED pljson_ext.impl.sql:990  RET  base64   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_parser.impl.sql:30  RET  set_buffer_amount   → RETURN;
+  NOT_COVERED pljson_parser.impl.sql:30  RET  set_buffer_amount   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  SURVIVED    pljson_parser.impl.sql:69  RET  update_decimalpoint   → RETURN;
+  NOT_COVERED pljson_parser.impl.sql:186  RET  debug   → RETURN;
+  NOT_COVERED pljson_parser.impl.sql:186  RET  debug   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_parser.impl.sql:191  RET  print_token   → RETURN;
+  NOT_COVERED pljson_parser.impl.sql:191  RET  print_token   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_parser.impl.sql:279  RET  lexName   → RETURN NULL;
+  NOT_COVERED pljson_parser.impl.sql:279  RET  lexName   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_parser.impl.sql:298  RET  updateClob   → RETURN;
+  NOT_COVERED pljson_parser.impl.sql:298  RET  updateClob   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_parser.impl.sql:813  RET  parse_list   → RETURN NULL;
+  NOT_COVERED pljson_parser.impl.sql:813  RET  parse_list   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_parser.impl.sql:859  RET  parse_any   → RETURN NULL;
+  NOT_COVERED pljson_parser.impl.sql:859  RET  parse_any   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_parser.impl.sql:877  RET  parse_any   → RETURN NULL;
+  NOT_COVERED pljson_parser.impl.sql:877  RET  parse_any   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_parser.impl.sql:897  RET  remove_duplicates   → RETURN;
+  NOT_COVERED pljson_parser.impl.sql:897  RET  remove_duplicates   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_parser.impl.sql:923  RET  get_version   → RETURN NULL;
+  NOT_COVERED pljson_parser.impl.sql:923  RET  get_version   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_printer.package.sql:242  RET  ppEA   → RETURN;
+  NOT_COVERED pljson_printer.package.sql:242  RET  ppEA   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_printer.package.sql:347  RET  pretty_print_list   → RETURN;
+  NOT_COVERED pljson_printer.package.sql:347  RET  pretty_print_list   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_printer.package.sql:602  RET  dbms_output_clob   → RETURN;
+  NOT_COVERED pljson_printer.package.sql:602  RET  dbms_output_clob   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+  NOT_COVERED pljson_printer.package.sql:712  RET  htp_output_clob   → RETURN;
+  NOT_COVERED pljson_printer.package.sql:712  RET  htp_output_clob   → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');
+
+Fehlerpfad, den kein Test auslöst:
+  NOT_COVERED pljson.type.impl.sql:517  SBR    raise_application_error(-20110, 'PLJSON_EXT put error: ac… → NULL;
+  NOT_COVERED pljson_element.type.impl.sql:5  SBR    raise_application_error(-20000, 'pljson_element is not in… → NULL;
+  NOT_COVERED pljson_element.type.impl.sql:58  SBR    raise_application_error(-20002, 'value_of() method should… → NULL;
+  NOT_COVERED pljson_element.type.impl.sql:66  SBR    raise_application_error(-20003, 'get_string() method is n… → NULL;
+  NOT_COVERED pljson_element.type.impl.sql:71  SBR    raise_application_error(-20004, 'get_clob() method is not… → NULL;
+  NOT_COVERED pljson_element.type.impl.sql:76  SBR    raise_application_error(-20005, 'get_number() method is n… → NULL;
+  NOT_COVERED pljson_element.type.impl.sql:81  SBR    raise_application_error(-20006, 'get_double() method is n… → NULL;
+  NOT_COVERED pljson_element.type.impl.sql:86  SBR    raise_application_error(-20008, 'is_number_repr_number() … → NULL;
+  NOT_COVERED pljson_element.type.impl.sql:91  SBR    raise_application_error(-20009, 'is_number_repr_double() … → NULL;
+  NOT_COVERED pljson_element.type.impl.sql:96  SBR    raise_application_error(-20007, 'get_bool() method is not… → NULL;
+  NOT_COVERED pljson_element.type.impl.sql:101  SBR    raise_application_error(-20012, 'count() method is not su… → NULL;
+  NOT_COVERED pljson_element.type.impl.sql:106  SBR    raise_application_error(-20020, 'get(name) method is not … → NULL;
+  NOT_COVERED pljson_element.type.impl.sql:111  SBR    raise_application_error(-20021, 'get(position) method is … → NULL;
+  NOT_COVERED pljson_element.type.impl.sql:116  SBR    raise_application_error(-20010, 'path() method is not sup… → NULL;
+  NOT_COVERED pljson_element.type.impl.sql:159  SBR    raise_application_error(-20010, 'path() method is not sup… → NULL;
+  NOT_COVERED pljson_ext.impl.sql:47  SBR  is_integer  raise_application_error(-20109, 'not a number-value'); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:88  SBR  to_date  raise_application_error(-20110, 'not a date-value'); → NULL;
+  SURVIVED    pljson_ext.impl.sql:92  SBR  to_date  raise_application_error(-20110, 'Anydata did not contain … → NULL;
+  SURVIVED    pljson_ext.impl.sql:260  SBR  parsePath  raise_application_error(-20110, 'JSON Path parse error: a… → NULL;
+  NOT_COVERED pljson_ext.impl.sql:273  SBR  parsePath  raise_application_error(-20110, 'JSON Path parse error: p… → NULL;
+  NOT_COVERED pljson_ext.impl.sql:288  SBR  parsePath  raise_application_error(-20110, 'JSON Path parse error: [… → NULL;
+  NOT_COVERED pljson_ext.impl.sql:302  SBR  parsePath  raise_application_error(-20110, 'JSON Path parse error: p… → NULL;
+  NOT_COVERED pljson_ext.impl.sql:306  SBR  parsePath  raise_application_error(-20110, 'JSON Path parse error: p… → NULL;
+  SURVIVED    pljson_ext.impl.sql:316  SBR  parsePath  raise_application_error(-20110, 'JSON Path parse error: e… → NULL;
+  NOT_COVERED pljson_ext.impl.sql:319  SBR  parsePath  raise_application_error(-20110, 'JSON Path parse error: p… → NULL;
+  NOT_COVERED pljson_ext.impl.sql:320  SBR  parsePath  raise_application_error(-20110, 'JSON Path parse error: n… → NULL;
+  NOT_COVERED pljson_ext.impl.sql:337  SBR  parsePath  raise_application_error(-20110, 'JSON Path parse error: e… → NULL;
+  NOT_COVERED pljson_ext.impl.sql:386  SBR  get_json_element  raise; → NULL;
+  NOT_COVERED pljson_ext.impl.sql:387  SBR  get_json_element  raise; → NULL;
+  NOT_COVERED pljson_ext.impl.sql:388  SBR  get_json_element  raise; → NULL;
+  NOT_COVERED pljson_ext.impl.sql:389  EXC  get_json_element  return null; → NULL;
+  NOT_COVERED pljson_ext.impl.sql:512  SBR  get_json_element_original  raise; → NULL;
+  NOT_COVERED pljson_ext.impl.sql:513  SBR  get_json_element_original  raise; → NULL;
+  NOT_COVERED pljson_ext.impl.sql:514  SBR  get_json_element_original  raise; → NULL;
+  NOT_COVERED pljson_ext.impl.sql:515  EXC  get_json_element_original  return null; → NULL;
+  SURVIVED    pljson_ext.impl.sql:608  SBR  put_internal_preparsed  raise_application_error(-20110, 'PLJSON_EXT put error: ca… → NULL;
+  NOT_COVERED pljson_ext.impl.sql:637  SBR  put_internal_original  raise_application_error(-20110, 'PLJSON_EXT put error: ca… → NULL;
+  NOT_COVERED pljson_ext.impl.sql:657  SBR  put_internal_original  raise_application_error(-20110, 'PLJSON_EXT put error: ac… → NULL;
+  NOT_COVERED pljson_parser.impl.sql:799  SBR  parse_list  raise_application_error(-20101, 'JSON List Parser excepti… → NULL;
+  NOT_COVERED pljson_parser.impl.sql:821  SBR  parse_list  raise_application_error(-20101, 'JSON List Parser excepti… → NULL;
+  NOT_COVERED pljson_parser.impl.sql:844  SBR  parser  raise_application_error(-20101, 'JSON Parser exception - … → NULL;
+  NOT_COVERED pljson_printer.package.sql:411  SBR  add_buf  raise_application_error(-20001,'Length of result JSON mor… → NULL;
+
+Weitere:
+  SURVIVED    pljson.type.impl.sql:18  SBR    self.check_for_duplicate := 1; → NULL;
+  NOT_COVERED pljson.type.impl.sql:24  SBR    self := pljson_parser.parser(str); → NULL;
+  NOT_COVERED pljson.type.impl.sql:26  SBR    self.check_for_duplicate := 1; → NULL;
+  SURVIVED    pljson.type.impl.sql:36  SBR    self.check_for_duplicate := 1; → NULL;
+  SURVIVED    pljson.type.impl.sql:45  SBR    self.typeval := 1; → NULL;
+  SURVIVED    pljson.type.impl.sql:46  SBR    self.check_for_duplicate := 1; → NULL;
+  SURVIVED    pljson.type.impl.sql:67  SBR    self.check_for_duplicate := 1; → NULL;
+  SURVIVED    pljson.type.impl.sql:73  SBR    self.typeval := 1; → NULL;
+  SURVIVED    pljson.type.impl.sql:74  SBR    self.check_for_duplicate := 1; → NULL;
+  SURVIVED    pljson.type.impl.sql:82  SBR    self.json_data(i).mapindx := i; → NULL;
+  SURVIVED    pljson.type.impl.sql:132  ROR    self.check_for_duplicate = 1 → self.check_for_duplicate <= 1
+  SURVIVED    pljson.type.impl.sql:132  ROR    self.check_for_duplicate = 1 → self.check_for_duplicate >= 1
+  NOT_COVERED pljson.type.impl.sql:132  SBR    temp := null; → NULL;
+  SURVIVED    pljson.type.impl.sql:137  LCR    position is null or position > self.count → TRUE
+  SURVIVED    pljson.type.impl.sql:137  ROR    position > self.count → position >= self.count
+  SURVIVED    pljson.type.impl.sql:137  ROR    position > self.count → position <> self.count
+  SURVIVED    pljson.type.impl.sql:146  ROR    position < 2 → position <= 2
+  SURVIVED    pljson.type.impl.sql:146  ROR    position < 2 → position <> 2
+  SURVIVED    pljson.type.impl.sql:146  ROR    position < 2 → FALSE
+  SURVIVED    pljson.type.impl.sql:170  ROR    indx = position → indx <= position
+  SURVIVED    pljson.type.impl.sql:181  LCR    pair_value is null and pljson_parser.empty_string_as_null → pljson_parser.empty_string_as_null
+  SURVIVED    pljson.type.impl.sql:181  LCR    pair_value is null and pljson_parser.empty_string_as_null → FALSE
+  SURVIVED    pljson.type.impl.sql:181  NUL    pair_value is null → pair_value is NOT null
+  NOT_COVERED pljson.type.impl.sql:182  SBR    put(pair_name, pljson_null(), position); → NULL;
+  NOT_COVERED pljson.type.impl.sql:190  NUL    pair_value is null → pair_value is NOT null
+  NOT_COVERED pljson.type.impl.sql:191  SBR    put(pair_name, pljson_null(), position); → NULL;
+  NOT_COVERED pljson.type.impl.sql:193  SBR    put(pair_name, pljson_string(pair_value), position); → NULL;
+  NOT_COVERED pljson.type.impl.sql:210  SBR    put(pair_name, pljson_null(), position); → NULL;
+  SURVIVED    pljson.type.impl.sql:218  NUL    pair_value is null → pair_value is NOT null
+  SURVIVED    pljson.type.impl.sql:254  NUL    pair_name is null → pair_name is NOT null
+  NOT_COVERED pljson.type.impl.sql:264  NUL    elem is not null → elem is null
+  NOT_COVERED pljson.type.impl.sql:273  NUL    elem is not null → elem is null
+  NOT_COVERED pljson.type.impl.sql:282  NUL    elem is not null → elem is null
+  NOT_COVERED pljson.type.impl.sql:291  NUL    elem is not null → elem is null
+  NOT_COVERED pljson.type.impl.sql:300  NUL    elem is not null → elem is null
+  NOT_COVERED pljson.type.impl.sql:309  NUL    elem is not null → elem is null
+  NOT_COVERED pljson.type.impl.sql:318  NUL    elem is not null → elem is null
+  SURVIVED    pljson.type.impl.sql:326  LCR    self.count >= position and position > 0 → self.count >= position
+  SURVIVED    pljson.type.impl.sql:326  LCR    self.count >= position and position > 0 → position > 0
+  SURVIVED    pljson.type.impl.sql:326  LCR    self.count >= position and position > 0 → (self.count >= position) = (position > 0)
+  SURVIVED    pljson.type.impl.sql:326  ROR    self.count >= position → TRUE
+  SURVIVED    pljson.type.impl.sql:326  ROR    position > 0 → position >= 0
+  SURVIVED    pljson.type.impl.sql:326  ROR    position > 0 → position <> 0
+  SURVIVED    pljson.type.impl.sql:337  SBR    exit when indx is null; → NULL;
+  SURVIVED    pljson.type.impl.sql:338  NUL    pair_name is null → pair_name is NOT null
+  SURVIVED    pljson.type.impl.sql:339  ROR    json_data(indx).mapname = pair_name → json_data(indx).mapname >= pair_name
+  NOT_COVERED pljson.type.impl.sql:353  SBR    check_for_duplicate := 1; → NULL;
+  NOT_COVERED pljson.type.impl.sql:355  SBR    check_for_duplicate := 0; → NULL;
+  NOT_COVERED pljson.type.impl.sql:361  SBR    pljson_parser.remove_duplicates(self); → NULL;
+  NOT_COVERED pljson.type.impl.sql:373  SBR    pljson_ext.put(self, json_path, elem, base); → NULL;
+  NOT_COVERED pljson.type.impl.sql:378  LCR    elem is null and pljson_parser.empty_string_as_null → elem is null
+  NOT_COVERED pljson.type.impl.sql:378  LCR    elem is null and pljson_parser.empty_string_as_null → pljson_parser.empty_string_as_null
+  NOT_COVERED pljson.type.impl.sql:378  LCR    elem is null and pljson_parser.empty_string_as_null → (elem is null) = (pljson_parser.empty_string_as_null)
+  NOT_COVERED pljson.type.impl.sql:378  LCR    elem is null and pljson_parser.empty_string_as_null → FALSE
+  NOT_COVERED pljson.type.impl.sql:378  NUL    elem is null → elem is NOT null
+  NOT_COVERED pljson.type.impl.sql:379  SBR    pljson_ext.put(self, json_path, pljson_null(), base); → NULL;
+  NOT_COVERED pljson.type.impl.sql:381  SBR    pljson_ext.put(self, json_path, elem, base); → NULL;
+  NOT_COVERED pljson.type.impl.sql:387  NUL    elem is null → elem is NOT null
+  NOT_COVERED pljson.type.impl.sql:388  SBR    pljson_ext.put(self, json_path, pljson_null(), base); → NULL;
+  NOT_COVERED pljson.type.impl.sql:390  SBR    pljson_ext.put(self, json_path, elem, base); → NULL;
+  NOT_COVERED pljson.type.impl.sql:396  NUL    elem is null → elem is NOT null
+  NOT_COVERED pljson.type.impl.sql:397  SBR    pljson_ext.put(self, json_path, pljson_null(), base); → NULL;
+  NOT_COVERED pljson.type.impl.sql:399  SBR    pljson_ext.put(self, json_path, elem, base); → NULL;
+  NOT_COVERED pljson.type.impl.sql:406  NUL    elem is null → elem is NOT null
+  NOT_COVERED pljson.type.impl.sql:407  SBR    pljson_ext.put(self, json_path, pljson_null(), base); → NULL;
+  NOT_COVERED pljson.type.impl.sql:409  SBR    pljson_ext.put(self, json_path, elem, base); → NULL;
+  NOT_COVERED pljson.type.impl.sql:415  NUL    elem is null → elem is NOT null
+  NOT_COVERED pljson.type.impl.sql:416  SBR    pljson_ext.put(self, json_path, pljson_null(), base); → NULL;
+  NOT_COVERED pljson.type.impl.sql:418  SBR    pljson_ext.put(self, json_path, elem, base); → NULL;
+  NOT_COVERED pljson.type.impl.sql:424  NUL    elem is null → elem is NOT null
+  NOT_COVERED pljson.type.impl.sql:425  SBR    pljson_ext.put(self, json_path, pljson_null(), base); → NULL;
+  NOT_COVERED pljson.type.impl.sql:427  SBR    pljson_ext.put(self, json_path, elem, base); → NULL;
+  NOT_COVERED pljson.type.impl.sql:433  NUL    elem is null → elem is NOT null
+  NOT_COVERED pljson.type.impl.sql:434  SBR    pljson_ext.put(self, json_path, pljson_null(), base); → NULL;
+  NOT_COVERED pljson.type.impl.sql:436  SBR    pljson_ext.put(self, json_path, elem, base); → NULL;
+  NOT_COVERED pljson.type.impl.sql:442  SBR    pljson_ext.remove(self, json_path, base); → NULL;
+  SURVIVED    pljson.type.impl.sql:451  SBR    indx := json_data.first; → NULL;
+  SURVIVED    pljson.type.impl.sql:454  SBR    keys.append(json_data(indx).mapname); → NULL;
+  SURVIVED    pljson.type.impl.sql:475  SBR    exit when indx is null; → NULL;
+  SURVIVED    pljson.type.impl.sql:477  LCR    (path(path_position).name is null and self.json_data(indx… → (self.json_data(indx).mapname = path(path_position).name)
+  SURVIVED    pljson.type.impl.sql:477  LCR    (path(path_position).name is null and self.json_data(indx… → ((path(path_position).name is null and self.json_data(ind…
+  SURVIVED    pljson.type.impl.sql:477  NUL    path(path_position).name is null → path(path_position).name is NOT null
+  SURVIVED    pljson.type.impl.sql:478  ROR    self.json_data(indx).mapname = path(path_position).name → self.json_data(indx).mapname >= path(path_position).name
+  SURVIVED    pljson.type.impl.sql:480  ROR    path_position < path.count → path_position <> path.count
+  NOT_COVERED pljson.type.impl.sql:492  ROR    indx <= self.json_data.count → indx < self.json_data.count
+  NOT_COVERED pljson.type.impl.sql:492  ROR    indx <= self.json_data.count → indx = self.json_data.count
+  NOT_COVERED pljson.type.impl.sql:492  ROR    indx <= self.json_data.count → TRUE
+  NOT_COVERED pljson.type.impl.sql:493  ROR    path_position < path.count → path_position <= path.count
+  NOT_COVERED pljson.type.impl.sql:493  ROR    path_position < path.count → path_position <> path.count
+  NOT_COVERED pljson.type.impl.sql:493  ROR    path_position < path.count → FALSE
+  NOT_COVERED pljson.type.impl.sql:494  SBR    self.json_data(indx).get_internal_path(path, path_positio… → NULL;
+  NOT_COVERED pljson.type.impl.sql:494  AOR    path_position + 1 → path_position - 1
+  NOT_COVERED pljson.type.impl.sql:496  SBR    ret := self.json_data(indx); → NULL;
+  NOT_COVERED pljson.type.impl.sql:514  NUL    elem is null → elem is NOT null
+  NOT_COVERED pljson.type.impl.sql:520  SBR    keystring := self.json_data(path(path_position).indx).map… → NULL;
+  SURVIVED    pljson.type.impl.sql:527  LCR    (keystring is null and self.json_data(indx).mapname is nu… → (self.json_data(indx).mapname = keystring)
+  SURVIVED    pljson.type.impl.sql:527  LCR    (keystring is null and self.json_data(indx).mapname is nu… → ((keystring is null and self.json_data(indx).mapname is n…
+  SURVIVED    pljson.type.impl.sql:527  NUL    keystring is null → keystring is NOT null
+  SURVIVED    pljson.type.impl.sql:527  ROR    self.json_data(indx).mapname = keystring → self.json_data(indx).mapname >= keystring
+  SURVIVED    pljson.type.impl.sql:528  ROR    path_position < path.count → path_position <> path.count
+  NOT_COVERED pljson.type.impl.sql:531  NUL    elem is not null → elem is null
+  NOT_COVERED pljson.type.impl.sql:532  SBR    put(keystring, pljson()); → NULL;
+  SURVIVED    pljson.type.impl.sql:538  LCR    not self.json_data(indx).is_object() and not self.json_da… → not self.json_data(indx).is_array()
+  SURVIVED    pljson.type.impl.sql:538  LCR    not self.json_data(indx).is_object() and not self.json_da… → (not self.json_data(indx).is_object()) = (not self.json_d…
+  SURVIVED    pljson.type.impl.sql:538  LCR    not self.json_data(indx).is_object() and not self.json_da… → FALSE
+  NOT_COVERED pljson.type.impl.sql:539  NUL    elem is not null → elem is null
+  NOT_COVERED pljson.type.impl.sql:540  SBR    put(keystring, pljson_list()); → NULL;
+  SURVIVED    pljson.type.impl.sql:567  ROR    path_position = path.count → path_position >= path.count
+  NOT_COVERED pljson_bool.type.sql:31  ROR    self.num = 1 → self.num <= 1
+  NOT_COVERED pljson_bool.type.sql:31  ROR    self.num = 1 → self.num >= 1
+  NOT_COVERED pljson_bool.type.sql:31  ROR    self.num = 1 → FALSE
+  SURVIVED    pljson_bool.type.sql:36  ROR    self.num = 1 → self.num >= 1
+  NOT_COVERED pljson_element.type.impl.sql:66  AOR    'get_string() method is not supported by object of type:'… → 'get_string() method is not supported by object of type:'
+  NOT_COVERED pljson_element.type.impl.sql:71  AOR    'get_clob() method is not supported by object of type:' |… → 'get_clob() method is not supported by object of type:'
+  NOT_COVERED pljson_element.type.impl.sql:76  AOR    'get_number() method is not supported by object of type:'… → 'get_number() method is not supported by object of type:'
+  NOT_COVERED pljson_element.type.impl.sql:81  AOR    'get_double() method is not supported by object of type:'… → 'get_double() method is not supported by object of type:'
+  NOT_COVERED pljson_element.type.impl.sql:86  AOR    'is_number_repr_number() method is not supported by objec… → 'is_number_repr_number() method is not supported by objec…
+  NOT_COVERED pljson_element.type.impl.sql:91  AOR    'is_number_repr_double() method is not supported by objec… → 'is_number_repr_double() method is not supported by objec…
+  NOT_COVERED pljson_element.type.impl.sql:96  AOR    'get_bool() method is not supported by object of type:' |… → 'get_bool() method is not supported by object of type:'
+  NOT_COVERED pljson_element.type.impl.sql:101  AOR    'count() method is not supported by object of type:' || g… → 'count() method is not supported by object of type:'
+  NOT_COVERED pljson_element.type.impl.sql:106  AOR    'get(name) method is not supported by object of type:' ||… → 'get(name) method is not supported by object of type:'
+  NOT_COVERED pljson_element.type.impl.sql:111  AOR    'get(position) method is not supported by object of type:… → 'get(position) method is not supported by object of type:'
+  NOT_COVERED pljson_element.type.impl.sql:116  AOR    'path() method is not supported by object of type:' || ge… → 'path() method is not supported by object of type:'
+  SURVIVED    pljson_element.type.impl.sql:131  NUL    spaces is null → spaces is NOT null
+  NOT_COVERED pljson_element.type.impl.sql:132  SBR    pljson_printer.pretty_print_any(self, false, buf, line_le… → NULL;
+  NOT_COVERED pljson_element.type.impl.sql:141  SBR    dbms_lob.createtemporary(my_clob, true); → NULL;
+  NOT_COVERED pljson_element.type.impl.sql:142  SBR    pljson_printer.pretty_print_any(self, spaces, my_clob, ca… → NULL;
+  NOT_COVERED pljson_element.type.impl.sql:142  ROR    chars_per_line>32512 → chars_per_line>=32512
+  NOT_COVERED pljson_element.type.impl.sql:142  ROR    chars_per_line>32512 → chars_per_line<>32512
+  NOT_COVERED pljson_element.type.impl.sql:142  ROR    chars_per_line>32512 → FALSE
+  NOT_COVERED pljson_element.type.impl.sql:143  SBR    pljson_printer.dbms_output_clob(my_clob, pljson_printer.n… → NULL;
+  NOT_COVERED pljson_element.type.impl.sql:144  SBR    dbms_lob.freetemporary(my_clob); → NULL;
+  NOT_COVERED pljson_element.type.impl.sql:150  SBR    dbms_lob.createtemporary(my_clob, true); → NULL;
+  NOT_COVERED pljson_element.type.impl.sql:151  SBR    pljson_printer.pretty_print_any(self, spaces, my_clob, ch… → NULL;
+  NOT_COVERED pljson_element.type.impl.sql:152  SBR    pljson_printer.htp_output_clob(my_clob, jsonp); → NULL;
+  NOT_COVERED pljson_element.type.impl.sql:153  SBR    dbms_lob.freetemporary(my_clob); → NULL;
+  NOT_COVERED pljson_element.type.impl.sql:159  AOR    'path() method is not supported by object of type:' || ge… → 'path() method is not supported by object of type:'
+  SURVIVED    pljson_ext.impl.sql:54  ROR  is_integer  int_number = num → int_number >= num
+  SURVIVED    pljson_ext.impl.sql:59  ROR  is_integer  int_double = num_double → int_double >= num_double
+  SURVIVED    pljson_ext.impl.sql:92  AOR  to_date  'Anydata did not contain a date on the format: '||format_… → 'Anydata did not contain a date on the format: '
+  SURVIVED    pljson_ext.impl.sql:125  LCR  decodeBase64Clob2Blob  clob_size >= 65 and dbms_lob.substr(p_clob, 1, 65) = chr(10) → dbms_lob.substr(p_clob, 1, 65) = chr(10)
+  SURVIVED    pljson_ext.impl.sql:125  LCR  decodeBase64Clob2Blob  clob_size >= 65 and dbms_lob.substr(p_clob, 1, 65) = chr(10) → (clob_size >= 65) = (dbms_lob.substr(p_clob, 1, 65) = chr…
+  SURVIVED    pljson_ext.impl.sql:125  LCR  decodeBase64Clob2Blob  clob_size >= 65 and dbms_lob.substr(p_clob, 1, 65) = chr(10) → FALSE
+  SURVIVED    pljson_ext.impl.sql:125  ROR  decodeBase64Clob2Blob  clob_size >= 65 → clob_size > 65
+  SURVIVED    pljson_ext.impl.sql:125  ROR  decodeBase64Clob2Blob  clob_size >= 65 → clob_size = 65
+  SURVIVED    pljson_ext.impl.sql:125  ROR  decodeBase64Clob2Blob  clob_size >= 65 → TRUE
+  SURVIVED    pljson_ext.impl.sql:125  ROR  decodeBase64Clob2Blob  dbms_lob.substr(p_clob, 1, 65) = chr(10) → dbms_lob.substr(p_clob, 1, 65) <= chr(10)
+  SURVIVED    pljson_ext.impl.sql:125  ROR  decodeBase64Clob2Blob  dbms_lob.substr(p_clob, 1, 65) = chr(10) → FALSE
+  NOT_COVERED pljson_ext.impl.sql:126  SBR  decodeBase64Clob2Blob  v_line_size := 65; → NULL;
+  SURVIVED    pljson_ext.impl.sql:127  LCR  decodeBase64Clob2Blob  clob_size >= 66 and dbms_lob.substr(p_clob, 1, 65) = chr(13) → clob_size >= 66
+  SURVIVED    pljson_ext.impl.sql:127  LCR  decodeBase64Clob2Blob  clob_size >= 66 and dbms_lob.substr(p_clob, 1, 65) = chr(13) → dbms_lob.substr(p_clob, 1, 65) = chr(13)
+  SURVIVED    pljson_ext.impl.sql:127  LCR  decodeBase64Clob2Blob  clob_size >= 66 and dbms_lob.substr(p_clob, 1, 65) = chr(13) → (clob_size >= 66) = (dbms_lob.substr(p_clob, 1, 65) = chr…
+  SURVIVED    pljson_ext.impl.sql:127  ROR  decodeBase64Clob2Blob  clob_size >= 66 → clob_size > 66
+  SURVIVED    pljson_ext.impl.sql:127  ROR  decodeBase64Clob2Blob  clob_size >= 66 → TRUE
+  SURVIVED    pljson_ext.impl.sql:127  ROR  decodeBase64Clob2Blob  dbms_lob.substr(p_clob, 1, 65) = chr(13) → dbms_lob.substr(p_clob, 1, 65) <= chr(13)
+  SURVIVED    pljson_ext.impl.sql:127  ROR  decodeBase64Clob2Blob  dbms_lob.substr(p_clob, 1, 65) = chr(13) → dbms_lob.substr(p_clob, 1, 65) >= chr(13)
+  SURVIVED    pljson_ext.impl.sql:129  LCR  decodeBase64Clob2Blob  clob_size >= 77 and dbms_lob.substr(p_clob, 1, 77) = chr(10) → clob_size >= 77
+  SURVIVED    pljson_ext.impl.sql:129  LCR  decodeBase64Clob2Blob  clob_size >= 77 and dbms_lob.substr(p_clob, 1, 77) = chr(10) → dbms_lob.substr(p_clob, 1, 77) = chr(10)
+  SURVIVED    pljson_ext.impl.sql:129  LCR  decodeBase64Clob2Blob  clob_size >= 77 and dbms_lob.substr(p_clob, 1, 77) = chr(10) → (clob_size >= 77) = (dbms_lob.substr(p_clob, 1, 77) = chr…
+  SURVIVED    pljson_ext.impl.sql:129  LCR  decodeBase64Clob2Blob  clob_size >= 77 and dbms_lob.substr(p_clob, 1, 77) = chr(10) → FALSE
+  SURVIVED    pljson_ext.impl.sql:129  ROR  decodeBase64Clob2Blob  clob_size >= 77 → clob_size > 77
+  SURVIVED    pljson_ext.impl.sql:129  ROR  decodeBase64Clob2Blob  clob_size >= 77 → clob_size = 77
+  SURVIVED    pljson_ext.impl.sql:129  ROR  decodeBase64Clob2Blob  clob_size >= 77 → TRUE
+  SURVIVED    pljson_ext.impl.sql:129  ROR  decodeBase64Clob2Blob  dbms_lob.substr(p_clob, 1, 77) = chr(10) → dbms_lob.substr(p_clob, 1, 77) <= chr(10)
+  SURVIVED    pljson_ext.impl.sql:129  ROR  decodeBase64Clob2Blob  dbms_lob.substr(p_clob, 1, 77) = chr(10) → dbms_lob.substr(p_clob, 1, 77) >= chr(10)
+  SURVIVED    pljson_ext.impl.sql:129  ROR  decodeBase64Clob2Blob  dbms_lob.substr(p_clob, 1, 77) = chr(10) → FALSE
+  NOT_COVERED pljson_ext.impl.sql:130  SBR  decodeBase64Clob2Blob  v_line_size := 77; → NULL;
+  SURVIVED    pljson_ext.impl.sql:131  LCR  decodeBase64Clob2Blob  clob_size >= 78 and dbms_lob.substr(p_clob, 1, 77) = chr(13) → clob_size >= 78
+  SURVIVED    pljson_ext.impl.sql:131  LCR  decodeBase64Clob2Blob  clob_size >= 78 and dbms_lob.substr(p_clob, 1, 77) = chr(13) → dbms_lob.substr(p_clob, 1, 77) = chr(13)
+  SURVIVED    pljson_ext.impl.sql:131  LCR  decodeBase64Clob2Blob  clob_size >= 78 and dbms_lob.substr(p_clob, 1, 77) = chr(13) → (clob_size >= 78) = (dbms_lob.substr(p_clob, 1, 77) = chr…
+  SURVIVED    pljson_ext.impl.sql:131  LCR  decodeBase64Clob2Blob  clob_size >= 78 and dbms_lob.substr(p_clob, 1, 77) = chr(13) → FALSE
+  SURVIVED    pljson_ext.impl.sql:131  ROR  decodeBase64Clob2Blob  clob_size >= 78 → clob_size > 78
+  SURVIVED    pljson_ext.impl.sql:131  ROR  decodeBase64Clob2Blob  clob_size >= 78 → clob_size = 78
+  SURVIVED    pljson_ext.impl.sql:131  ROR  decodeBase64Clob2Blob  clob_size >= 78 → TRUE
+  SURVIVED    pljson_ext.impl.sql:131  ROR  decodeBase64Clob2Blob  dbms_lob.substr(p_clob, 1, 77) = chr(13) → dbms_lob.substr(p_clob, 1, 77) <= chr(13)
+  SURVIVED    pljson_ext.impl.sql:131  ROR  decodeBase64Clob2Blob  dbms_lob.substr(p_clob, 1, 77) = chr(13) → dbms_lob.substr(p_clob, 1, 77) >= chr(13)
+  SURVIVED    pljson_ext.impl.sql:131  ROR  decodeBase64Clob2Blob  dbms_lob.substr(p_clob, 1, 77) = chr(13) → FALSE
+  NOT_COVERED pljson_ext.impl.sql:132  SBR  decodeBase64Clob2Blob  v_line_size := 78; → NULL;
+  SURVIVED    pljson_ext.impl.sql:138  ROR  decodeBase64Clob2Blob  pos < clob_size → pos <= clob_size
+  SURVIVED    pljson_ext.impl.sql:159  AOR  encodeBase64Blob2Clob  dbms_lob.getlength(p_blob) - 1 → dbms_lob.getlength(p_blob) + 1
+  SURVIVED    pljson_ext.impl.sql:166  ROR  encodeBase64Blob2Clob  substr(c_buf, length(c_buf)) != chr(10) → substr(c_buf, length(c_buf)) > chr(10)
+  SURVIVED    pljson_ext.impl.sql:166  ROR  encodeBase64Blob2Clob  substr(c_buf, length(c_buf)) != chr(10) → TRUE
+  SURVIVED    pljson_ext.impl.sql:226  ROR  parsePath.next_char  indx <= length(json_path) → TRUE
+  SURVIVED    pljson_ext.impl.sql:240  LCR  parsePath  json_path is null or substr(json_path, 1, 1) = '$' → substr(json_path, 1, 1) = '$'
+  SURVIVED    pljson_ext.impl.sql:240  LCR  parsePath  json_path is null or substr(json_path, 1, 1) = '$' → (json_path is null) <> (substr(json_path, 1, 1) = '$')
+  SURVIVED    pljson_ext.impl.sql:260  AOR  parsePath  'JSON Path parse error: alpha or _ character expected at … → 'JSON Path parse error: alpha or _ character expected at …
+  SURVIVED    pljson_ext.impl.sql:268  LCR  parsePath  buf is not null and buf != '"' → buf != '"'
+  SURVIVED    pljson_ext.impl.sql:268  LCR  parsePath  buf is not null and buf != '"' → (buf is not null) = (buf != '"')
+  SURVIVED    pljson_ext.impl.sql:290  LCR  parsePath  buf = '0' and base = 0 → buf = '0'
+  SURVIVED    pljson_ext.impl.sql:290  LCR  parsePath  buf = '0' and base = 0 → base = 0
+  SURVIVED    pljson_ext.impl.sql:290  LCR  parsePath  buf = '0' and base = 0 → FALSE
+  SURVIVED    pljson_ext.impl.sql:290  ROR  parsePath  buf = '0' → TRUE
+  SURVIVED    pljson_ext.impl.sql:290  ROR  parsePath  buf = '0' → FALSE
+  SURVIVED    pljson_ext.impl.sql:290  ROR  parsePath  base = 0 → base <= 0
+  SURVIVED    pljson_ext.impl.sql:290  ROR  parsePath  base = 0 → base >= 0
+  SURVIVED    pljson_ext.impl.sql:290  ROR  parsePath  base = 0 → FALSE
+  SURVIVED    pljson_ext.impl.sql:291  ROR  parsePath  build_path != '[' → TRUE
+  SURVIVED    pljson_ext.impl.sql:307  ROR  parsePath  buf = '\' → FALSE
+  SURVIVED    pljson_ext.impl.sql:316  AOR  parsePath  'JSON Path parse error: expected a string or a positive i… → 'JSON Path parse error: expected a string or a positive i…
+  NOT_COVERED pljson_ext.impl.sql:320  AOR  parsePath  'JSON Path parse error: no array ending found. found: '||… → 'JSON Path parse error: no array ending found. found: '
+  NOT_COVERED pljson_ext.impl.sql:337  AOR  parsePath  'JSON Path parse error: expected . or [ found '|| buf || … → 'JSON Path parse error: expected . or [ found '|| buf || …
+  NOT_COVERED pljson_ext.impl.sql:337  AOR  parsePath  'JSON Path parse error: expected . or [ found '|| buf || … → 'JSON Path parse error: expected . or [ found '|| buf
+  NOT_COVERED pljson_ext.impl.sql:337  AOR  parsePath  'JSON Path parse error: expected . or [ found '|| buf → 'JSON Path parse error: expected . or [ found '
+  SURVIVED    pljson_ext.impl.sql:343  SBR  parsePath  build_path := replace(replace(replace(replace(replace(bui… → NULL;
+  SURVIVED    pljson_ext.impl.sql:347  ROR  parsePath  base != 1 → base < 1
+  SURVIVED    pljson_ext.impl.sql:347  ROR  parsePath  base != 1 → base > 1
+  NOT_COVERED pljson_ext.impl.sql:352  CUR  parsePath  1 → (1) + 1
+  NOT_COVERED pljson_ext.impl.sql:352  CUR  parsePath  ret.count → (ret.count) - 1
+  NOT_COVERED pljson_ext.impl.sql:353  SBR  parsePath  elem := ret.get(i); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:355  SBR  parsePath  ret.replace(i, elem.get_number()+1); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:355  AOR  parsePath  elem.get_number()+1 → elem.get_number()-1
+  SURVIVED    pljson_ext.impl.sql:370  ROR  get_json_element  path.count = 0 → FALSE
+  NOT_COVERED pljson_ext.impl.sql:395  SBR  get_string  temp := get_json_element(obj, path); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:396  LCR  get_string  temp is null or not temp.is_string() → temp is null
+  NOT_COVERED pljson_ext.impl.sql:396  LCR  get_string  temp is null or not temp.is_string() → not temp.is_string()
+  NOT_COVERED pljson_ext.impl.sql:396  LCR  get_string  temp is null or not temp.is_string() → (temp is null) <> (not temp.is_string())
+  NOT_COVERED pljson_ext.impl.sql:396  LCR  get_string  temp is null or not temp.is_string() → TRUE
+  NOT_COVERED pljson_ext.impl.sql:396  NUL  get_string  temp is null → temp is NOT null
+  NOT_COVERED pljson_ext.impl.sql:406  SBR  get_number  temp := get_json_element(obj, path); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:407  LCR  get_number  temp is null or not temp.is_number() → temp is null
+  NOT_COVERED pljson_ext.impl.sql:407  LCR  get_number  temp is null or not temp.is_number() → not temp.is_number()
+  NOT_COVERED pljson_ext.impl.sql:407  LCR  get_number  temp is null or not temp.is_number() → (temp is null) <> (not temp.is_number())
+  NOT_COVERED pljson_ext.impl.sql:407  LCR  get_number  temp is null or not temp.is_number() → TRUE
+  NOT_COVERED pljson_ext.impl.sql:407  NUL  get_number  temp is null → temp is NOT null
+  NOT_COVERED pljson_ext.impl.sql:417  SBR  get_double  temp := get_json_element(obj, path); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:418  LCR  get_double  temp is null or not temp.is_number() → temp is null
+  NOT_COVERED pljson_ext.impl.sql:418  LCR  get_double  temp is null or not temp.is_number() → not temp.is_number()
+  NOT_COVERED pljson_ext.impl.sql:418  LCR  get_double  temp is null or not temp.is_number() → (temp is null) <> (not temp.is_number())
+  NOT_COVERED pljson_ext.impl.sql:418  LCR  get_double  temp is null or not temp.is_number() → TRUE
+  NOT_COVERED pljson_ext.impl.sql:418  NUL  get_double  temp is null → temp is NOT null
+  NOT_COVERED pljson_ext.impl.sql:428  SBR  get_json  temp := get_json_element(obj, path); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:429  LCR  get_json  temp is null or not temp.is_object() → temp is null
+  NOT_COVERED pljson_ext.impl.sql:429  LCR  get_json  temp is null or not temp.is_object() → not temp.is_object()
+  NOT_COVERED pljson_ext.impl.sql:429  LCR  get_json  temp is null or not temp.is_object() → (temp is null) <> (not temp.is_object())
+  NOT_COVERED pljson_ext.impl.sql:429  LCR  get_json  temp is null or not temp.is_object() → TRUE
+  NOT_COVERED pljson_ext.impl.sql:429  NUL  get_json  temp is null → temp is NOT null
+  SURVIVED    pljson_ext.impl.sql:440  LCR  get_json_list  temp is null or not temp.is_array() → temp is null
+  SURVIVED    pljson_ext.impl.sql:440  LCR  get_json_list  temp is null or not temp.is_array() → not temp.is_array()
+  SURVIVED    pljson_ext.impl.sql:440  LCR  get_json_list  temp is null or not temp.is_array() → (temp is null) <> (not temp.is_array())
+  NOT_COVERED pljson_ext.impl.sql:450  SBR  get_bool  temp := get_json_element(obj, path); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:451  LCR  get_bool  temp is null or not temp.is_bool() → temp is null
+  NOT_COVERED pljson_ext.impl.sql:451  LCR  get_bool  temp is null or not temp.is_bool() → not temp.is_bool()
+  NOT_COVERED pljson_ext.impl.sql:451  LCR  get_bool  temp is null or not temp.is_bool() → (temp is null) <> (not temp.is_bool())
+  NOT_COVERED pljson_ext.impl.sql:451  LCR  get_bool  temp is null or not temp.is_bool() → TRUE
+  NOT_COVERED pljson_ext.impl.sql:451  NUL  get_bool  temp is null → temp is NOT null
+  NOT_COVERED pljson_ext.impl.sql:461  SBR  get_date  temp := get_json_element(obj, path); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:462  LCR  get_date  temp is null or not is_date(temp) → temp is null
+  NOT_COVERED pljson_ext.impl.sql:462  LCR  get_date  temp is null or not is_date(temp) → not is_date(temp)
+  NOT_COVERED pljson_ext.impl.sql:462  LCR  get_date  temp is null or not is_date(temp) → (temp is null) <> (not is_date(temp))
+  NOT_COVERED pljson_ext.impl.sql:462  LCR  get_date  temp is null or not is_date(temp) → TRUE
+  NOT_COVERED pljson_ext.impl.sql:462  NUL  get_date  temp is null → temp is NOT null
+  NOT_COVERED pljson_ext.impl.sql:476  SBR  get_json_element_original  path := parsePath(v_path, base); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:477  SBR  get_json_element_original  ret := obj; → NULL;
+  NOT_COVERED pljson_ext.impl.sql:478  ROR  get_json_element_original  path.count = 0 → path.count >= 0
+  NOT_COVERED pljson_ext.impl.sql:478  ROR  get_json_element_original  path.count = 0 → FALSE
+  NOT_COVERED pljson_ext.impl.sql:480  CUR  get_json_element_original  1 → (1) + 1
+  NOT_COVERED pljson_ext.impl.sql:480  CUR  get_json_element_original  path.count → (path.count) - 1
+  NOT_COVERED pljson_ext.impl.sql:486  SBR  get_json_element_original  ret := ret.get(path.get(i).get_string()); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:495  SBR  get_json_element_original  ret := ret.get(path.get(i).get_number()); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:503  SBR  get_json_element_original  ret := ret.get(path.get(i).get_number()); → NULL;
+  SURVIVED    pljson_ext.impl.sql:529  LCR  get_string  temp is null or not temp.is_string() → not temp.is_string()
+  SURVIVED    pljson_ext.impl.sql:529  LCR  get_string  temp is null or not temp.is_string() → (temp is null) <> (not temp.is_string())
+  SURVIVED    pljson_ext.impl.sql:540  LCR  get_number  temp is null or not temp.is_number() → temp is null
+  SURVIVED    pljson_ext.impl.sql:540  LCR  get_number  temp is null or not temp.is_number() → not temp.is_number()
+  SURVIVED    pljson_ext.impl.sql:540  LCR  get_number  temp is null or not temp.is_number() → (temp is null) <> (not temp.is_number())
+  SURVIVED    pljson_ext.impl.sql:552  LCR  get_double  temp is null or not temp.is_number() → temp is null
+  SURVIVED    pljson_ext.impl.sql:552  LCR  get_double  temp is null or not temp.is_number() → not temp.is_number()
+  SURVIVED    pljson_ext.impl.sql:552  LCR  get_double  temp is null or not temp.is_number() → (temp is null) <> (not temp.is_number())
+  SURVIVED    pljson_ext.impl.sql:563  LCR  get_json  temp is null or not temp.is_object() → not temp.is_object()
+  SURVIVED    pljson_ext.impl.sql:563  LCR  get_json  temp is null or not temp.is_object() → (temp is null) <> (not temp.is_object())
+  SURVIVED    pljson_ext.impl.sql:574  LCR  get_json_list  temp is null or not temp.is_array() → temp is null
+  SURVIVED    pljson_ext.impl.sql:574  LCR  get_json_list  temp is null or not temp.is_array() → not temp.is_array()
+  SURVIVED    pljson_ext.impl.sql:574  LCR  get_json_list  temp is null or not temp.is_array() → (temp is null) <> (not temp.is_array())
+  NOT_COVERED pljson_ext.impl.sql:584  SBR  get_bool  temp := get_json_element(obj, path, base); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:585  LCR  get_bool  temp is null or not temp.is_bool() → temp is null
+  NOT_COVERED pljson_ext.impl.sql:585  LCR  get_bool  temp is null or not temp.is_bool() → not temp.is_bool()
+  NOT_COVERED pljson_ext.impl.sql:585  LCR  get_bool  temp is null or not temp.is_bool() → (temp is null) <> (not temp.is_bool())
+  NOT_COVERED pljson_ext.impl.sql:585  LCR  get_bool  temp is null or not temp.is_bool() → TRUE
+  NOT_COVERED pljson_ext.impl.sql:585  NUL  get_bool  temp is null → temp is NOT null
+  SURVIVED    pljson_ext.impl.sql:596  LCR  get_date  temp is null or not is_date(temp) → temp is null
+  SURVIVED    pljson_ext.impl.sql:596  LCR  get_date  temp is null or not is_date(temp) → not is_date(temp)
+  SURVIVED    pljson_ext.impl.sql:596  LCR  get_date  temp is null or not is_date(temp) → (temp is null) <> (not is_date(temp))
+  NOT_COVERED pljson_ext.impl.sql:636  SBR  put_internal_original  path := pljson_ext.parsePath(v_path, base); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:640  CUR  put_internal_original  1 → (1) + 1
+  NOT_COVERED pljson_ext.impl.sql:640  CUR  put_internal_original  path.count → (path.count) - 1
+  NOT_COVERED pljson_ext.impl.sql:642  SBR  put_internal_original  keyval := path.get(i); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:645  SBR  put_internal_original  keynum := keyval.get_number(); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:646  LCR  put_internal_original  (not temp.is_object()) and (not temp.is_array()) → (not temp.is_object())
+  NOT_COVERED pljson_ext.impl.sql:646  LCR  put_internal_original  (not temp.is_object()) and (not temp.is_array()) → (not temp.is_array())
+  NOT_COVERED pljson_ext.impl.sql:646  LCR  put_internal_original  (not temp.is_object()) and (not temp.is_array()) → ((not temp.is_object())) = ((not temp.is_array()))
+  NOT_COVERED pljson_ext.impl.sql:646  LCR  put_internal_original  (not temp.is_object()) and (not temp.is_array()) → FALSE
+  NOT_COVERED pljson_ext.impl.sql:647  NUL  put_internal_original  val is null → val is NOT null
+  NOT_COVERED pljson_ext.impl.sql:648  SBR  put_internal_original  backreference.remove_last; → NULL;
+  NOT_COVERED pljson_ext.impl.sql:649  SBR  put_internal_original  temp := pljson_list(); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:650  SBR  put_internal_original  backreference.append(temp); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:654  SBR  put_internal_original  obj_temp := pljson(temp); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:656  NUL  put_internal_original  val is null → val is NOT null
+  NOT_COVERED pljson_ext.impl.sql:659  SBR  put_internal_original  temp := obj_temp.get(keynum); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:661  SBR  put_internal_original  list_temp := pljson_list(temp); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:662  ROR  put_internal_original  list_temp.count < keynum → list_temp.count <= keynum
+  NOT_COVERED pljson_ext.impl.sql:662  ROR  put_internal_original  list_temp.count < keynum → list_temp.count <> keynum
+  NOT_COVERED pljson_ext.impl.sql:662  ROR  put_internal_original  list_temp.count < keynum → FALSE
+  NOT_COVERED pljson_ext.impl.sql:663  NUL  put_internal_original  val is null → val is NOT null
+  NOT_COVERED pljson_ext.impl.sql:665  CUR  put_internal_original  list_temp.count+1 → (list_temp.count+1) + 1
+  NOT_COVERED pljson_ext.impl.sql:665  AOR  put_internal_original  list_temp.count+1 → list_temp.count-1
+  NOT_COVERED pljson_ext.impl.sql:665  CUR  put_internal_original  keynum → (keynum) - 1
+  NOT_COVERED pljson_ext.impl.sql:666  SBR  put_internal_original  list_temp.append(pljson_null()); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:668  SBR  put_internal_original  backreference.remove_last; → NULL;
+  NOT_COVERED pljson_ext.impl.sql:669  SBR  put_internal_original  backreference.append(list_temp); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:672  SBR  put_internal_original  temp := list_temp.get(keynum); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:676  SBR  put_internal_original  keystring := keyval.get_string(); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:679  NUL  put_internal_original  val is null → val is NOT null
+  NOT_COVERED pljson_ext.impl.sql:680  SBR  put_internal_original  backreference.remove_last; → NULL;
+  NOT_COVERED pljson_ext.impl.sql:681  SBR  put_internal_original  temp := pljson(); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:682  SBR  put_internal_original  backreference.append(temp); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:685  SBR  put_internal_original  obj_temp := pljson(temp); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:686  SBR  put_internal_original  temp := obj_temp.get(keystring); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:689  NUL  put_internal_original  temp is null → temp is NOT null
+  NOT_COVERED pljson_ext.impl.sql:690  NUL  put_internal_original  val is null → val is NOT null
+  NOT_COVERED pljson_ext.impl.sql:692  SBR  put_internal_original  keyval := path.get(i+1); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:692  AOR  put_internal_original  i+1 → i-1
+  NOT_COVERED pljson_ext.impl.sql:693  LCR  put_internal_original  keyval is not null and keyval.is_number() → keyval is not null
+  NOT_COVERED pljson_ext.impl.sql:693  LCR  put_internal_original  keyval is not null and keyval.is_number() → keyval.is_number()
+  NOT_COVERED pljson_ext.impl.sql:693  LCR  put_internal_original  keyval is not null and keyval.is_number() → (keyval is not null) = (keyval.is_number())
+  NOT_COVERED pljson_ext.impl.sql:693  LCR  put_internal_original  keyval is not null and keyval.is_number() → FALSE
+  NOT_COVERED pljson_ext.impl.sql:693  NUL  put_internal_original  keyval is not null → keyval is null
+  NOT_COVERED pljson_ext.impl.sql:694  SBR  put_internal_original  temp := pljson_list(); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:696  SBR  put_internal_original  temp := pljson(); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:699  SBR  put_internal_original  backreference.append(temp); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:706  SBR  put_internal_original  inserter := val; → NULL;
+  NOT_COVERED pljson_ext.impl.sql:707  CUR  put_internal_original  1 → (1) + 1
+  NOT_COVERED pljson_ext.impl.sql:707  CUR  put_internal_original  backreference.count → (backreference.count) - 1
+  NOT_COVERED pljson_ext.impl.sql:709  ROR  put_internal_original  i = 1 → i <= 1
+  NOT_COVERED pljson_ext.impl.sql:709  ROR  put_internal_original  i = 1 → i >= 1
+  NOT_COVERED pljson_ext.impl.sql:709  ROR  put_internal_original  i = 1 → FALSE
+  NOT_COVERED pljson_ext.impl.sql:710  SBR  put_internal_original  keyval := path.get(1); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:712  SBR  put_internal_original  keystring := keyval.get_string(); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:714  SBR  put_internal_original  keynum := keyval.get_number(); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:718  SBR  put_internal_original  keystring := t1.mapname; → NULL;
+  NOT_COVERED pljson_ext.impl.sql:721  NUL  put_internal_original  inserter is null → inserter is NOT null
+  NOT_COVERED pljson_ext.impl.sql:721  SBR  put_internal_original  obj.remove(keystring); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:721  SBR  put_internal_original  obj.put(keystring, inserter); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:723  SBR  put_internal_original  temp := backreference.get(i-1); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:723  AOR  put_internal_original  i-1 → i+1
+  NOT_COVERED pljson_ext.impl.sql:725  SBR  put_internal_original  keyval := path.get(i); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:726  SBR  put_internal_original  obj_temp := pljson(temp); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:728  SBR  put_internal_original  keystring := keyval.get_string(); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:730  SBR  put_internal_original  keynum := keyval.get_number(); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:734  SBR  put_internal_original  keystring := t1.mapname; → NULL;
+  NOT_COVERED pljson_ext.impl.sql:737  NUL  put_internal_original  inserter is null → inserter is NOT null
+  NOT_COVERED pljson_ext.impl.sql:738  SBR  put_internal_original  obj_temp.remove(keystring); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:739  ROR  put_internal_original  obj_temp.count > 0 → obj_temp.count >= 0
+  NOT_COVERED pljson_ext.impl.sql:739  ROR  put_internal_original  obj_temp.count > 0 → FALSE
+  NOT_COVERED pljson_ext.impl.sql:739  SBR  put_internal_original  inserter := obj_temp; → NULL;
+  NOT_COVERED pljson_ext.impl.sql:741  SBR  put_internal_original  obj_temp.put(keystring, inserter); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:742  SBR  put_internal_original  inserter := obj_temp; → NULL;
+  NOT_COVERED pljson_ext.impl.sql:746  SBR  put_internal_original  keynum := path.get(i).get_number(); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:747  SBR  put_internal_original  list_temp := pljson_list(temp); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:748  SBR  put_internal_original  list_temp.remove(keynum); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:750  SBR  put_internal_original  list_temp.append(inserter, keynum); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:751  SBR  put_internal_original  inserter := list_temp; → NULL;
+  NOT_COVERED pljson_ext.impl.sql:753  ROR  put_internal_original  list_temp.count > 0 → list_temp.count >= 0
+  NOT_COVERED pljson_ext.impl.sql:753  ROR  put_internal_original  list_temp.count > 0 → FALSE
+  NOT_COVERED pljson_ext.impl.sql:753  SBR  put_internal_original  inserter := list_temp; → NULL;
+  NOT_COVERED pljson_ext.impl.sql:772  NUL  put  elem is null → elem is NOT null
+  NOT_COVERED pljson_ext.impl.sql:773  SBR  put  put_internal_preparsed(obj, path, pljson_null()); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:775  SBR  put  put_internal_preparsed(obj, path, pljson_string(elem)); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:781  NUL  put  elem is null → elem is NOT null
+  NOT_COVERED pljson_ext.impl.sql:782  SBR  put  put_internal_preparsed(obj, path, pljson_null()); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:784  SBR  put  put_internal_preparsed(obj, path, pljson_number(elem)); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:790  NUL  put  elem is null → elem is NOT null
+  NOT_COVERED pljson_ext.impl.sql:791  SBR  put  put_internal_preparsed(obj, path, pljson_null()); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:793  SBR  put  put_internal_preparsed(obj, path, pljson_number(elem)); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:799  NUL  put  elem is null → elem is NOT null
+  NOT_COVERED pljson_ext.impl.sql:800  SBR  put  put_internal_preparsed(obj, path, pljson_null()); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:802  SBR  put  put_internal_preparsed(obj, path, elem); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:808  NUL  put  elem is null → elem is NOT null
+  NOT_COVERED pljson_ext.impl.sql:809  SBR  put  put_internal_preparsed(obj, path, pljson_null()); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:811  SBR  put  put_internal_preparsed(obj, path, elem); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:818  SBR  put  put_internal_preparsed(obj, path, pljson_null()); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:826  NUL  put  elem is null → elem is NOT null
+  NOT_COVERED pljson_ext.impl.sql:827  SBR  put  put_internal_preparsed(obj, path, pljson_null()); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:829  SBR  put  put_internal_preparsed(obj, path, elem); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:835  NUL  put  elem is null → elem is NOT null
+  NOT_COVERED pljson_ext.impl.sql:836  SBR  put  put_internal_preparsed(obj, path, pljson_null()); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:838  SBR  put  put_internal_preparsed(obj, path, pljson_ext.to_json_stri… → NULL;
+  NOT_COVERED pljson_ext.impl.sql:846  SBR  put  put_internal(obj, path, pljson_null(), base); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:855  SBR  put  put_internal(obj, path, pljson_null(), base); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:865  SBR  put  put_internal(obj, path, pljson_null(), base); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:873  NUL  put  elem is null → elem is NOT null
+  NOT_COVERED pljson_ext.impl.sql:874  SBR  put  put_internal(obj, path, pljson_null(), base); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:876  SBR  put  put_internal(obj, path, elem, base); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:883  SBR  put  put_internal(obj, path, pljson_null(), base); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:892  SBR  put  put_internal(obj, path, pljson_null(), base); → NULL;
+  SURVIVED    pljson_ext.impl.sql:900  NUL  put  elem is null → elem is NOT null
+  NOT_COVERED pljson_ext.impl.sql:901  SBR  put  put_internal(obj, path, pljson_null(), base); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:910  SBR  put  put_internal(obj, path, pljson_null(), base); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:932  SBR  pp  json_part := pljson_ext.get_json_element(obj, v_path); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:933  NUL  pp  json_part is null → json_part is NOT null
+  NOT_COVERED pljson_ext.impl.sql:942  SBR  pp  dbms_output.put_line(pp(obj, v_path)); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:949  SBR  pp_htp  json_part := pljson_ext.get_json_element(obj, v_path); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:950  NUL  pp_htp  json_part is null → json_part is NOT null
+  NOT_COVERED pljson_ext.impl.sql:951  SBR  pp_htp  htp.print; → NULL;
+  NOT_COVERED pljson_ext.impl.sql:953  SBR  pp_htp  htp.print(pljson_printer.pretty_print_any(json_part, fals… → NULL;
+  NOT_COVERED pljson_ext.impl.sql:966  SBR  base64  c := encodeBase64Blob2Clob(binarydata); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:967  SBR  base64  v_amount := dbms_lob.getlength(c); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:968  SBR  base64  v_clob_offset := 1; → NULL;
+  NOT_COVERED pljson_ext.impl.sql:970  ROR  base64  v_clob_offset < v_amount → v_clob_offset <= v_amount
+  NOT_COVERED pljson_ext.impl.sql:970  ROR  base64  v_clob_offset < v_amount → v_clob_offset <> v_amount
+  NOT_COVERED pljson_ext.impl.sql:970  ROR  base64  v_clob_offset < v_amount → FALSE
+  NOT_COVERED pljson_ext.impl.sql:974  SBR  base64  obj.append(dbms_lob.substr(c, 4000, v_clob_offset)); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:975  SBR  base64  v_clob_offset := v_clob_offset + 4000; → NULL;
+  NOT_COVERED pljson_ext.impl.sql:975  AOR  base64  v_clob_offset + 4000 → v_clob_offset - 4000
+  NOT_COVERED pljson_ext.impl.sql:977  SBR  base64  dbms_lob.freetemporary(c); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:991  SBR  base64  dbms_lob.createtemporary(c, false, dbms_lob.call); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:992  CUR  base64  1 → (1) + 1
+  NOT_COVERED pljson_ext.impl.sql:992  CUR  base64  l.count → (l.count) - 1
+  NOT_COVERED pljson_ext.impl.sql:993  SBR  base64  dbms_lob.append(c, l.get(i).get_string()); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:997  SBR  base64  b_ret := decodeBase64Clob2Blob(c); → NULL;
+  NOT_COVERED pljson_ext.impl.sql:998  SBR  base64  dbms_lob.freetemporary(c); → NULL;
+  SURVIVED    pljson_ext.impl.sql:1007  SBR  encode  dbms_lob.createtemporary(c, false, dbms_lob.call); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:22  SBR    self := pljson_parser.parse_list(str); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:30  SBR    pljson_ext.blob2clob(str, c_str, charset); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:31  SBR    self := pljson_parser.parse_list(c_str); → NULL;
+  SURVIVED    pljson_list.type.impl.sql:39  SBR    self.typeval := 2; → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:50  SBR    self.list_data := pljson_element_array(); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:51  SBR    self.typeval := 2; → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:52  CUR    num_array.FIRST → (num_array.FIRST) + 1
+  NOT_COVERED pljson_list.type.impl.sql:52  CUR    num_array.LAST → (num_array.LAST) - 1
+  NOT_COVERED pljson_list.type.impl.sql:53  SBR    append(num_array(i)); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:69  SBR    self.list_data := elem_array; → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:70  SBR    self.typeval := 2; → NULL;
+  SURVIVED    pljson_list.type.impl.sql:98  ROR    position < 1 → position <= 1
+  SURVIVED    pljson_list.type.impl.sql:125  LCR    elem is null and pljson_parser.empty_string_as_null → pljson_parser.empty_string_as_null
+  SURVIVED    pljson_list.type.impl.sql:125  LCR    elem is null and pljson_parser.empty_string_as_null → FALSE
+  SURVIVED    pljson_list.type.impl.sql:125  NUL    elem is null → elem is NOT null
+  NOT_COVERED pljson_list.type.impl.sql:126  SBR    append(pljson_null(), position); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:134  NUL    elem is null → elem is NOT null
+  NOT_COVERED pljson_list.type.impl.sql:135  SBR    append(pljson_null(), position); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:137  SBR    append(pljson_string(elem), position); → NULL;
+  SURVIVED    pljson_list.type.impl.sql:143  NUL    elem is null → elem is NOT null
+  SURVIVED    pljson_list.type.impl.sql:153  NUL    elem is null → elem is NOT null
+  NOT_COVERED pljson_list.type.impl.sql:154  SBR    append(pljson_null(), position); → NULL;
+  SURVIVED    pljson_list.type.impl.sql:162  NUL    elem is null → elem is NOT null
+  NOT_COVERED pljson_list.type.impl.sql:165  SBR    append(pljson_bool(elem), position); → NULL;
+  SURVIVED    pljson_list.type.impl.sql:171  NUL    elem is null → elem is NOT null
+  NOT_COVERED pljson_list.type.impl.sql:184  SBR    insert_value := pljson_null(); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:199  LCR    elem is null and pljson_parser.empty_string_as_null → elem is null
+  NOT_COVERED pljson_list.type.impl.sql:199  LCR    elem is null and pljson_parser.empty_string_as_null → pljson_parser.empty_string_as_null
+  NOT_COVERED pljson_list.type.impl.sql:199  LCR    elem is null and pljson_parser.empty_string_as_null → (elem is null) = (pljson_parser.empty_string_as_null)
+  NOT_COVERED pljson_list.type.impl.sql:199  LCR    elem is null and pljson_parser.empty_string_as_null → FALSE
+  NOT_COVERED pljson_list.type.impl.sql:199  NUL    elem is null → elem is NOT null
+  NOT_COVERED pljson_list.type.impl.sql:200  SBR    replace(position, pljson_null()); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:202  SBR    replace(position, pljson_string(elem)); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:208  NUL    elem is null → elem is NOT null
+  NOT_COVERED pljson_list.type.impl.sql:209  SBR    replace(position, pljson_null()); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:211  SBR    replace(position, pljson_string(elem)); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:218  SBR    replace(position, pljson_null()); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:228  SBR    replace(position, pljson_null()); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:236  NUL    elem is null → elem is NOT null
+  NOT_COVERED pljson_list.type.impl.sql:237  SBR    replace(position, pljson_null()); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:239  SBR    replace(position, pljson_bool(elem)); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:245  NUL    elem is null → elem is NOT null
+  NOT_COVERED pljson_list.type.impl.sql:246  SBR    replace(position, pljson_null()); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:248  SBR    replace(position, treat(elem as pljson_element)); → NULL;
+  SURVIVED    pljson_list.type.impl.sql:254  LCR    position is null or position < 1 or position > self.count → (position is null or position < 1) <> (position > self.co…
+  SURVIVED    pljson_list.type.impl.sql:254  LCR    position is null or position < 1 → position < 1
+  SURVIVED    pljson_list.type.impl.sql:254  LCR    position is null or position < 1 → (position is null) <> (position < 1)
+  SURVIVED    pljson_list.type.impl.sql:285  LCR    self.count >= position and position > 0 → (self.count >= position) = (position > 0)
+  NOT_COVERED pljson_list.type.impl.sql:294  NUL    elem is not null → elem is null
+  NOT_COVERED pljson_list.type.impl.sql:303  NUL    elem is not null → elem is null
+  NOT_COVERED pljson_list.type.impl.sql:312  NUL    elem is not null → elem is null
+  NOT_COVERED pljson_list.type.impl.sql:321  NUL    elem is not null → elem is null
+  NOT_COVERED pljson_list.type.impl.sql:330  NUL    elem is not null → elem is null
+  NOT_COVERED pljson_list.type.impl.sql:339  NUL    elem is not null → elem is null
+  SURVIVED    pljson_list.type.impl.sql:364  ROR    self.count > 0 → self.count >= 0
+  NOT_COVERED pljson_list.type.impl.sql:385  ROR    jp.head().get_number() > self.count → jp.head().get_number() >= self.count
+  NOT_COVERED pljson_list.type.impl.sql:385  ROR    jp.head().get_number() > self.count → jp.head().get_number() <> self.count
+  NOT_COVERED pljson_list.type.impl.sql:385  ROR    jp.head().get_number() > self.count → FALSE
+  NOT_COVERED pljson_list.type.impl.sql:386  SBR    self.append(pljson_null()); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:389  SBR    objlist := pljson(self); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:390  SBR    pljson_ext.put(objlist, json_path, elem, base); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:391  SBR    self := objlist.get_values; → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:398  ROR    jp.head().get_number() > self.count → jp.head().get_number() >= self.count
+  NOT_COVERED pljson_list.type.impl.sql:398  ROR    jp.head().get_number() > self.count → jp.head().get_number() <> self.count
+  NOT_COVERED pljson_list.type.impl.sql:398  ROR    jp.head().get_number() > self.count → FALSE
+  NOT_COVERED pljson_list.type.impl.sql:399  SBR    self.append(pljson_null()); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:402  SBR    objlist := pljson(self); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:403  LCR    elem is null and pljson_parser.empty_string_as_null → elem is null
+  NOT_COVERED pljson_list.type.impl.sql:403  LCR    elem is null and pljson_parser.empty_string_as_null → pljson_parser.empty_string_as_null
+  NOT_COVERED pljson_list.type.impl.sql:403  LCR    elem is null and pljson_parser.empty_string_as_null → (elem is null) = (pljson_parser.empty_string_as_null)
+  NOT_COVERED pljson_list.type.impl.sql:403  LCR    elem is null and pljson_parser.empty_string_as_null → FALSE
+  NOT_COVERED pljson_list.type.impl.sql:403  NUL    elem is null → elem is NOT null
+  NOT_COVERED pljson_list.type.impl.sql:404  SBR    pljson_ext.put(objlist, json_path, pljson_null(), base); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:406  SBR    pljson_ext.put(objlist, json_path, elem, base); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:408  SBR    self := objlist.get_values; → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:415  ROR    jp.head().get_number() > self.count → jp.head().get_number() >= self.count
+  NOT_COVERED pljson_list.type.impl.sql:415  ROR    jp.head().get_number() > self.count → jp.head().get_number() <> self.count
+  NOT_COVERED pljson_list.type.impl.sql:415  ROR    jp.head().get_number() > self.count → FALSE
+  NOT_COVERED pljson_list.type.impl.sql:416  SBR    self.append(pljson_null()); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:419  SBR    objlist := pljson(self); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:420  NUL    elem is null → elem is NOT null
+  NOT_COVERED pljson_list.type.impl.sql:421  SBR    pljson_ext.put(objlist, json_path, pljson_null(), base); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:423  SBR    pljson_ext.put(objlist, json_path, elem, base); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:425  SBR    self := objlist.get_values; → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:432  ROR    jp.head().get_number() > self.count → jp.head().get_number() >= self.count
+  NOT_COVERED pljson_list.type.impl.sql:432  ROR    jp.head().get_number() > self.count → jp.head().get_number() <> self.count
+  NOT_COVERED pljson_list.type.impl.sql:432  ROR    jp.head().get_number() > self.count → FALSE
+  NOT_COVERED pljson_list.type.impl.sql:433  SBR    self.append(pljson_null()); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:436  SBR    objlist := pljson(self); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:437  NUL    elem is null → elem is NOT null
+  NOT_COVERED pljson_list.type.impl.sql:438  SBR    pljson_ext.put(objlist, json_path, pljson_null(), base); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:440  SBR    pljson_ext.put(objlist, json_path, elem, base); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:442  SBR    self := objlist.get_values; → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:450  ROR    jp.head().get_number() > self.count → jp.head().get_number() >= self.count
+  NOT_COVERED pljson_list.type.impl.sql:450  ROR    jp.head().get_number() > self.count → jp.head().get_number() <> self.count
+  NOT_COVERED pljson_list.type.impl.sql:450  ROR    jp.head().get_number() > self.count → FALSE
+  NOT_COVERED pljson_list.type.impl.sql:451  SBR    self.append(pljson_null()); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:454  SBR    objlist := pljson(self); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:455  NUL    elem is null → elem is NOT null
+  NOT_COVERED pljson_list.type.impl.sql:456  SBR    pljson_ext.put(objlist, json_path, pljson_null(), base); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:458  SBR    pljson_ext.put(objlist, json_path, elem, base); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:460  SBR    self := objlist.get_values; → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:467  ROR    jp.head().get_number() > self.count → jp.head().get_number() >= self.count
+  NOT_COVERED pljson_list.type.impl.sql:467  ROR    jp.head().get_number() > self.count → jp.head().get_number() <> self.count
+  NOT_COVERED pljson_list.type.impl.sql:467  ROR    jp.head().get_number() > self.count → FALSE
+  NOT_COVERED pljson_list.type.impl.sql:468  SBR    self.append(pljson_null()); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:471  SBR    objlist := pljson(self); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:472  NUL    elem is null → elem is NOT null
+  NOT_COVERED pljson_list.type.impl.sql:473  SBR    pljson_ext.put(objlist, json_path, pljson_null(), base); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:475  SBR    pljson_ext.put(objlist, json_path, elem, base); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:477  SBR    self := objlist.get_values; → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:484  ROR    jp.head().get_number() > self.count → jp.head().get_number() >= self.count
+  NOT_COVERED pljson_list.type.impl.sql:484  ROR    jp.head().get_number() > self.count → jp.head().get_number() <> self.count
+  NOT_COVERED pljson_list.type.impl.sql:484  ROR    jp.head().get_number() > self.count → FALSE
+  NOT_COVERED pljson_list.type.impl.sql:485  SBR    self.append(pljson_null()); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:488  SBR    objlist := pljson(self); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:489  NUL    elem is null → elem is NOT null
+  NOT_COVERED pljson_list.type.impl.sql:490  SBR    pljson_ext.put(objlist, json_path, pljson_null(), base); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:492  SBR    pljson_ext.put(objlist, json_path, elem, base); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:494  SBR    self := objlist.get_values; → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:501  SBR    pljson_ext.remove(objlist, json_path, base); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:502  SBR    self := objlist.get_values; → NULL;
+  SURVIVED    pljson_list.type.impl.sql:509  ROR    indx <= self.list_data.count → TRUE
+  SURVIVED    pljson_list.type.impl.sql:510  ROR    path_position < path.count → path_position <> path.count
+  SURVIVED    pljson_list.type.impl.sql:522  SBR    indx := path(path_position).indx; → NULL;
+  SURVIVED    pljson_list.type.impl.sql:531  ROR    indx > self.list_data.count → indx >= self.list_data.count
+  SURVIVED    pljson_list.type.impl.sql:531  ROR    indx > self.list_data.count → indx <> self.list_data.count
+  SURVIVED    pljson_list.type.impl.sql:532  AOR    indx - self.list_data.count → indx + self.list_data.count
+  SURVIVED    pljson_list.type.impl.sql:536  ROR    path_position < path.count → path_position <> path.count
+  SURVIVED    pljson_list.type.impl.sql:546  LCR    not self.list_data(indx).is_object() and not self.list_da… → not self.list_data(indx).is_object()
+  SURVIVED    pljson_list.type.impl.sql:546  LCR    not self.list_data(indx).is_object() and not self.list_da… → not self.list_data(indx).is_array()
+  SURVIVED    pljson_list.type.impl.sql:546  LCR    not self.list_data(indx).is_object() and not self.list_da… → (not self.list_data(indx).is_object()) = (not self.list_d…
+  NOT_COVERED pljson_list.type.impl.sql:556  SBR    self.remove(indx); → NULL;
+  NOT_COVERED pljson_list.type.impl.sql:557  ROR    self.list_data.count = 0 → self.list_data.count >= 0
+  NOT_COVERED pljson_list.type.impl.sql:557  ROR    self.list_data.count = 0 → FALSE
+  SURVIVED    pljson_number.type.sql:47  NUL    nvl(num, 0) → num
+  SURVIVED    pljson_number.type.sql:50  SBR    self.num_double := num; → NULL;
+  SURVIVED    pljson_number.type.sql:51  ROR    to_number(self.num_double) = self.num → to_number(self.num_double) <= self.num
+  SURVIVED    pljson_number.type.sql:51  ROR    to_number(self.num_double) = self.num → to_number(self.num_double) >= self.num
+  SURVIVED    pljson_number.type.sql:51  ROR    to_number(self.num_double) = self.num → FALSE
+  SURVIVED    pljson_number.type.sql:52  SBR    self.num_repr_double_p := 't'; → NULL;
+  SURVIVED    pljson_number.type.sql:54  SBR    self.num_repr_double_p := 'f'; → NULL;
+  SURVIVED    pljson_number.type.sql:63  NUL    nvl(num_double, 0) → num_double
+  SURVIVED    pljson_number.type.sql:64  SBR    self.num_repr_double_p := 't'; → NULL;
+  SURVIVED    pljson_number.type.sql:66  ROR    to_binary_double(self.num) = self.num_double → FALSE
+  SURVIVED    pljson_number.type.sql:67  SBR    self.num_repr_number_p := 't'; → NULL;
+  SURVIVED    pljson_number.type.sql:69  SBR    self.num_repr_number_p := 'f'; → NULL;
+  SURVIVED    pljson_number.type.sql:127  SBR    self.num_repr_number_p := 't'; → NULL;
+  SURVIVED    pljson_number.type.sql:129  SBR    self.num_repr_double_p := 't'; → NULL;
+  SURVIVED    pljson_number.type.sql:148  ROR    num > 1e127d → num >= 1e127d
+  SURVIVED    pljson_number.type.sql:151  ROR    num < -1e127d → num <= -1e127d
+  SURVIVED    pljson_number.type.sql:155  LCR    -1 < num and num < 0 and substr(buf, 1, 2) = '-.' → substr(buf, 1, 2) = '-.'
+  SURVIVED    pljson_number.type.sql:155  LCR    -1 < num and num < 0 → -1 < num
+  SURVIVED    pljson_number.type.sql:155  LCR    -1 < num and num < 0 → num < 0
+  SURVIVED    pljson_number.type.sql:155  LCR    -1 < num and num < 0 → (-1 < num) = (num < 0)
+  SURVIVED    pljson_number.type.sql:155  ROR    -1 < num → -1 <= num
+  SURVIVED    pljson_number.type.sql:155  ROR    -1 < num → -1 <> num
+  SURVIVED    pljson_number.type.sql:155  ROR    num < 0 → num <= 0
+  SURVIVED    pljson_number.type.sql:155  ROR    num < 0 → num <> 0
+  SURVIVED    pljson_number.type.sql:157  LCR    0 < num and num < 1 and substr(buf, 1, 1) = '.' → substr(buf, 1, 1) = '.'
+  SURVIVED    pljson_number.type.sql:157  LCR    0 < num and num < 1 → 0 < num
+  SURVIVED    pljson_number.type.sql:157  LCR    0 < num and num < 1 → num < 1
+  SURVIVED    pljson_number.type.sql:157  LCR    0 < num and num < 1 → (0 < num) = (num < 1)
+  SURVIVED    pljson_number.type.sql:157  ROR    0 < num → 0 <= num
+  SURVIVED    pljson_number.type.sql:157  ROR    0 < num → 0 <> num
+  SURVIVED    pljson_number.type.sql:157  ROR    num < 1 → num <= 1
+  SURVIVED    pljson_number.type.sql:157  ROR    num < 1 → num <> 1
+  SURVIVED    pljson_number.type.sql:163  ROR    num_double = +BINARY_DOUBLE_INFINITY → num_double >= +BINARY_DOUBLE_INFINITY
+  SURVIVED    pljson_number.type.sql:163  ROR    num_double = +BINARY_DOUBLE_INFINITY → FALSE
+  SURVIVED    pljson_number.type.sql:166  ROR    num_double = -BINARY_DOUBLE_INFINITY → num_double <= -BINARY_DOUBLE_INFINITY
+  SURVIVED    pljson_number.type.sql:166  ROR    num_double = -BINARY_DOUBLE_INFINITY → FALSE
+  SURVIVED    pljson_number.type.sql:170  LCR    -1 < num_double and num_double < 0 and substr(buf, 1, 2) … → -1 < num_double and num_double < 0
+  SURVIVED    pljson_number.type.sql:170  LCR    -1 < num_double and num_double < 0 and substr(buf, 1, 2) … → substr(buf, 1, 2) = '-.'
+  SURVIVED    pljson_number.type.sql:170  LCR    -1 < num_double and num_double < 0 and substr(buf, 1, 2) … → FALSE
+  SURVIVED    pljson_number.type.sql:170  LCR    -1 < num_double and num_double < 0 → -1 < num_double
+  SURVIVED    pljson_number.type.sql:170  LCR    -1 < num_double and num_double < 0 → num_double < 0
+  SURVIVED    pljson_number.type.sql:170  LCR    -1 < num_double and num_double < 0 → (-1 < num_double) = (num_double < 0)
+  SURVIVED    pljson_number.type.sql:170  LCR    -1 < num_double and num_double < 0 → FALSE
+  SURVIVED    pljson_number.type.sql:170  ROR    -1 < num_double → -1 <= num_double
+  SURVIVED    pljson_number.type.sql:170  ROR    -1 < num_double → -1 <> num_double
+  SURVIVED    pljson_number.type.sql:170  ROR    -1 < num_double → FALSE
+  SURVIVED    pljson_number.type.sql:170  ROR    num_double < 0 → num_double <= 0
+  SURVIVED    pljson_number.type.sql:170  ROR    num_double < 0 → num_double <> 0
+  SURVIVED    pljson_number.type.sql:170  ROR    num_double < 0 → FALSE
+  NOT_COVERED pljson_number.type.sql:170  ROR    substr(buf, 1, 2) = '-.' → TRUE
+  NOT_COVERED pljson_number.type.sql:170  ROR    substr(buf, 1, 2) = '-.' → FALSE
+  NOT_COVERED pljson_number.type.sql:171  SBR    buf := '-0' || substr(buf, 2); → NULL;
+  NOT_COVERED pljson_number.type.sql:171  AOR    '-0' || substr(buf, 2) → '-0'
+  SURVIVED    pljson_number.type.sql:172  LCR    0 < num_double and num_double < 1 and substr(buf, 1, 1) =… → substr(buf, 1, 1) = '.'
+  SURVIVED    pljson_number.type.sql:172  LCR    0 < num_double and num_double < 1 and substr(buf, 1, 1) =… → FALSE
+  SURVIVED    pljson_number.type.sql:172  LCR    0 < num_double and num_double < 1 → 0 < num_double
+  SURVIVED    pljson_number.type.sql:172  LCR    0 < num_double and num_double < 1 → num_double < 1
+  SURVIVED    pljson_number.type.sql:172  LCR    0 < num_double and num_double < 1 → (0 < num_double) = (num_double < 1)
+  SURVIVED    pljson_number.type.sql:172  LCR    0 < num_double and num_double < 1 → FALSE
+  SURVIVED    pljson_number.type.sql:172  ROR    0 < num_double → 0 <= num_double
+  SURVIVED    pljson_number.type.sql:172  ROR    0 < num_double → 0 <> num_double
+  SURVIVED    pljson_number.type.sql:172  ROR    0 < num_double → FALSE
+  SURVIVED    pljson_number.type.sql:172  ROR    num_double < 1 → num_double <= 1
+  SURVIVED    pljson_number.type.sql:172  ROR    num_double < 1 → num_double <> 1
+  SURVIVED    pljson_number.type.sql:172  ROR    num_double < 1 → FALSE
+  SURVIVED    pljson_number.type.sql:172  ROR    substr(buf, 1, 1) = '.' → FALSE
+  NOT_COVERED pljson_number.type.sql:173  SBR    buf := '0' || buf; → NULL;
+  NOT_COVERED pljson_number.type.sql:173  AOR    '0' || buf → '0'
+  NOT_COVERED pljson_parser.impl.sql:31  LCR  set_buffer_amount  amount > 0 and amount <= 4000 → amount > 0
+  NOT_COVERED pljson_parser.impl.sql:31  LCR  set_buffer_amount  amount > 0 and amount <= 4000 → amount <= 4000
+  NOT_COVERED pljson_parser.impl.sql:31  LCR  set_buffer_amount  amount > 0 and amount <= 4000 → (amount > 0) = (amount <= 4000)
+  NOT_COVERED pljson_parser.impl.sql:31  LCR  set_buffer_amount  amount > 0 and amount <= 4000 → FALSE
+  NOT_COVERED pljson_parser.impl.sql:31  ROR  set_buffer_amount  amount > 0 → amount >= 0
+  NOT_COVERED pljson_parser.impl.sql:31  ROR  set_buffer_amount  amount > 0 → amount <> 0
+  NOT_COVERED pljson_parser.impl.sql:31  ROR  set_buffer_amount  amount > 0 → FALSE
+  NOT_COVERED pljson_parser.impl.sql:31  ROR  set_buffer_amount  amount <= 4000 → amount < 4000
+  NOT_COVERED pljson_parser.impl.sql:31  ROR  set_buffer_amount  amount <= 4000 → amount = 4000
+  NOT_COVERED pljson_parser.impl.sql:31  ROR  set_buffer_amount  amount <= 4000 → TRUE
+  NOT_COVERED pljson_parser.impl.sql:32  SBR  set_buffer_amount  buffer_amount := amount; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:58  SBR  lengthcc  src := dbms_lob.substr(buf, buffer_amount-1, offset+1); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:58  AOR  lengthcc  buffer_amount-1 → buffer_amount+1
+  NOT_COVERED pljson_parser.impl.sql:58  AOR  lengthcc  offset+1 → offset-1
+  SURVIVED    pljson_parser.impl.sql:84  ROR  next_char  indx > s.len → FALSE
+  SURVIVED    pljson_parser.impl.sql:104  ROR  next_char  indx > s.src_len + s.offset_chars → indx >= s.src_len + s.offset_chars
+  SURVIVED    pljson_parser.impl.sql:105  ROR  next_char  indx > length(s.src) + s.offset_chars → indx >= length(s.src) + s.offset_chars
+  NOT_COVERED pljson_parser.impl.sql:113  SBR  next_char  s.src := dbms_lob.substr(s.s_clob, buffer_amount-1, s.off… → NULL;
+  NOT_COVERED pljson_parser.impl.sql:113  AOR  next_char  buffer_amount-1 → buffer_amount+1
+  NOT_COVERED pljson_parser.impl.sql:113  AOR  next_char  s.offset+1 → s.offset-1
+  SURVIVED    pljson_parser.impl.sql:117  ROR  next_char  indx <= s.offset_chars → indx = s.offset_chars
+  SURVIVED    pljson_parser.impl.sql:117  ROR  next_char  indx <= s.offset_chars → TRUE
+  SURVIVED    pljson_parser.impl.sql:122  SBR  next_char  s.src := dbms_lob.substr(s.s_clob, buffer_amount, s.offse… → NULL;
+  NOT_COVERED pljson_parser.impl.sql:125  SBR  next_char  s.src := dbms_lob.substr(s.s_clob, buffer_amount-1, s.off… → NULL;
+  NOT_COVERED pljson_parser.impl.sql:125  AOR  next_char  buffer_amount-1 → buffer_amount+1
+  NOT_COVERED pljson_parser.impl.sql:125  AOR  next_char  s.offset+1 → s.offset-1
+  SURVIVED    pljson_parser.impl.sql:127  SBR  next_char  set_src_array(s); → NULL;
+  SURVIVED    pljson_parser.impl.sql:128  ROR  next_char  indx > length(s.src) + s.offset_chars → indx <> length(s.src) + s.offset_chars
+  NOT_COVERED pljson_parser.impl.sql:136  SBR  next_char  s.src := dbms_lob.substr(s.s_clob, buffer_amount-1, s.off… → NULL;
+  NOT_COVERED pljson_parser.impl.sql:136  AOR  next_char  buffer_amount-1 → buffer_amount+1
+  NOT_COVERED pljson_parser.impl.sql:136  AOR  next_char  s.offset+1 → s.offset-1
+  NOT_COVERED pljson_parser.impl.sql:165  SBR  prepareClob  temp.src := dbms_lob.substr(buf, buffer_amount-1, temp.of… → NULL;
+  NOT_COVERED pljson_parser.impl.sql:165  AOR  prepareClob  buffer_amount-1 → buffer_amount+1
+  NOT_COVERED pljson_parser.impl.sql:165  AOR  prepareClob  temp.offset+1 → temp.offset-1
+  SURVIVED    pljson_parser.impl.sql:176  SBR  prepareVarchar2  temp.s_clob := buf; → NULL;
+  SURVIVED    pljson_parser.impl.sql:178  SBR  prepareVarchar2  temp.offset := 0; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:187  SBR  debug  dbms_output.put_line(text); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:192  SBR  print_token  dbms_output.put_line('Line: '||t.line||' - Column: '||t.c… → NULL;
+  NOT_COVERED pljson_parser.impl.sql:192  AOR  print_token  'Line: '||t.line||' - Column: '||t.col||' - Type: '||t.ty… → 'Line: '||t.line||' - Column: '||t.col||' - Type: '||t.ty…
+  NOT_COVERED pljson_parser.impl.sql:192  AOR  print_token  'Line: '||t.line||' - Column: '||t.col||' - Type: '||t.ty… → 'Line: '||t.line||' - Column: '||t.col||' - Type: '||t.ty…
+  NOT_COVERED pljson_parser.impl.sql:192  AOR  print_token  'Line: '||t.line||' - Column: '||t.col||' - Type: '||t.ty… → 'Line: '||t.line||' - Column: '||t.col||' - Type: '
+  NOT_COVERED pljson_parser.impl.sql:192  AOR  print_token  'Line: '||t.line||' - Column: '||t.col||' - Type: ' → 'Line: '||t.line||' - Column: '||t.col
+  NOT_COVERED pljson_parser.impl.sql:192  AOR  print_token  'Line: '||t.line||' - Column: '||t.col → 'Line: '||t.line||' - Column: '
+  NOT_COVERED pljson_parser.impl.sql:192  AOR  print_token  'Line: '||t.line||' - Column: ' → 'Line: '||t.line
+  NOT_COVERED pljson_parser.impl.sql:192  AOR  print_token  'Line: '||t.line → 'Line: '
+  SURVIVED    pljson_parser.impl.sql:198  AOR  s_error  'JSON Scanner exception @ line: '||line||' column: '||col… → 'JSON Scanner exception @ line: '||line||' column: '||col…
+  SURVIVED    pljson_parser.impl.sql:198  AOR  s_error  'JSON Scanner exception @ line: '||line||' column: '||col… → 'JSON Scanner exception @ line: '||line||' column: '||col
+  SURVIVED    pljson_parser.impl.sql:198  AOR  s_error  'JSON Scanner exception @ line: '||line||' column: '||col → 'JSON Scanner exception @ line: '||line||' column: '
+  SURVIVED    pljson_parser.impl.sql:198  AOR  s_error  'JSON Scanner exception @ line: '||line||' column: ' → 'JSON Scanner exception @ line: '||line
+  SURVIVED    pljson_parser.impl.sql:198  AOR  s_error  'JSON Scanner exception @ line: '||line → 'JSON Scanner exception @ line: '
+  SURVIVED    pljson_parser.impl.sql:203  AOR  s_error  'JSON Scanner exception @ line: '||tok.line||' column: '|… → 'JSON Scanner exception @ line: '||tok.line||' column: '|…
+  SURVIVED    pljson_parser.impl.sql:203  AOR  s_error  'JSON Scanner exception @ line: '||tok.line||' column: '|… → 'JSON Scanner exception @ line: '||tok.line||' column: '
+  SURVIVED    pljson_parser.impl.sql:203  AOR  s_error  'JSON Scanner exception @ line: '||tok.line||' column: ' → 'JSON Scanner exception @ line: '||tok.line
+  SURVIVED    pljson_parser.impl.sql:203  AOR  s_error  'JSON Scanner exception @ line: '||tok.line → 'JSON Scanner exception @ line: '
+  SURVIVED    pljson_parser.impl.sql:210  SBR  mt  token.line := l; → NULL;
+  SURVIVED    pljson_parser.impl.sql:211  SBR  mt  token.col := c; → NULL;
+  SURVIVED    pljson_parser.impl.sql:212  SBR  mt  token.data := d; → NULL;
+  SURVIVED    pljson_parser.impl.sql:226  SBR  lexNumber  numbuf := numbuf || '0'; → NULL;
+  SURVIVED    pljson_parser.impl.sql:226  AOR  lexNumber  numbuf || '0' → numbuf
+  SURVIVED    pljson_parser.impl.sql:228  LCR  lexNumber  buf >= '1' and buf <= '9' → buf >= '1'
+  SURVIVED    pljson_parser.impl.sql:228  LCR  lexNumber  buf >= '1' and buf <= '9' → buf <= '9'
+  SURVIVED    pljson_parser.impl.sql:228  LCR  lexNumber  buf >= '1' and buf <= '9' → (buf >= '1') = (buf <= '9')
+  SURVIVED    pljson_parser.impl.sql:228  ROR  lexNumber  buf >= '1' → TRUE
+  SURVIVED    pljson_parser.impl.sql:228  ROR  lexNumber  buf <= '9' → TRUE
+  SURVIVED    pljson_parser.impl.sql:232  LCR  lexNumber  buf >= '0' and buf <= '9' → (buf >= '0') = (buf <= '9')
+  SURVIVED    pljson_parser.impl.sql:242  LCR  lexNumber  buf >= '0' and buf <= '9' → (buf >= '0') = (buf <= '9')
+  SURVIVED    pljson_parser.impl.sql:255  LCR  lexNumber  buf = '+' or buf = '-' → buf = '-'
+  SURVIVED    pljson_parser.impl.sql:255  ROR  lexNumber  buf = '+' → FALSE
+  SURVIVED    pljson_parser.impl.sql:260  LCR  lexNumber  buf >= '0' and buf <= '9' → (buf >= '0') = (buf <= '9')
+  NOT_COVERED pljson_parser.impl.sql:280  SBR  lexName  buf := next_char(indx, jsrc); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:282  SBR  lexName  varbuf := varbuf || buf; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:282  AOR  lexName  varbuf || buf → varbuf
+  NOT_COVERED pljson_parser.impl.sql:283  SBR  lexName  indx := indx + 1; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:283  AOR  lexName  indx + 1 → indx - 1
+  NOT_COVERED pljson_parser.impl.sql:284  SBR  lexName  buf := next_char(indx, jsrc); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:285  NUL  lexName  buf is null → buf is NOT null
+  NOT_COVERED pljson_parser.impl.sql:293  SBR  lexName  tok.data := varbuf; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:294  AOR  lexName  indx-1 → indx+1
+  NOT_COVERED pljson_parser.impl.sql:300  SBR  updateClob  dbms_lob.writeappend(v_extended, length2(v_str), v_str); → NULL;
+  SURVIVED    pljson_parser.impl.sql:314  ROR  lexString  v_count > 8191 → v_count >= 8191
+  SURVIVED    pljson_parser.impl.sql:314  ROR  lexString  v_count > 8191 → FALSE
+  NOT_COVERED pljson_parser.impl.sql:315  NUL  lexString  v_extended is null → v_extended is NOT null
+  NOT_COVERED pljson_parser.impl.sql:316  SBR  lexString  v_extended := empty_clob(); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:317  SBR  lexString  dbms_lob.createtemporary(v_extended, true); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:319  SBR  lexString  updateClob(v_extended, unistr(varbuf)); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:320  SBR  lexString  varbuf := ''; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:320  SBR  lexString  v_count := 0; → NULL;
+  SURVIVED    pljson_parser.impl.sql:322  LCR  lexString  buf = Chr(13) or buf = CHR(9) or buf = CHR(10) → buf = Chr(13) or buf = CHR(9)
+  SURVIVED    pljson_parser.impl.sql:322  LCR  lexString  buf = Chr(13) or buf = CHR(9) or buf = CHR(10) → buf = CHR(10)
+  SURVIVED    pljson_parser.impl.sql:322  LCR  lexString  buf = Chr(13) or buf = CHR(9) or buf = CHR(10) → (buf = Chr(13) or buf = CHR(9)) <> (buf = CHR(10))
+  SURVIVED    pljson_parser.impl.sql:322  LCR  lexString  buf = Chr(13) or buf = CHR(9) → buf = Chr(13)
+  SURVIVED    pljson_parser.impl.sql:322  LCR  lexString  buf = Chr(13) or buf = CHR(9) → buf = CHR(9)
+  SURVIVED    pljson_parser.impl.sql:322  LCR  lexString  buf = Chr(13) or buf = CHR(9) → (buf = Chr(13)) <> (buf = CHR(9))
+  SURVIVED    pljson_parser.impl.sql:322  ROR  lexString  buf = Chr(13) → buf <= Chr(13)
+  SURVIVED    pljson_parser.impl.sql:322  ROR  lexString  buf = Chr(13) → FALSE
+  SURVIVED    pljson_parser.impl.sql:322  ROR  lexString  buf = CHR(9) → buf <= CHR(9)
+  SURVIVED    pljson_parser.impl.sql:322  ROR  lexString  buf = CHR(9) → FALSE
+  SURVIVED    pljson_parser.impl.sql:322  ROR  lexString  buf = CHR(10) → buf <= CHR(10)
+  SURVIVED    pljson_parser.impl.sql:322  ROR  lexString  buf = CHR(10) → FALSE
+  NOT_COVERED pljson_parser.impl.sql:323  SBR  lexString  s_error('Control characters not allowed (CHR(9),CHR(10),C… → NULL;
+  SURVIVED    pljson_parser.impl.sql:331  SBR  lexString  varbuf := varbuf || buf || buf; → NULL;
+  SURVIVED    pljson_parser.impl.sql:331  SBR  lexString  v_count := v_count + 2; → NULL;
+  SURVIVED    pljson_parser.impl.sql:331  AOR  lexString  v_count + 2 → v_count - 2
+  SURVIVED    pljson_parser.impl.sql:335  SBR  lexString  varbuf := varbuf || buf; → NULL;
+  SURVIVED    pljson_parser.impl.sql:335  AOR  lexString  varbuf || buf → varbuf
+  SURVIVED    pljson_parser.impl.sql:335  SBR  lexString  v_count := v_count + 1; → NULL;
+  SURVIVED    pljson_parser.impl.sql:335  AOR  lexString  v_count + 1 → v_count - 1
+  SURVIVED    pljson_parser.impl.sql:338  ROR  lexString  buf = '''' → FALSE
+  NOT_COVERED pljson_parser.impl.sql:339  ROR  lexString  json_strict = false → json_strict <= false
+  NOT_COVERED pljson_parser.impl.sql:339  ROR  lexString  json_strict = false → json_strict >= false
+  NOT_COVERED pljson_parser.impl.sql:339  ROR  lexString  json_strict = false → FALSE
+  NOT_COVERED pljson_parser.impl.sql:340  SBR  lexString  varbuf := varbuf || buf; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:340  AOR  lexString  varbuf || buf → varbuf
+  NOT_COVERED pljson_parser.impl.sql:340  SBR  lexString  v_count := v_count + 1; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:340  AOR  lexString  v_count + 1 → v_count - 1
+  NOT_COVERED pljson_parser.impl.sql:341  SBR  lexString  indx := indx + 1; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:341  AOR  lexString  indx + 1 → indx - 1
+  NOT_COVERED pljson_parser.impl.sql:342  SBR  lexString  buf := next_char(indx, jsrc); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:344  SBR  lexString  s_error('strictmode - expected: " \ / b f n r t u ', tok); → NULL;
+  SURVIVED    pljson_parser.impl.sql:353  SBR  lexString  varbuf := varbuf || chr(8); → NULL;
+  SURVIVED    pljson_parser.impl.sql:353  AOR  lexString  varbuf || chr(8) → varbuf
+  SURVIVED    pljson_parser.impl.sql:354  SBR  lexString  varbuf := varbuf || chr(12); → NULL;
+  SURVIVED    pljson_parser.impl.sql:354  AOR  lexString  varbuf || chr(12) → varbuf
+  SURVIVED    pljson_parser.impl.sql:355  SBR  lexString  varbuf := varbuf || chr(10); → NULL;
+  SURVIVED    pljson_parser.impl.sql:355  AOR  lexString  varbuf || chr(10) → varbuf
+  SURVIVED    pljson_parser.impl.sql:356  SBR  lexString  varbuf := varbuf || chr(13); → NULL;
+  SURVIVED    pljson_parser.impl.sql:356  AOR  lexString  varbuf || chr(13) → varbuf
+  SURVIVED    pljson_parser.impl.sql:357  SBR  lexString  varbuf := varbuf || chr(9); → NULL;
+  SURVIVED    pljson_parser.impl.sql:357  AOR  lexString  varbuf || chr(9) → varbuf
+  SURVIVED    pljson_parser.impl.sql:360  SBR  lexString  v_count := v_count + 1; → NULL;
+  SURVIVED    pljson_parser.impl.sql:360  AOR  lexString  v_count + 1 → v_count - 1
+  SURVIVED    pljson_parser.impl.sql:361  SBR  lexString  indx := indx + 1; → NULL;
+  SURVIVED    pljson_parser.impl.sql:362  SBR  lexString  buf := next_char(indx, jsrc); → NULL;
+  SURVIVED    pljson_parser.impl.sql:363  ROR  lexString  buf = 'u' → TRUE
+  SURVIVED    pljson_parser.impl.sql:369  SBR  lexString  wrong := FALSE; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:370  SBR  lexString  wrong := TRUE; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:371  SBR  lexString  wrong := TRUE; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:372  SBR  lexString  wrong := TRUE; → NULL;
+  SURVIVED    pljson_parser.impl.sql:378  SBR  lexString  varbuf := varbuf || '\'||four; → NULL;
+  SURVIVED    pljson_parser.impl.sql:378  AOR  lexString  varbuf || '\' → varbuf
+  SURVIVED    pljson_parser.impl.sql:379  SBR  lexString  v_count := v_count + 5; → NULL;
+  SURVIVED    pljson_parser.impl.sql:379  AOR  lexString  v_count + 5 → v_count - 5
+  SURVIVED    pljson_parser.impl.sql:380  SBR  lexString  indx := indx + 5; → NULL;
+  SURVIVED    pljson_parser.impl.sql:387  SBR  lexString  v_count := v_count + 1; → NULL;
+  SURVIVED    pljson_parser.impl.sql:387  AOR  lexString  v_count + 1 → v_count - 1
+  NOT_COVERED pljson_parser.impl.sql:401  SBR  lexString  updateClob(v_extended, unistr(varbuf)); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:402  SBR  lexString  tok.data_overflow := v_extended; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:405  SBR  lexString  dbms_lob.read(v_extended, max_string_chars, 1, tok.data); → NULL;
+  SURVIVED    pljson_parser.impl.sql:426  SBR  lexer  col_no := col_no + 1; → NULL;
+  SURVIVED    pljson_parser.impl.sql:426  AOR  lexer  col_no + 1 → col_no - 1
+  SURVIVED    pljson_parser.impl.sql:437  LCR  lexer  json_strict = false and REGEXP_LIKE(buf, '^[[:alpha:]]$',… → json_strict = false
+  SURVIVED    pljson_parser.impl.sql:437  LCR  lexer  json_strict = false and REGEXP_LIKE(buf, '^[[:alpha:]]$',… → (json_strict = false) = (REGEXP_LIKE(buf, '^[[:alpha:]]$'…
+  SURVIVED    pljson_parser.impl.sql:437  LCR  lexer  json_strict = false and REGEXP_LIKE(buf, '^[[:alpha:]]$',… → FALSE
+  SURVIVED    pljson_parser.impl.sql:437  ROR  lexer  json_strict = false → json_strict <= false
+  SURVIVED    pljson_parser.impl.sql:437  ROR  lexer  json_strict = false → FALSE
+  NOT_COVERED pljson_parser.impl.sql:438  SBR  lexer  tokens(tok_indx) := mt('STRING', lin_no, col_no, null); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:439  SBR  lexer  indx := lexName(jsrc, tokens(tok_indx), indx); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:440  SBR  lexer  col_no := col_no + length(tokens(tok_indx).data) + 1; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:440  AOR  lexer  col_no + length(tokens(tok_indx).data) → col_no - length(tokens(tok_indx).data)
+  NOT_COVERED pljson_parser.impl.sql:440  AOR  lexer  col_no + length(tokens(tok_indx).data) + 1 → col_no + length(tokens(tok_indx).data) - 1
+  NOT_COVERED pljson_parser.impl.sql:441  SBR  lexer  tok_indx := tok_indx + 1; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:441  AOR  lexer  tok_indx + 1 → tok_indx - 1
+  SURVIVED    pljson_parser.impl.sql:443  SBR  lexer  s_error('Expected: ''true''', lin_no, col_no); → NULL;
+  SURVIVED    pljson_parser.impl.sql:448  SBR  lexer  col_no := col_no + 3; → NULL;
+  SURVIVED    pljson_parser.impl.sql:448  AOR  lexer  col_no + 3 → col_no - 3
+  SURVIVED    pljson_parser.impl.sql:452  LCR  lexer  json_strict = false and REGEXP_LIKE(buf, '^[[:alpha:]]$',… → json_strict = false
+  SURVIVED    pljson_parser.impl.sql:452  LCR  lexer  json_strict = false and REGEXP_LIKE(buf, '^[[:alpha:]]$',… → (json_strict = false) = (REGEXP_LIKE(buf, '^[[:alpha:]]$'…
+  SURVIVED    pljson_parser.impl.sql:452  LCR  lexer  json_strict = false and REGEXP_LIKE(buf, '^[[:alpha:]]$',… → FALSE
+  SURVIVED    pljson_parser.impl.sql:452  ROR  lexer  json_strict = false → json_strict <= false
+  SURVIVED    pljson_parser.impl.sql:452  ROR  lexer  json_strict = false → FALSE
+  NOT_COVERED pljson_parser.impl.sql:453  SBR  lexer  tokens(tok_indx) := mt('STRING', lin_no, col_no, null); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:454  SBR  lexer  indx := lexName(jsrc, tokens(tok_indx), indx); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:455  SBR  lexer  col_no := col_no + length(tokens(tok_indx).data) + 1; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:455  AOR  lexer  col_no + length(tokens(tok_indx).data) → col_no - length(tokens(tok_indx).data)
+  NOT_COVERED pljson_parser.impl.sql:455  AOR  lexer  col_no + length(tokens(tok_indx).data) + 1 → col_no + length(tokens(tok_indx).data) - 1
+  NOT_COVERED pljson_parser.impl.sql:456  SBR  lexer  tok_indx := tok_indx + 1; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:456  AOR  lexer  tok_indx + 1 → tok_indx - 1
+  SURVIVED    pljson_parser.impl.sql:458  SBR  lexer  s_error('Expected: ''null''', lin_no, col_no); → NULL;
+  SURVIVED    pljson_parser.impl.sql:463  SBR  lexer  col_no := col_no + 3; → NULL;
+  SURVIVED    pljson_parser.impl.sql:463  AOR  lexer  col_no + 3 → col_no - 3
+  SURVIVED    pljson_parser.impl.sql:466  ROR  lexer  next_char2(indx, jsrc, 5) != 'false' → FALSE
+  SURVIVED    pljson_parser.impl.sql:467  LCR  lexer  json_strict = false and REGEXP_LIKE(buf, '^[[:alpha:]]$',… → json_strict = false
+  SURVIVED    pljson_parser.impl.sql:467  LCR  lexer  json_strict = false and REGEXP_LIKE(buf, '^[[:alpha:]]$',… → (json_strict = false) = (REGEXP_LIKE(buf, '^[[:alpha:]]$'…
+  SURVIVED    pljson_parser.impl.sql:467  LCR  lexer  json_strict = false and REGEXP_LIKE(buf, '^[[:alpha:]]$',… → FALSE
+  SURVIVED    pljson_parser.impl.sql:467  ROR  lexer  json_strict = false → json_strict <= false
+  SURVIVED    pljson_parser.impl.sql:467  ROR  lexer  json_strict = false → FALSE
+  NOT_COVERED pljson_parser.impl.sql:468  SBR  lexer  tokens(tok_indx) := mt('STRING', lin_no, col_no, null); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:469  SBR  lexer  indx := lexName(jsrc, tokens(tok_indx), indx); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:470  SBR  lexer  col_no := col_no + length(tokens(tok_indx).data) + 1; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:470  AOR  lexer  col_no + length(tokens(tok_indx).data) → col_no - length(tokens(tok_indx).data)
+  NOT_COVERED pljson_parser.impl.sql:470  AOR  lexer  col_no + length(tokens(tok_indx).data) + 1 → col_no + length(tokens(tok_indx).data) - 1
+  NOT_COVERED pljson_parser.impl.sql:471  SBR  lexer  tok_indx := tok_indx + 1; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:471  AOR  lexer  tok_indx + 1 → tok_indx - 1
+  SURVIVED    pljson_parser.impl.sql:473  SBR  lexer  s_error('Expected: ''false''', lin_no, col_no); → NULL;
+  SURVIVED    pljson_parser.impl.sql:478  SBR  lexer  col_no := col_no + 4; → NULL;
+  SURVIVED    pljson_parser.impl.sql:478  AOR  lexer  col_no + 4 → col_no - 4
+  SURVIVED    pljson_parser.impl.sql:481  ROR  lexer  buf = Chr(10) → buf <= Chr(10)
+  SURVIVED    pljson_parser.impl.sql:482  SBR  lexer  lin_no := lin_no + 1; → NULL;
+  SURVIVED    pljson_parser.impl.sql:482  AOR  lexer  lin_no + 1 → lin_no - 1
+  SURVIVED    pljson_parser.impl.sql:483  SBR  lexer  col_no := 0; → NULL;
+  SURVIVED    pljson_parser.impl.sql:485  ROR  lexer  buf = Chr(13) → buf <= Chr(13)
+  SURVIVED    pljson_parser.impl.sql:485  ROR  lexer  buf = Chr(13) → FALSE
+  NOT_COVERED pljson_parser.impl.sql:486  SBR  lexer  lin_no := lin_no + 1; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:486  AOR  lexer  lin_no + 1 → lin_no - 1
+  NOT_COVERED pljson_parser.impl.sql:487  SBR  lexer  col_no := 0; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:488  ROR  lexer  jsrc.len >= indx+1 → jsrc.len > indx+1
+  NOT_COVERED pljson_parser.impl.sql:488  ROR  lexer  jsrc.len >= indx+1 → jsrc.len = indx+1
+  NOT_COVERED pljson_parser.impl.sql:488  ROR  lexer  jsrc.len >= indx+1 → TRUE
+  NOT_COVERED pljson_parser.impl.sql:488  AOR  lexer  indx+1 → indx-1
+  NOT_COVERED pljson_parser.impl.sql:489  SBR  lexer  buf := next_char(indx+1, jsrc); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:489  AOR  lexer  indx+1 → indx-1
+  NOT_COVERED pljson_parser.impl.sql:490  ROR  lexer  buf = Chr(10) → buf <= Chr(10)
+  NOT_COVERED pljson_parser.impl.sql:490  ROR  lexer  buf = Chr(10) → buf >= Chr(10)
+  NOT_COVERED pljson_parser.impl.sql:490  ROR  lexer  buf = Chr(10) → FALSE
+  NOT_COVERED pljson_parser.impl.sql:491  SBR  lexer  indx := indx + 1; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:491  AOR  lexer  indx + 1 → indx - 1
+  SURVIVED    pljson_parser.impl.sql:495  ROR  lexer  buf = CHR(9) → buf <= CHR(9)
+  SURVIVED    pljson_parser.impl.sql:495  ROR  lexer  buf = CHR(9) → FALSE
+  SURVIVED    pljson_parser.impl.sql:499  SBR  lexer  col_no := col_no + length(tokens(tok_indx).data); → NULL;
+  SURVIVED    pljson_parser.impl.sql:499  AOR  lexer  col_no + length(tokens(tok_indx).data) → col_no - length(tokens(tok_indx).data)
+  SURVIVED    pljson_parser.impl.sql:504  SBR  lexer  col_no := col_no + length(tokens(tok_indx).data) + 1; → NULL;
+  SURVIVED    pljson_parser.impl.sql:504  AOR  lexer  col_no + length(tokens(tok_indx).data) → col_no - length(tokens(tok_indx).data)
+  SURVIVED    pljson_parser.impl.sql:504  AOR  lexer  col_no + length(tokens(tok_indx).data) + 1 → col_no + length(tokens(tok_indx).data) - 1
+  SURVIVED    pljson_parser.impl.sql:506  LCR  lexer  buf = '''' and json_strict = false → buf = ''''
+  SURVIVED    pljson_parser.impl.sql:506  LCR  lexer  buf = '''' and json_strict = false → json_strict = false
+  SURVIVED    pljson_parser.impl.sql:506  LCR  lexer  buf = '''' and json_strict = false → FALSE
+  SURVIVED    pljson_parser.impl.sql:506  ROR  lexer  buf = '''' → TRUE
+  SURVIVED    pljson_parser.impl.sql:506  ROR  lexer  buf = '''' → FALSE
+  NOT_COVERED pljson_parser.impl.sql:506  ROR  lexer  json_strict = false → json_strict <= false
+  NOT_COVERED pljson_parser.impl.sql:506  ROR  lexer  json_strict = false → json_strict >= false
+  NOT_COVERED pljson_parser.impl.sql:506  ROR  lexer  json_strict = false → FALSE
+  NOT_COVERED pljson_parser.impl.sql:507  SBR  lexer  tokens(tok_indx) := mt('STRING', lin_no, col_no, null); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:508  SBR  lexer  indx := lexString(jsrc, tokens(tok_indx), indx, ''''); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:509  SBR  lexer  col_no := col_no + length(tokens(tok_indx).data) + 1; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:509  AOR  lexer  col_no + length(tokens(tok_indx).data) → col_no - length(tokens(tok_indx).data)
+  NOT_COVERED pljson_parser.impl.sql:509  AOR  lexer  col_no + length(tokens(tok_indx).data) + 1 → col_no + length(tokens(tok_indx).data) - 1
+  NOT_COVERED pljson_parser.impl.sql:510  SBR  lexer  tok_indx := tok_indx + 1; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:510  AOR  lexer  tok_indx + 1 → tok_indx - 1
+  SURVIVED    pljson_parser.impl.sql:511  LCR  lexer  json_strict = false and REGEXP_LIKE(buf, '^[[:alpha:]]$',… → json_strict = false
+  SURVIVED    pljson_parser.impl.sql:511  LCR  lexer  json_strict = false and REGEXP_LIKE(buf, '^[[:alpha:]]$',… → FALSE
+  SURVIVED    pljson_parser.impl.sql:511  ROR  lexer  json_strict = false → json_strict <= false
+  SURVIVED    pljson_parser.impl.sql:511  ROR  lexer  json_strict = false → FALSE
+  NOT_COVERED pljson_parser.impl.sql:512  SBR  lexer  tokens(tok_indx) := mt('STRING', lin_no, col_no, null); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:513  SBR  lexer  indx := lexName(jsrc, tokens(tok_indx), indx); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:514  NUL  lexer  tokens(tok_indx).data_overflow is not null → tokens(tok_indx).data_overflow is null
+  NOT_COVERED pljson_parser.impl.sql:516  SBR  lexer  col_no := col_no + lengthcc(tokens(tok_indx).data_overflo… → NULL;
+  NOT_COVERED pljson_parser.impl.sql:516  AOR  lexer  col_no + lengthcc(tokens(tok_indx).data_overflow) → col_no - lengthcc(tokens(tok_indx).data_overflow)
+  NOT_COVERED pljson_parser.impl.sql:516  AOR  lexer  col_no + lengthcc(tokens(tok_indx).data_overflow) + 1 → col_no + lengthcc(tokens(tok_indx).data_overflow) - 1
+  NOT_COVERED pljson_parser.impl.sql:518  SBR  lexer  col_no := col_no + length(tokens(tok_indx).data) + 1; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:518  AOR  lexer  col_no + length(tokens(tok_indx).data) → col_no - length(tokens(tok_indx).data)
+  NOT_COVERED pljson_parser.impl.sql:518  AOR  lexer  col_no + length(tokens(tok_indx).data) + 1 → col_no + length(tokens(tok_indx).data) - 1
+  NOT_COVERED pljson_parser.impl.sql:520  SBR  lexer  tok_indx := tok_indx + 1; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:520  AOR  lexer  tok_indx + 1 → tok_indx - 1
+  SURVIVED    pljson_parser.impl.sql:521  LCR  lexer  json_strict = false and buf||next_char(indx+1, jsrc) = '/*' → json_strict = false
+  SURVIVED    pljson_parser.impl.sql:521  LCR  lexer  json_strict = false and buf||next_char(indx+1, jsrc) = '/*' → buf||next_char(indx+1, jsrc) = '/*'
+  SURVIVED    pljson_parser.impl.sql:521  LCR  lexer  json_strict = false and buf||next_char(indx+1, jsrc) = '/*' → FALSE
+  SURVIVED    pljson_parser.impl.sql:521  ROR  lexer  json_strict = false → json_strict <= false
+  SURVIVED    pljson_parser.impl.sql:521  ROR  lexer  json_strict = false → json_strict >= false
+  SURVIVED    pljson_parser.impl.sql:521  ROR  lexer  json_strict = false → FALSE
+  SURVIVED    pljson_parser.impl.sql:521  ROR  lexer  buf||next_char(indx+1, jsrc) = '/*' → FALSE
+  SURVIVED    pljson_parser.impl.sql:521  AOR  lexer  buf||next_char(indx+1, jsrc) → buf
+  SURVIVED    pljson_parser.impl.sql:521  AOR  lexer  indx+1 → indx-1
+  NOT_COVERED pljson_parser.impl.sql:526  SBR  lexer  indx := indx + 1; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:526  AOR  lexer  indx + 1 → indx - 1
+  NOT_COVERED pljson_parser.impl.sql:528  SBR  lexer  indx := indx + 1; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:528  AOR  lexer  indx + 1 → indx - 1
+  NOT_COVERED pljson_parser.impl.sql:529  SBR  lexer  buf := next_char(indx, jsrc)||next_char(indx+1, jsrc); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:529  AOR  lexer  next_char(indx, jsrc)||next_char(indx+1, jsrc) → next_char(indx, jsrc)
+  NOT_COVERED pljson_parser.impl.sql:529  AOR  lexer  indx+1 → indx-1
+  NOT_COVERED pljson_parser.impl.sql:530  SBR  lexer  exit when buf = '*/'; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:530  ROR  lexer  buf = '*/' → TRUE
+  NOT_COVERED pljson_parser.impl.sql:530  ROR  lexer  buf = '*/' → FALSE
+  NOT_COVERED pljson_parser.impl.sql:531  SBR  lexer  exit when buf is null; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:531  NUL  lexer  buf is null → buf is NOT null
+  NOT_COVERED pljson_parser.impl.sql:534  ROR  lexer  indx = saveindx+2 → indx <= saveindx+2
+  NOT_COVERED pljson_parser.impl.sql:534  ROR  lexer  indx = saveindx+2 → indx >= saveindx+2
+  NOT_COVERED pljson_parser.impl.sql:534  ROR  lexer  indx = saveindx+2 → FALSE
+  NOT_COVERED pljson_parser.impl.sql:534  AOR  lexer  saveindx+2 → saveindx-2
+  NOT_COVERED pljson_parser.impl.sql:537  SBR  lexer  un_esc := empty_clob(); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:538  SBR  lexer  dbms_lob.createtemporary(un_esc, true); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:539  SBR  lexer  indx := indx + 1; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:539  AOR  lexer  indx + 1 → indx - 1
+  NOT_COVERED pljson_parser.impl.sql:541  SBR  lexer  indx := indx + 1; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:541  AOR  lexer  indx + 1 → indx - 1
+  NOT_COVERED pljson_parser.impl.sql:542  SBR  lexer  buf := next_char(indx, jsrc)||next_char(indx+1, jsrc)||ne… → NULL;
+  NOT_COVERED pljson_parser.impl.sql:542  AOR  lexer  next_char(indx, jsrc)||next_char(indx+1, jsrc)||next_char… → next_char(indx, jsrc)||next_char(indx+1, jsrc)||next_char…
+  NOT_COVERED pljson_parser.impl.sql:542  AOR  lexer  next_char(indx, jsrc)||next_char(indx+1, jsrc)||next_char… → next_char(indx, jsrc)||next_char(indx+1, jsrc)
+  NOT_COVERED pljson_parser.impl.sql:542  AOR  lexer  next_char(indx, jsrc)||next_char(indx+1, jsrc) → next_char(indx, jsrc)
+  NOT_COVERED pljson_parser.impl.sql:542  AOR  lexer  indx+1 → indx-1
+  NOT_COVERED pljson_parser.impl.sql:542  AOR  lexer  indx+2 → indx-2
+  NOT_COVERED pljson_parser.impl.sql:542  AOR  lexer  indx+3 → indx-3
+  NOT_COVERED pljson_parser.impl.sql:543  SBR  lexer  exit when buf = '/**/'; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:543  ROR  lexer  buf = '/**/' → TRUE
+  NOT_COVERED pljson_parser.impl.sql:543  ROR  lexer  buf = '/**/' → FALSE
+  NOT_COVERED pljson_parser.impl.sql:544  NUL  lexer  buf is null → buf is NOT null
+  NOT_COVERED pljson_parser.impl.sql:545  SBR  lexer  s_error('Unexpected sequence /**/ to end unescaped data: … → NULL;
+  NOT_COVERED pljson_parser.impl.sql:545  AOR  lexer  'Unexpected sequence /**/ to end unescaped data: '||buf → 'Unexpected sequence /**/ to end unescaped data: '
+  NOT_COVERED pljson_parser.impl.sql:547  SBR  lexer  buf := next_char(indx, jsrc); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:549  SBR  lexer  dbms_lob.writeappend(un_esc, length2(buf), buf); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:551  SBR  lexer  tokens(tok_indx) := mt('ESTRING', lin_no, col_no, null); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:552  SBR  lexer  tokens(tok_indx).data_overflow := un_esc; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:554  SBR  lexer  col_no := col_no + lengthcc(un_esc) + 1; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:554  AOR  lexer  col_no + lengthcc(un_esc) → col_no - lengthcc(un_esc)
+  NOT_COVERED pljson_parser.impl.sql:554  AOR  lexer  col_no + lengthcc(un_esc) + 1 → col_no + lengthcc(un_esc) - 1
+  NOT_COVERED pljson_parser.impl.sql:555  SBR  lexer  tok_indx := tok_indx + 1; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:555  AOR  lexer  tok_indx + 1 → tok_indx - 1
+  NOT_COVERED pljson_parser.impl.sql:556  SBR  lexer  indx := indx + 2; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:556  AOR  lexer  indx + 2 → indx - 2
+  NOT_COVERED pljson_parser.impl.sql:559  SBR  lexer  indx := indx + 1; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:559  AOR  lexer  indx + 1 → indx - 1
+  SURVIVED    pljson_parser.impl.sql:563  AOR  lexer  'Unexpected char: '||buf → 'Unexpected char: '
+  SURVIVED    pljson_parser.impl.sql:577  AOR  p_error  'JSON Parser exception @ line: '||tok.line||' column: '||… → 'JSON Parser exception @ line: '||tok.line||' column: '||…
+  SURVIVED    pljson_parser.impl.sql:577  AOR  p_error  'JSON Parser exception @ line: '||tok.line||' column: '||… → 'JSON Parser exception @ line: '||tok.line||' column: '||…
+  SURVIVED    pljson_parser.impl.sql:577  AOR  p_error  'JSON Parser exception @ line: '||tok.line||' column: '||… → 'JSON Parser exception @ line: '||tok.line||' column: '
+  SURVIVED    pljson_parser.impl.sql:577  AOR  p_error  'JSON Parser exception @ line: '||tok.line||' column: ' → 'JSON Parser exception @ line: '||tok.line
+  SURVIVED    pljson_parser.impl.sql:577  AOR  p_error  'JSON Parser exception @ line: '||tok.line → 'JSON Parser exception @ line: '
+  NOT_COVERED pljson_parser.impl.sql:598  SBR  parseArr  e_arr(v_count) := pljson_string(tok.data_overflow, false); → NULL;
+  SURVIVED    pljson_parser.impl.sql:622  ROR  parseArr  indx > tokens.count → indx >= tokens.count
+  SURVIVED    pljson_parser.impl.sql:622  ROR  parseArr  indx > tokens.count → FALSE
+  NOT_COVERED pljson_parser.impl.sql:622  SBR  parseArr  p_error('more elements in array was excepted', tok); → NULL;
+  SURVIVED    pljson_parser.impl.sql:624  ROR  parseArr  tok.type_name = ']' → FALSE
+  NOT_COVERED pljson_parser.impl.sql:625  SBR  parseArr  p_error('Premature exit in array', tok); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:647  SBR  parseMem  mem := pljson_string(tok.data_overflow, false); → NULL;
+  SURVIVED    pljson_parser.impl.sql:666  AOR  parseMem  'Found '||tok.type_name → 'Found '
+  NOT_COVERED pljson_parser.impl.sql:705  SBR  parseObj  p_error('Duplicate empty member: ', tok); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:707  SBR  parseObj  nullelemfound := true; → NULL;
+  SURVIVED    pljson_parser.impl.sql:710  AOR  parseObj  'Duplicate member name: '||mem_name → 'Duplicate member name: '
+  SURVIVED    pljson_parser.impl.sql:717  ROR  parseObj  indx > tokens.count → indx >= tokens.count
+  SURVIVED    pljson_parser.impl.sql:720  ROR  parseObj  indx > tokens.count → indx >= tokens.count
+  SURVIVED    pljson_parser.impl.sql:721  ROR  parseObj  tok.type_name = ':' → TRUE
+  NOT_COVERED pljson_parser.impl.sql:754  SBR  parseObj  p_error('Expected string or }', tok); → NULL;
+  SURVIVED    pljson_parser.impl.sql:773  ROR  parser  tokens(indx).type_name = '{' → TRUE
+  SURVIVED    pljson_parser.impl.sql:779  ROR  parser  tokens.count != indx → tokens.count < indx
+  SURVIVED    pljson_parser.impl.sql:779  ROR  parser  tokens.count != indx → tokens.count > indx
+  NOT_COVERED pljson_parser.impl.sql:780  SBR  parser  p_error('} should end the JSON object', tokens(indx)); → NULL;
+  SURVIVED    pljson_parser.impl.sql:795  ROR  parse_list  tokens(indx).type_name = '[' → TRUE
+  SURVIVED    pljson_parser.impl.sql:801  ROR  parse_list  tokens.count != indx → tokens.count < indx
+  SURVIVED    pljson_parser.impl.sql:801  ROR  parse_list  tokens.count != indx → tokens.count > indx
+  NOT_COVERED pljson_parser.impl.sql:802  SBR  parse_list  p_error('] should end the JSON List object', tokens(indx)); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:815  SBR  parse_list  jsrc := prepareClob(str); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:816  SBR  parse_list  tokens := lexer(jsrc); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:817  ROR  parse_list  tokens(indx).type_name = '[' → TRUE
+  NOT_COVERED pljson_parser.impl.sql:817  ROR  parse_list  tokens(indx).type_name = '[' → FALSE
+  NOT_COVERED pljson_parser.impl.sql:818  SBR  parse_list  indx := indx + 1; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:818  AOR  parse_list  indx + 1 → indx - 1
+  NOT_COVERED pljson_parser.impl.sql:819  SBR  parse_list  obj := parseArr(tokens, indx); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:823  ROR  parse_list  tokens.count != indx → tokens.count < indx
+  NOT_COVERED pljson_parser.impl.sql:823  ROR  parse_list  tokens.count != indx → tokens.count > indx
+  NOT_COVERED pljson_parser.impl.sql:823  ROR  parse_list  tokens.count != indx → TRUE
+  NOT_COVERED pljson_parser.impl.sql:824  SBR  parse_list  p_error('] should end the JSON List object', tokens(indx)); → NULL;
+  SURVIVED    pljson_parser.impl.sql:840  ROR  parser  tokens(indx).type_name = '{' → TRUE
+  SURVIVED    pljson_parser.impl.sql:846  ROR  parser  tokens.count != indx → tokens.count < indx
+  SURVIVED    pljson_parser.impl.sql:846  ROR  parser  tokens.count != indx → tokens.count > indx
+  NOT_COVERED pljson_parser.impl.sql:847  SBR  parser  p_error('} should end the JSON object', tokens(indx)); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:861  SBR  parse_any  jsrc := prepareVarchar2(str); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:862  SBR  parse_any  tokens := lexer(jsrc); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:863  SBR  parse_any  tokens(tokens.count+1).type_name := ']'; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:863  AOR  parse_any  tokens.count+1 → tokens.count-1
+  NOT_COVERED pljson_parser.impl.sql:864  SBR  parse_any  obj := parseArr(tokens, indx); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:865  ROR  parse_any  tokens.count != indx → tokens.count < indx
+  NOT_COVERED pljson_parser.impl.sql:865  ROR  parse_any  tokens.count != indx → tokens.count > indx
+  NOT_COVERED pljson_parser.impl.sql:865  ROR  parse_any  tokens.count != indx → TRUE
+  NOT_COVERED pljson_parser.impl.sql:866  SBR  parse_any  p_error('] should end the JSON List object', tokens(indx)); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:879  SBR  parse_any  jsrc := prepareClob(str); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:880  SBR  parse_any  tokens := lexer(jsrc); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:881  SBR  parse_any  tokens(tokens.count+1).type_name := ']'; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:881  AOR  parse_any  tokens.count+1 → tokens.count-1
+  NOT_COVERED pljson_parser.impl.sql:882  SBR  parse_any  obj := parseArr(tokens, indx); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:883  ROR  parse_any  tokens.count != indx → tokens.count < indx
+  NOT_COVERED pljson_parser.impl.sql:883  ROR  parse_any  tokens.count != indx → tokens.count > indx
+  NOT_COVERED pljson_parser.impl.sql:883  ROR  parse_any  tokens.count != indx → TRUE
+  NOT_COVERED pljson_parser.impl.sql:884  SBR  parse_any  p_error('] should end the JSON List object', tokens(indx)); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:898  CUR  remove_duplicates  1 → (1) + 1
+  NOT_COVERED pljson_parser.impl.sql:898  CUR  remove_duplicates  obj.count → (obj.count) - 1
+  NOT_COVERED pljson_parser.impl.sql:899  NUL  remove_duplicates  obj.get(i).mapname is null → obj.get(i).mapname is NOT null
+  NOT_COVERED pljson_parser.impl.sql:900  SBR  remove_duplicates  nulljsonvalue := obj.get(i); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:902  SBR  remove_duplicates  members(obj.get(i).mapname) := obj.get(i); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:906  SBR  remove_duplicates  validated.check_duplicate(false); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:907  SBR  remove_duplicates  indx := members.first; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:909  SBR  remove_duplicates  exit when indx is null; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:909  NUL  remove_duplicates  indx is null → indx is NOT null
+  NOT_COVERED pljson_parser.impl.sql:910  SBR  remove_duplicates  validated.put(indx, members(indx)); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:911  SBR  remove_duplicates  indx := members.next(indx); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:913  NUL  remove_duplicates  nulljsonvalue is not null → nulljsonvalue is null
+  NOT_COVERED pljson_parser.impl.sql:914  SBR  remove_duplicates  validated.put('', nulljsonvalue); → NULL;
+  NOT_COVERED pljson_parser.impl.sql:917  SBR  remove_duplicates  validated.check_for_duplicate := obj.check_for_duplicate; → NULL;
+  NOT_COVERED pljson_parser.impl.sql:919  SBR  remove_duplicates  obj := validated; → NULL;
+  SURVIVED    pljson_parser.impl.sql:928  SBR    update_decimalpoint(); → NULL;
+  SURVIVED    pljson_printer.package.sql:64  LCR  llcheck  max_line_len > 0 and length(str)+cur_line_len > max_line_len → max_line_len > 0
+  SURVIVED    pljson_printer.package.sql:64  LCR  llcheck  max_line_len > 0 and length(str)+cur_line_len > max_line_len → (max_line_len > 0) = (length(str)+cur_line_len > max_line…
+  SURVIVED    pljson_printer.package.sql:64  LCR  llcheck  max_line_len > 0 and length(str)+cur_line_len > max_line_len → FALSE
+  SURVIVED    pljson_printer.package.sql:64  ROR  llcheck  max_line_len > 0 → max_line_len <> 0
+  SURVIVED    pljson_printer.package.sql:64  ROR  llcheck  max_line_len > 0 → FALSE
+  NOT_COVERED pljson_printer.package.sql:64  ROR  llcheck  length(str)+cur_line_len > max_line_len → length(str)+cur_line_len >= max_line_len
+  NOT_COVERED pljson_printer.package.sql:64  ROR  llcheck  length(str)+cur_line_len > max_line_len → length(str)+cur_line_len <> max_line_len
+  NOT_COVERED pljson_printer.package.sql:64  ROR  llcheck  length(str)+cur_line_len > max_line_len → FALSE
+  NOT_COVERED pljson_printer.package.sql:64  AOR  llcheck  length(str)+cur_line_len → length(str)-cur_line_len
+  NOT_COVERED pljson_printer.package.sql:65  SBR  llcheck  cur_line_len := length(str); → NULL;
+  NOT_COVERED pljson_printer.package.sql:66  AOR  llcheck  newline_char || str → newline_char
+  SURVIVED    pljson_printer.package.sql:68  SBR  llcheck  cur_line_len := cur_line_len + length(str); → NULL;
+  SURVIVED    pljson_printer.package.sql:68  AOR  llcheck  cur_line_len + length(str) → cur_line_len - length(str)
+  NOT_COVERED pljson_printer.package.sql:85  SBR  escapeChar  result := '\b'; → NULL;
+  NOT_COVERED pljson_printer.package.sql:86  SBR  escapeChar  result := '\t'; → NULL;
+  NOT_COVERED pljson_printer.package.sql:87  SBR  escapeChar  result := '\n'; → NULL;
+  NOT_COVERED pljson_printer.package.sql:88  SBR  escapeChar  result := '\f'; → NULL;
+  NOT_COVERED pljson_printer.package.sql:89  SBR  escapeChar  result := '\r'; → NULL;
+  NOT_COVERED pljson_printer.package.sql:90  SBR  escapeChar  result := '\"'; → NULL;
+  NOT_COVERED pljson_printer.package.sql:91  SBR  escapeChar  result := '\/'; → NULL;
+  NOT_COVERED pljson_printer.package.sql:92  SBR  escapeChar  result := '\\'; → NULL;
+  SURVIVED    pljson_printer.package.sql:94  LCR  escapeChar  ascii(ch) >= 0 and ascii(ch) < 32 → ascii(ch) < 32
+  SURVIVED    pljson_printer.package.sql:94  LCR  escapeChar  ascii(ch) >= 0 and ascii(ch) < 32 → (ascii(ch) >= 0) = (ascii(ch) < 32)
+  SURVIVED    pljson_printer.package.sql:94  LCR  escapeChar  ascii(ch) >= 0 and ascii(ch) < 32 → FALSE
+  SURVIVED    pljson_printer.package.sql:94  ROR  escapeChar  ascii(ch) >= 0 → ascii(ch) > 0
+  SURVIVED    pljson_printer.package.sql:94  ROR  escapeChar  ascii(ch) >= 0 → ascii(ch) = 0
+  SURVIVED    pljson_printer.package.sql:94  ROR  escapeChar  ascii(ch) >= 0 → TRUE
+  SURVIVED    pljson_printer.package.sql:94  ROR  escapeChar  ascii(ch) < 32 → FALSE
+  NOT_COVERED pljson_printer.package.sql:95  SBR  escapeChar  result := '\u' || replace(substr(to_char(ascii(ch), 'XXXX… → NULL;
+  NOT_COVERED pljson_printer.package.sql:95  AOR  escapeChar  '\u' || replace(substr(to_char(ascii(ch), 'XXXX'), 2, 4),… → '\u'
+  SURVIVED    pljson_printer.package.sql:111  LCR  escapeString  char_map_escape_solidus <> escape_solidus or char_map_asc… → char_map_ascii_output <> ascii_output
+  SURVIVED    pljson_printer.package.sql:111  LCR  escapeString  char_map_escape_solidus <> escape_solidus or char_map_asc… → (char_map_escape_solidus <> escape_solidus) <> (char_map_…
+  SURVIVED    pljson_printer.package.sql:111  LCR  escapeString  char_map_escape_solidus <> escape_solidus or char_map_asc… → TRUE
+  SURVIVED    pljson_printer.package.sql:111  ROR  escapeString  char_map_escape_solidus <> escape_solidus → char_map_escape_solidus < escape_solidus
+  SURVIVED    pljson_printer.package.sql:111  ROR  escapeString  char_map_escape_solidus <> escape_solidus → char_map_escape_solidus > escape_solidus
+  SURVIVED    pljson_printer.package.sql:111  ROR  escapeString  char_map_escape_solidus <> escape_solidus → TRUE
+  SURVIVED    pljson_printer.package.sql:112  ROR  escapeString  char_map_ascii_output <> ascii_output → char_map_ascii_output > ascii_output
+  SURVIVED    pljson_printer.package.sql:112  ROR  escapeString  char_map_ascii_output <> ascii_output → TRUE
+  SURVIVED    pljson_printer.package.sql:114  SBR  escapeString  char_map.delete; → NULL;
+  SURVIVED    pljson_printer.package.sql:115  SBR  escapeString  char_map_escape_solidus := escape_solidus; → NULL;
+  SURVIVED    pljson_printer.package.sql:116  SBR  escapeString  char_map_ascii_output := ascii_output; → NULL;
+  SURVIVED    pljson_printer.package.sql:128  SBR  escapeString  char_map(ch) := buf; → NULL;
+  SURVIVED    pljson_printer.package.sql:138  SBR  newline  cur_line_len := 0; → NULL;
+  SURVIVED    pljson_printer.package.sql:158  ROR  string_delim  elem.num = 1 → elem.num <= 1
+  SURVIVED    pljson_printer.package.sql:158  ROR  string_delim  elem.num = 1 → elem.num >= 1
+  NOT_COVERED pljson_printer.package.sql:160  ROR  string_delim  elem.unescaped_string_delim_p = 1 → elem.unescaped_string_delim_p <= 1
+  NOT_COVERED pljson_printer.package.sql:160  ROR  string_delim  elem.unescaped_string_delim_p = 1 → elem.unescaped_string_delim_p >= 1
+  NOT_COVERED pljson_printer.package.sql:160  ROR  string_delim  elem.unescaped_string_delim_p = 1 → FALSE
+  SURVIVED    pljson_printer.package.sql:186  ROR  add_to_clob  lengthb(str) > 32767 - lengthb(buf_str) → lengthb(str) >= 32767 - lengthb(buf_str)
+  SURVIVED    pljson_printer.package.sql:186  ROR  add_to_clob  lengthb(str) > 32767 - lengthb(buf_str) → lengthb(str) <> 32767 - lengthb(buf_str)
+  NOT_COVERED pljson_printer.package.sql:210  SBR  ppString  add_to_clob(buf, buf_str, 'null'); → NULL;
+  SURVIVED    pljson_printer.package.sql:214  ROR  ppString  offset <= dbms_lob.getlength(elem.extended_str) → offset < dbms_lob.getlength(elem.extended_str)
+  SURVIVED    pljson_printer.package.sql:216  ROR  ppString  elem.num = 1 → elem.num <= 1
+  SURVIVED    pljson_printer.package.sql:216  ROR  ppString  elem.num = 1 → elem.num >= 1
+  NOT_COVERED pljson_printer.package.sql:219  SBR  ppString  add_to_clob(buf, buf_str, v_str); → NULL;
+  SURVIVED    pljson_printer.package.sql:224  ROR  ppString  elem.num = 1 → elem.num <= 1
+  SURVIVED    pljson_printer.package.sql:224  ROR  ppString  elem.num = 1 → elem.num >= 1
+  SURVIVED    pljson_printer.package.sql:225  ROR  ppString  offset <= length(elem.str) → offset < length(elem.str)
+  NOT_COVERED pljson_printer.package.sql:231  SBR  ppString  add_to_clob(buf, buf_str, elem.str); → NULL;
+  NOT_COVERED pljson_printer.package.sql:243  CUR  ppEA  1 → (1) + 1
+  NOT_COVERED pljson_printer.package.sql:243  CUR  ppEA  arr.count → (arr.count) - 1
+  NOT_COVERED pljson_printer.package.sql:244  SBR  ppEA  elem := arr(y); → NULL;
+  NOT_COVERED pljson_printer.package.sql:245  NUL  ppEA  elem is not null → elem is null
+  NOT_COVERED pljson_printer.package.sql:249  SBR  ppEA  numbuf := treat(elem as pljson_number).number_toString(); → NULL;
+  NOT_COVERED pljson_printer.package.sql:250  SBR  ppEA  add_to_clob(buf, buf_str, llcheck(numbuf)); → NULL;
+  NOT_COVERED pljson_printer.package.sql:253  SBR  ppEA  ppString(treat(elem as pljson_string), buf, buf_str); → NULL;
+  NOT_COVERED pljson_printer.package.sql:257  SBR  ppEA  add_to_clob(buf, buf_str, llcheck('true')); → NULL;
+  NOT_COVERED pljson_printer.package.sql:259  SBR  ppEA  add_to_clob(buf, buf_str, llcheck('false')); → NULL;
+  NOT_COVERED pljson_printer.package.sql:263  SBR  ppEA  add_to_clob(buf, buf_str, llcheck('null')); → NULL;
+  NOT_COVERED pljson_printer.package.sql:266  SBR  ppEA  add_to_clob(buf, buf_str, llcheck('[')); → NULL;
+  NOT_COVERED pljson_printer.package.sql:267  SBR  ppEA  ppEA(treat(elem as pljson_list), indent, buf, spaces, buf… → NULL;
+  NOT_COVERED pljson_printer.package.sql:268  SBR  ppEA  add_to_clob(buf, buf_str, llcheck(']')); → NULL;
+  NOT_COVERED pljson_printer.package.sql:271  SBR  ppEA  ppObj(treat(elem as pljson), indent, buf, spaces, buf_str); → NULL;
+  NOT_COVERED pljson_printer.package.sql:273  SBR  ppEA  add_to_clob(buf, buf_str, llcheck(elem.get_type)); → NULL;
+  NOT_COVERED pljson_printer.package.sql:276  ROR  ppEA  y != arr.count → y < arr.count
+  NOT_COVERED pljson_printer.package.sql:276  ROR  ppEA  y != arr.count → y > arr.count
+  NOT_COVERED pljson_printer.package.sql:276  ROR  ppEA  y != arr.count → TRUE
+  NOT_COVERED pljson_printer.package.sql:276  SBR  ppEA  add_to_clob(buf, buf_str, llcheck(getCommaSep(spaces))); → NULL;
+  NOT_COVERED pljson_printer.package.sql:287  SBR  ppMem  numbuf := treat(mem as pljson_number).number_toString(); → NULL;
+  NOT_COVERED pljson_printer.package.sql:288  SBR  ppMem  add_to_clob(buf, buf_str, llcheck(numbuf)); → NULL;
+  NOT_COVERED pljson_printer.package.sql:297  SBR  ppMem  add_to_clob(buf, buf_str, llcheck('false')); → NULL;
+  NOT_COVERED pljson_printer.package.sql:301  SBR  ppMem  add_to_clob(buf, buf_str, llcheck('null')); → NULL;
+  NOT_COVERED pljson_printer.package.sql:304  SBR  ppMem  add_to_clob(buf, buf_str, llcheck('[')); → NULL;
+  NOT_COVERED pljson_printer.package.sql:305  SBR  ppMem  ppEA(treat(mem as pljson_list), indent, buf, spaces, buf_… → NULL;
+  NOT_COVERED pljson_printer.package.sql:306  SBR  ppMem  add_to_clob(buf, buf_str, llcheck(']')); → NULL;
+  NOT_COVERED pljson_printer.package.sql:309  SBR  ppMem  ppObj(treat(mem as pljson), indent, buf, spaces, buf_str); → NULL;
+  NOT_COVERED pljson_printer.package.sql:311  SBR  ppMem  add_to_clob(buf, buf_str, llcheck(mem.get_type)); → NULL;
+  SURVIVED    pljson_printer.package.sql:317  AOR  ppObj  llcheck('{') || newline(spaces) → llcheck('{')
+  SURVIVED    pljson_printer.package.sql:319  AOR  ppObj  indent+1 → indent-1
+  SURVIVED    pljson_printer.package.sql:320  ROR  ppObj  m != obj.json_data.count → m < obj.json_data.count
+  SURVIVED    pljson_printer.package.sql:321  AOR  ppObj  llcheck(',') || newline(spaces) → llcheck(',')
+  SURVIVED    pljson_printer.package.sql:323  SBR  ppObj  add_to_clob(buf, buf_str, newline(spaces)); → NULL;
+  SURVIVED    pljson_printer.package.sql:333  LCR  pretty_print  erase_clob and amount > 0 → erase_clob
+  SURVIVED    pljson_printer.package.sql:333  LCR  pretty_print  erase_clob and amount > 0 → amount > 0
+  SURVIVED    pljson_printer.package.sql:333  LCR  pretty_print  erase_clob and amount > 0 → (erase_clob) = (amount > 0)
+  SURVIVED    pljson_printer.package.sql:333  LCR  pretty_print  erase_clob and amount > 0 → FALSE
+  SURVIVED    pljson_printer.package.sql:333  ROR  pretty_print  amount > 0 → amount >= 0
+  SURVIVED    pljson_printer.package.sql:333  ROR  pretty_print  amount > 0 → amount <> 0
+  SURVIVED    pljson_printer.package.sql:333  ROR  pretty_print  amount > 0 → FALSE
+  NOT_COVERED pljson_printer.package.sql:334  SBR  pretty_print  dbms_lob.trim(buf, 0); → NULL;
+  SURVIVED    pljson_printer.package.sql:338  SBR  pretty_print  max_line_len := line_length; → NULL;
+  SURVIVED    pljson_printer.package.sql:339  SBR  pretty_print  cur_line_len := 0; → NULL;
+  NOT_COVERED pljson_printer.package.sql:348  LCR  pretty_print_list  erase_clob and amount > 0 → erase_clob
+  NOT_COVERED pljson_printer.package.sql:348  LCR  pretty_print_list  erase_clob and amount > 0 → amount > 0
+  NOT_COVERED pljson_printer.package.sql:348  LCR  pretty_print_list  erase_clob and amount > 0 → (erase_clob) = (amount > 0)
+  NOT_COVERED pljson_printer.package.sql:348  LCR  pretty_print_list  erase_clob and amount > 0 → FALSE
+  NOT_COVERED pljson_printer.package.sql:348  ROR  pretty_print_list  amount > 0 → amount >= 0
+  NOT_COVERED pljson_printer.package.sql:348  ROR  pretty_print_list  amount > 0 → amount <> 0
+  NOT_COVERED pljson_printer.package.sql:348  ROR  pretty_print_list  amount > 0 → FALSE
+  NOT_COVERED pljson_printer.package.sql:349  SBR  pretty_print_list  dbms_lob.trim(buf, 0); → NULL;
+  NOT_COVERED pljson_printer.package.sql:353  SBR  pretty_print_list  max_line_len := line_length; → NULL;
+  NOT_COVERED pljson_printer.package.sql:354  SBR  pretty_print_list  cur_line_len := 0; → NULL;
+  NOT_COVERED pljson_printer.package.sql:355  SBR  pretty_print_list  add_to_clob(buf, buf_str, llcheck('[')); → NULL;
+  NOT_COVERED pljson_printer.package.sql:356  SBR  pretty_print_list  ppEA(obj, 0, buf, spaces, buf_str); → NULL;
+  NOT_COVERED pljson_printer.package.sql:357  SBR  pretty_print_list  add_to_clob(buf, buf_str, llcheck(']')); → NULL;
+  NOT_COVERED pljson_printer.package.sql:358  SBR  pretty_print_list  flush_clob(buf, buf_str); → NULL;
+  SURVIVED    pljson_printer.package.sql:366  LCR  pretty_print_any  erase_clob and amount > 0 → erase_clob
+  SURVIVED    pljson_printer.package.sql:366  LCR  pretty_print_any  erase_clob and amount > 0 → amount > 0
+  SURVIVED    pljson_printer.package.sql:366  LCR  pretty_print_any  erase_clob and amount > 0 → (erase_clob) = (amount > 0)
+  SURVIVED    pljson_printer.package.sql:366  LCR  pretty_print_any  erase_clob and amount > 0 → FALSE
+  SURVIVED    pljson_printer.package.sql:366  ROR  pretty_print_any  amount > 0 → amount >= 0
+  SURVIVED    pljson_printer.package.sql:366  ROR  pretty_print_any  amount > 0 → amount <> 0
+  SURVIVED    pljson_printer.package.sql:366  ROR  pretty_print_any  amount > 0 → FALSE
+  NOT_COVERED pljson_printer.package.sql:367  SBR  pretty_print_any  dbms_lob.trim(buf, 0); → NULL;
+  NOT_COVERED pljson_printer.package.sql:374  SBR  pretty_print_any  numbuf := treat(json_part as pljson_number).number_toStri… → NULL;
+  NOT_COVERED pljson_printer.package.sql:375  SBR  pretty_print_any  add_to_clob(buf, buf_str, numbuf); → NULL;
+  NOT_COVERED pljson_printer.package.sql:378  SBR  pretty_print_any  ppString(treat(json_part as pljson_string), buf, buf_str); → NULL;
+  NOT_COVERED pljson_printer.package.sql:382  SBR  pretty_print_any  add_to_clob(buf, buf_str, 'true'); → NULL;
+  NOT_COVERED pljson_printer.package.sql:384  SBR  pretty_print_any  add_to_clob(buf, buf_str, 'false'); → NULL;
+  NOT_COVERED pljson_printer.package.sql:388  SBR  pretty_print_any  add_to_clob(buf, buf_str, 'null'); → NULL;
+  NOT_COVERED pljson_printer.package.sql:391  SBR  pretty_print_any  pretty_print_list(pljson_list(json_part), spaces, buf, li… → NULL;
+  NOT_COVERED pljson_printer.package.sql:398  SBR  pretty_print_any  add_to_clob(buf, buf_str, 'unknown type:' || json_part.ge… → NULL;
+  NOT_COVERED pljson_printer.package.sql:398  AOR  pretty_print_any  'unknown type:' || json_part.get_type → 'unknown type:'
+  NOT_COVERED pljson_printer.package.sql:400  SBR  pretty_print_any  flush_clob(buf, buf_str); → NULL;
+  SURVIVED    pljson_printer.package.sql:410  AOR  add_buf  32767-lengthb(buf) → 32767+lengthb(buf)
+  NOT_COVERED pljson_printer.package.sql:423  SBR  ppString  add_buf(buf, 'null'); → NULL;
+  NOT_COVERED pljson_printer.package.sql:427  ROR  ppString  offset <= dbms_lob.getlength(elem.extended_str) → offset < dbms_lob.getlength(elem.extended_str)
+  NOT_COVERED pljson_printer.package.sql:427  ROR  ppString  offset <= dbms_lob.getlength(elem.extended_str) → offset = dbms_lob.getlength(elem.extended_str)
+  NOT_COVERED pljson_printer.package.sql:427  ROR  ppString  offset <= dbms_lob.getlength(elem.extended_str) → TRUE
+  NOT_COVERED pljson_printer.package.sql:428  SBR  ppString  dbms_lob.read(elem.extended_str, amount, offset, v_str); → NULL;
+  NOT_COVERED pljson_printer.package.sql:429  ROR  ppString  elem.num = 1 → elem.num <= 1
+  NOT_COVERED pljson_printer.package.sql:429  ROR  ppString  elem.num = 1 → elem.num >= 1
+  NOT_COVERED pljson_printer.package.sql:429  ROR  ppString  elem.num = 1 → FALSE
+  NOT_COVERED pljson_printer.package.sql:430  SBR  ppString  add_buf(buf, escapeString(v_str)); → NULL;
+  NOT_COVERED pljson_printer.package.sql:432  SBR  ppString  add_buf(buf, v_str); → NULL;
+  NOT_COVERED pljson_printer.package.sql:434  SBR  ppString  offset := offset + amount; → NULL;
+  NOT_COVERED pljson_printer.package.sql:434  AOR  ppString  offset + amount → offset - amount
+  SURVIVED    pljson_printer.package.sql:437  ROR  ppString  elem.num = 1 → elem.num <= 1
+  SURVIVED    pljson_printer.package.sql:437  ROR  ppString  elem.num = 1 → elem.num >= 1
+  NOT_COVERED pljson_printer.package.sql:444  SBR  ppString  add_buf(buf, elem.str); → NULL;
+  NOT_COVERED pljson_printer.package.sql:472  SBR  ppEA  add_buf (buf, llcheck('true')); → NULL;
+  NOT_COVERED pljson_printer.package.sql:474  SBR  ppEA  add_buf (buf, llcheck('false')); → NULL;
+  NOT_COVERED pljson_printer.package.sql:478  SBR  ppEA  add_buf (buf, llcheck('null')); → NULL;
+  NOT_COVERED pljson_printer.package.sql:481  SBR  ppEA  add_buf( buf, llcheck('[')); → NULL;
+  NOT_COVERED pljson_printer.package.sql:482  SBR  ppEA  ppEA(treat(elem as pljson_list), indent, buf, spaces); → NULL;
+  NOT_COVERED pljson_printer.package.sql:483  SBR  ppEA  add_buf( buf, llcheck(']')); → NULL;
+  NOT_COVERED pljson_printer.package.sql:488  SBR  ppEA  add_buf (buf, llcheck(elem.get_type)); → NULL;
+  SURVIVED    pljson_printer.package.sql:491  ROR  ppEA  y != arr.count → y < arr.count
+  NOT_COVERED pljson_printer.package.sql:510  SBR  ppMem  add_buf(buf, llcheck('true')); → NULL;
+  NOT_COVERED pljson_printer.package.sql:512  SBR  ppMem  add_buf(buf, llcheck('false')); → NULL;
+  NOT_COVERED pljson_printer.package.sql:516  SBR  ppMem  add_buf(buf, llcheck('null')); → NULL;
+  NOT_COVERED pljson_printer.package.sql:526  SBR  ppMem  add_buf(buf, llcheck(mem.get_type)); → NULL;
+  SURVIVED    pljson_printer.package.sql:535  ROR  ppObj  m != obj.json_data.count → m < obj.json_data.count
+  SURVIVED    pljson_printer.package.sql:536  AOR  ppObj  llcheck(',') || newline(spaces) → llcheck(',')
+  SURVIVED    pljson_printer.package.sql:547  SBR  pretty_print  max_line_len := line_length; → NULL;
+  SURVIVED    pljson_printer.package.sql:548  SBR  pretty_print  cur_line_len := 0; → NULL;
+  SURVIVED    pljson_printer.package.sql:556  SBR  pretty_print_list  max_line_len := line_length; → NULL;
+  SURVIVED    pljson_printer.package.sql:557  SBR  pretty_print_list  cur_line_len := 0; → NULL;
+  NOT_COVERED pljson_printer.package.sql:573  SBR  pretty_print_any  ppString(treat(json_part as pljson_string), buf); → NULL;
+  NOT_COVERED pljson_printer.package.sql:587  SBR  pretty_print_any  buf := 'weird error: ' || json_part.get_type; → NULL;
+  NOT_COVERED pljson_printer.package.sql:587  AOR  pretty_print_any  'weird error: ' || json_part.get_type → 'weird error: '
+  NOT_COVERED pljson_printer.package.sql:603  NUL  dbms_output_clob  jsonp is not null → jsonp is null
+  NOT_COVERED pljson_printer.package.sql:603  SBR  dbms_output_clob  dbms_output.put_line(jsonp||'('); → NULL;
+  NOT_COVERED pljson_printer.package.sql:603  AOR  dbms_output_clob  jsonp||'(' → jsonp
+  NOT_COVERED pljson_printer.package.sql:604  ROR  dbms_output_clob  indx != 0 → indx < 0
+  NOT_COVERED pljson_printer.package.sql:604  ROR  dbms_output_clob  indx != 0 → indx > 0
+  NOT_COVERED pljson_printer.package.sql:604  ROR  dbms_output_clob  indx != 0 → TRUE
+  NOT_COVERED pljson_printer.package.sql:606  SBR  dbms_output_clob  indx := dbms_lob.instr(my_clob, delim, prev+1); → NULL;
+  NOT_COVERED pljson_printer.package.sql:606  AOR  dbms_output_clob  prev+1 → prev-1
+  NOT_COVERED pljson_printer.package.sql:609  ROR  dbms_output_clob  indx = 0 → indx <= 0
+  NOT_COVERED pljson_printer.package.sql:609  ROR  dbms_output_clob  indx = 0 → indx >= 0
+  NOT_COVERED pljson_printer.package.sql:609  ROR  dbms_output_clob  indx = 0 → FALSE
+  NOT_COVERED pljson_printer.package.sql:611  SBR  dbms_output_clob  amount := max_string_chars; → NULL;
+  NOT_COVERED pljson_printer.package.sql:614  SBR  dbms_output_clob  dbms_lob.read(my_clob, amount, prev, v_str); → NULL;
+  NOT_COVERED pljson_printer.package.sql:615  SBR  dbms_output_clob  dbms_output.put_line(v_str); → NULL;
+  NOT_COVERED pljson_printer.package.sql:616  SBR  dbms_output_clob  prev := prev+amount; → NULL;
+  NOT_COVERED pljson_printer.package.sql:616  AOR  dbms_output_clob  prev+amount → prev-amount
+  NOT_COVERED pljson_printer.package.sql:617  SBR  dbms_output_clob  exit when prev >= dbms_lob.getlength(my_clob); → NULL;
+  NOT_COVERED pljson_printer.package.sql:617  ROR  dbms_output_clob  prev >= dbms_lob.getlength(my_clob) → prev > dbms_lob.getlength(my_clob)
+  NOT_COVERED pljson_printer.package.sql:617  ROR  dbms_output_clob  prev >= dbms_lob.getlength(my_clob) → prev = dbms_lob.getlength(my_clob)
+  NOT_COVERED pljson_printer.package.sql:617  ROR  dbms_output_clob  prev >= dbms_lob.getlength(my_clob) → TRUE
+  NOT_COVERED pljson_printer.package.sql:620  SBR  dbms_output_clob  amount := indx - prev; → NULL;
+  NOT_COVERED pljson_printer.package.sql:620  AOR  dbms_output_clob  indx - prev → indx + prev
+  NOT_COVERED pljson_printer.package.sql:621  ROR  dbms_output_clob  amount > max_string_chars → amount >= max_string_chars
+  NOT_COVERED pljson_printer.package.sql:621  ROR  dbms_output_clob  amount > max_string_chars → amount <> max_string_chars
+  NOT_COVERED pljson_printer.package.sql:621  ROR  dbms_output_clob  amount > max_string_chars → FALSE
+  NOT_COVERED pljson_printer.package.sql:622  SBR  dbms_output_clob  amount := max_string_chars; → NULL;
+  NOT_COVERED pljson_printer.package.sql:625  SBR  dbms_output_clob  dbms_lob.read(my_clob, amount, prev, v_str); → NULL;
+  NOT_COVERED pljson_printer.package.sql:626  SBR  dbms_output_clob  dbms_output.put_line(v_str); → NULL;
+  NOT_COVERED pljson_printer.package.sql:627  SBR  dbms_output_clob  prev := prev+amount; → NULL;
+  NOT_COVERED pljson_printer.package.sql:627  AOR  dbms_output_clob  prev+amount → prev-amount
+  NOT_COVERED pljson_printer.package.sql:628  SBR  dbms_output_clob  amount := indx - prev; → NULL;
+  NOT_COVERED pljson_printer.package.sql:628  AOR  dbms_output_clob  indx - prev → indx + prev
+  NOT_COVERED pljson_printer.package.sql:629  SBR  dbms_output_clob  exit when prev >= indx - 1; → NULL;
+  NOT_COVERED pljson_printer.package.sql:629  ROR  dbms_output_clob  prev >= indx - 1 → prev > indx - 1
+  NOT_COVERED pljson_printer.package.sql:629  ROR  dbms_output_clob  prev >= indx - 1 → prev = indx - 1
+  NOT_COVERED pljson_printer.package.sql:629  ROR  dbms_output_clob  prev >= indx - 1 → TRUE
+  NOT_COVERED pljson_printer.package.sql:629  AOR  dbms_output_clob  indx - 1 → indx + 1
+  NOT_COVERED pljson_printer.package.sql:630  ROR  dbms_output_clob  amount > max_string_chars → amount >= max_string_chars
+  NOT_COVERED pljson_printer.package.sql:630  ROR  dbms_output_clob  amount > max_string_chars → amount <> max_string_chars
+  NOT_COVERED pljson_printer.package.sql:630  ROR  dbms_output_clob  amount > max_string_chars → FALSE
+  NOT_COVERED pljson_printer.package.sql:631  SBR  dbms_output_clob  amount := max_string_chars; → NULL;
+  NOT_COVERED pljson_printer.package.sql:634  SBR  dbms_output_clob  prev := indx + size_of_nl; → NULL;
+  NOT_COVERED pljson_printer.package.sql:634  AOR  dbms_output_clob  indx + size_of_nl → indx - size_of_nl
+  NOT_COVERED pljson_printer.package.sql:636  SBR  dbms_output_clob  dbms_lob.read(my_clob, amount, prev, v_str); → NULL;
+  NOT_COVERED pljson_printer.package.sql:637  SBR  dbms_output_clob  dbms_output.put_line(v_str); → NULL;
+  NOT_COVERED pljson_printer.package.sql:638  SBR  dbms_output_clob  prev := indx + size_of_nl; → NULL;
+  NOT_COVERED pljson_printer.package.sql:638  AOR  dbms_output_clob  indx + size_of_nl → indx - size_of_nl
+  NOT_COVERED pljson_printer.package.sql:643  NUL  dbms_output_clob  jsonp is not null → jsonp is null
+  NOT_COVERED pljson_printer.package.sql:643  SBR  dbms_output_clob  dbms_output.put_line(')'); → NULL;
+  NOT_COVERED pljson_printer.package.sql:713  NUL  htp_output_clob  jsonp is not null → jsonp is null
+  NOT_COVERED pljson_printer.package.sql:713  SBR  htp_output_clob  htp.prn(jsonp||'('); → NULL;
+  NOT_COVERED pljson_printer.package.sql:713  AOR  htp_output_clob  jsonp||'(' → jsonp
+  NOT_COVERED pljson_printer.package.sql:717  SBR  htp_output_clob  dbms_lob.read( my_clob, l_amt, l_off, l_str ); → NULL;
+  NOT_COVERED pljson_printer.package.sql:722  SBR  htp_output_clob  htp.prn( l_str ); → NULL;
+  NOT_COVERED pljson_printer.package.sql:723  SBR  htp_output_clob  l_off := l_off+l_amt; → NULL;
+  NOT_COVERED pljson_printer.package.sql:723  AOR  htp_output_clob  l_off+l_amt → l_off-l_amt
+  NOT_COVERED pljson_printer.package.sql:738  NUL  htp_output_clob  jsonp is not null → jsonp is null
+  NOT_COVERED pljson_printer.package.sql:738  SBR  htp_output_clob  htp.prn(')'); → NULL;
+  NOT_COVERED pljson_string.type.sql:31  SBR    self.num := 0; → NULL;
+  SURVIVED    pljson_string.type.sql:34  SBR    self.unescaped_string_delim_p := 0; → NULL;
+  NOT_COVERED pljson_string.type.sql:36  SBR    self.unescaped_string_delim_p := 1; → NULL;
+  NOT_COVERED pljson_string.type.sql:37  SBR    self.unescaped_string_delim := unescaped_string_delim; → NULL;
+  NOT_COVERED pljson_string.type.sql:50  SBR    self.num := 0; → NULL;
+  SURVIVED    pljson_string.type.sql:55  ROR    dbms_lob.getlength(str) > max_string_chars → dbms_lob.getlength(str) >= max_string_chars
+  SURVIVED    pljson_string.type.sql:55  ROR    dbms_lob.getlength(str) > max_string_chars → dbms_lob.getlength(str) <> max_string_chars
+  SURVIVED    pljson_string.type.sql:59  ROR    dbms_lob.getlength(str) > 0 → dbms_lob.getlength(str) >= 0
+  SURVIVED    pljson_string.type.sql:64  SBR    self.unescaped_string_delim_p := 0; → NULL;
+  NOT_COVERED pljson_string.type.sql:66  SBR    self.unescaped_string_delim_p := 1; → NULL;
+  NOT_COVERED pljson_string.type.sql:67  SBR    self.unescaped_string_delim := unescaped_string_delim; → NULL;
+
+2664 Mutanten: KILLED 1224, SURVIVED 464, NOT_COVERED 916, TIMEOUT 59, COMPILE_ERROR 1
+Mutation Score 48.2 % · 126 Tests · Baseline 4.436s · Laufzeit 4m50s
+2 Tests ausgeschlossen, weil sie schon ohne Mutanten scheitern

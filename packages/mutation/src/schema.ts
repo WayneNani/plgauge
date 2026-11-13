@@ -1,0 +1,272 @@
+/**
+ * Schema rewriter, ported from plmut (internal/mutant/schema.go). All mutants of a
+ * unit are compiled into one body; every point becomes a switch on the active ID:
+ *
+ *   bool (PL/SQL), value: (CASE CASE A WHEN -1 THEN plmut_ctl.hit(b, n) ELSE A END
+ *                          WHEN b THEN (m1) … ELSE (orig) END)
+ *   bool (SQL):           each branch as CASE WHEN (x) THEN 1 WHEN NOT (x) THEN 0 END,
+ *                         compared with 1, which keeps three-valued logic intact
+ *   stmt:                 IF A = -1 THEN plmut_ctl.reach(b, 1); END IF; IF A <> b THEN stmt END IF;
+ *   insert:               IF A = -1 THEN reach; END IF; IF A = id THEN <variant> END IF; …
+ *   loop guard:           IF A <> 0 THEN plmut_ctl.tick(loop); END IF;
+ *
+ * A is the package constant plmut$a in package bodies (read once per instantiation,
+ * so the worker resets package state when it switches mutants), plmut_ctl.active()
+ * elsewhere. ID -1 is the recording run.
+ */
+import { objectName, withoutCreate, type Mutant, type Point, type SourceFile, type Unit } from './mutant.js';
+
+export interface Region {
+  start: number;
+  end: number;
+  point: Point;
+  /** Set when the region is one branch (variant) of the point. */
+  mutantId: number;
+}
+
+export interface SchemaUnit {
+  key: string;
+  type: string;
+  /** Data dictionary name. */
+  name: string;
+  /** Generated text without CREATE, as Oracle stores it: compile error positions refer to it. */
+  text: string;
+  /** The unit's original text without CREATE. */
+  original: string;
+  regions: Region[];
+  mutants: Mutant[];
+  loops: number;
+}
+
+interface Node {
+  p: Point;
+  ms: Mutant[];
+  kids: Node[];
+  loop: number;
+  order: number;
+}
+
+/**
+ * Rewrites every unit that has mutants. Mutants in dropped are left out (they did not
+ * compile); points in naive are not switched (their mutants run with the oracle rewriter).
+ */
+export function buildSchema(ms: Mutant[], dropped: Set<number> = new Set(), naive: Set<Point> = new Set()): SchemaUnit[] {
+  const byUnit = new Map<Unit, { f: SourceFile; points: Map<Point, Mutant[]> }>();
+  for (const m of ms) {
+    let e = byUnit.get(m.unitRef);
+    if (!e) byUnit.set(m.unitRef, (e = { f: m.sourceFile, points: new Map() }));
+    const list = e.points.get(m.point) ?? [];
+    list.push(m);
+    e.points.set(m.point, list);
+  }
+  const out: SchemaUnit[] = [];
+  let loopId = 0;
+  for (const [u, { f, points }] of byUnit) {
+    const fullOriginal = f.src.subarray(u.start, u.end).toString('utf8');
+    const su: SchemaUnit = {
+      key: `${f.path}#${u.type} ${u.name}`, type: u.type, name: objectName(u.name),
+      text: '', original: withoutCreate(fullOriginal), regions: [], mutants: [], loops: 0,
+    };
+    const nodes: Node[] = [];
+    let order = 0;
+    for (const [p, pm] of points) {
+      const n: Node = { p, ms: [], kids: [], loop: 0, order: order++ };
+      if (!naive.has(p)) {
+        for (const m of pm) {
+          if (!dropped.has(m.id)) {
+            n.ms.push(m);
+            su.mutants.push(m);
+          }
+        }
+      }
+      nodes.push(n);
+    }
+    su.mutants.sort((a, b) => a.id - b.id);
+    for (const l of f.loops) {
+      if (f.units[l.unit] === u) {
+        loopId++;
+        su.loops++;
+        nodes.push({ p: { unit: l.unit, op: '', kind: 'guard', sub: '', ctx: 'plsql', cat: '', start: l.at, end: l.at, orig: '', mutants: [] }, ms: [], kids: [], loop: loopId, order: order++ });
+      }
+    }
+    const roots = nest(nodes);
+    const r = new Renderer(f.src, su, 'plmut_ctl.active()');
+    let start = u.start;
+    if (u.decl >= 0) {
+      r.active = 'plmut$a';
+      r.write(f.src.subarray(u.start, u.decl).toString('utf8'));
+      r.write('\n  plmut$a CONSTANT PLS_INTEGER := plmut_ctl.active;');
+      start = u.decl;
+    }
+    r.rangeWith(start, u.end, roots);
+    // Strip CREATE … so that positions match what Oracle reports.
+    const full = r.b;
+    const text = withoutCreate(full);
+    const shift = full.length - text.length;
+    su.text = text;
+    su.regions = su.regions.map((g) => ({ ...g, start: g.start - shift, end: g.end - shift }));
+    out.push(su);
+  }
+  return out;
+}
+
+/** Orders points into a tree by containment. */
+function nest(nodes: Node[]): Node[] {
+  nodes.sort((a, b) => a.p.start - b.p.start || b.p.end - a.p.end || a.order - b.order);
+  const roots: Node[] = [];
+  const stack: Node[] = [];
+  for (const n of nodes) {
+    while (stack.length && stack[stack.length - 1].p.end <= n.p.start) stack.pop();
+    if (!stack.length) roots.push(n);
+    else stack[stack.length - 1].kids.push(n);
+    stack.push(n);
+  }
+  return roots;
+}
+
+const identByte = (c: number) =>
+  c === 0x5f || c === 0x24 || c === 0x23 || (c >= 0x30 && c <= 0x39) || (c >= 0x61 && c <= 0x7a) || (c >= 0x41 && c <= 0x5a) || c >= 0x80;
+const identChar = (s: string) => s.length > 0 && identByte(s.charCodeAt(0));
+
+class Renderer {
+  b = '';
+  constructor(private src: Buffer, private su: SchemaUnit, public active: string) {}
+
+  write(s: string) {
+    this.b += s;
+  }
+
+  rangeWith(start: number, end: number, kids: Node[]) {
+    let cur = start;
+    for (const k of kids) {
+      this.write(this.src.subarray(cur, k.p.start).toString('utf8'));
+      this.point(k);
+      cur = k.p.end;
+    }
+    this.write(this.src.subarray(cur, end).toString('utf8'));
+  }
+
+  orig(n: Node) {
+    this.rangeWith(n.p.start, n.p.end, n.kids);
+  }
+
+  region(start: number, point: Point, mutantId: number) {
+    this.su.regions.push({ start, end: this.b.length, point, mutantId });
+  }
+
+  point(n: Node) {
+    const a = this.active;
+    if (n.loop > 0) {
+      // Counts iterations in the recording run and while a mutant is active; beyond
+      // the recorded maximum ×10 the guard aborts (deterministic timeout).
+      this.write(` IF ${a} <> 0 THEN plmut_ctl.tick(${n.loop}); END IF;`);
+      return;
+    }
+    if (!n.ms.length) {
+      this.orig(n);
+      return;
+    }
+    const p = n.p;
+    const base = n.ms[0].id;
+    const count = n.ms[n.ms.length - 1].id - base + 1;
+    // Keep tokens apart: "ELSE" directly before a switch must not fuse into "ELSEIF".
+    if (p.kind !== 'insert' && identChar(this.b.slice(-1))) this.write(' ');
+    const start = this.b.length;
+    switch (true) {
+      case p.kind === 'stmt': {
+        const id = n.ms[0].id;
+        this.write(`IF ${a} = -1 THEN plmut_ctl.reach(${id}, 1); END IF; IF ${a} <> ${id} THEN `);
+        this.orig(n);
+        this.write(' END IF;');
+        break;
+      }
+      case p.kind === 'insert': {
+        this.write(` IF ${a} = -1 THEN plmut_ctl.reach(${base}, ${count}); END IF;`);
+        for (const m of n.ms) {
+          this.write(` IF ${a} = ${m.id} THEN `);
+          const vs = this.b.length;
+          this.write(m.mutated.trim());
+          this.region(vs, p, m.id);
+          this.write(' END IF;');
+        }
+        break;
+      }
+      case p.kind === 'bool' && p.ctx === 'sql': {
+        this.write(`(CASE CASE ${a} WHEN -1 THEN plmut_ctl.hit(${base}, ${count}) ELSE ${a} END`);
+        for (const m of n.ms) {
+          this.write(` WHEN ${m.id} THEN `);
+          const vs = this.b.length;
+          this.write(`CASE WHEN (${m.mutated}) THEN 1 WHEN NOT (${m.mutated}) THEN 0 END`);
+          this.region(vs, p, m.id);
+        }
+        this.write(' ELSE CASE WHEN (');
+        this.orig(n);
+        this.write(') THEN 1 WHEN NOT (');
+        this.orig(n);
+        this.write(') THEN 0 END END = 1)');
+        break;
+      }
+      default: {
+        // bool in PL/SQL, value anywhere
+        this.write(`(CASE CASE ${a} WHEN -1 THEN plmut_ctl.hit(${base}, ${count}) ELSE ${a} END`);
+        for (const m of n.ms) {
+          this.write(` WHEN ${m.id} THEN `);
+          const vs = this.b.length;
+          this.write(`(${m.mutated})`);
+          this.region(vs, p, m.id);
+        }
+        this.write(' ELSE (');
+        this.orig(n);
+        this.write(') END)');
+      }
+    }
+    this.region(start, p, 0);
+    if (p.end < this.src.length && identByte(this.src[p.end])) this.write(' ');
+  }
+}
+
+/** Whether the schema rewriter can switch a point; the others run with the oracle rewriter. */
+export function switchable(p: Point): boolean {
+  switch (p.kind) {
+    case 'stmt':
+      return p.mutants.length === 1 && p.mutants[0] === 'NULL;';
+    case 'bool':
+    case 'value':
+    case 'insert':
+      return true;
+  }
+  return false;
+}
+
+/**
+ * Maps a compile error position (1-based line and column in characters, as in
+ * USER_ERRORS) to the innermost region containing it, or else the last whole-point
+ * region that ends before it on the same line.
+ */
+export function locate(su: SchemaUnit, line: number, col: number): Region | undefined {
+  const off = offsetOf(su.text, line, col);
+  if (off === undefined) return undefined;
+  let best: Region | undefined;
+  for (const rg of su.regions) {
+    if (rg.start <= off && off < rg.end && (!best || rg.end - rg.start < best.end - best.start)) best = rg;
+  }
+  if (best) return best;
+  const lineStart = su.text.lastIndexOf('\n', off - 1) + 1;
+  for (const rg of su.regions) {
+    if (rg.mutantId === 0 && rg.end <= off && rg.end >= lineStart && (!best || rg.end > best.end)) best = rg;
+  }
+  return best;
+}
+
+function offsetOf(text: string, line: number, col: number): number | undefined {
+  let off = 0;
+  for (let l = 1; l < line; l++) {
+    const i = text.indexOf('\n', off);
+    if (i < 0) return undefined;
+    off = i + 1;
+  }
+  for (let c = 1; c < col && off < text.length && text[off] !== '\n'; c++) {
+    off += text.codePointAt(off)! > 0xffff ? 2 : 1;
+  }
+  return off;
+}

@@ -163,3 +163,31 @@ export async function restoreAll(conn: oracledb.Connection, objs: SourceObject[]
   for (const s of schemas) await conn.execute(`begin dbms_utility.compile_schema(:s, compile_all => false); end;`, { s });
   say(`Originalcode von ${objs.length} Objekten wiederhergestellt`);
 }
+
+export interface CompileError {
+  line: number;
+  position: number;
+  text: string;
+}
+
+/** All compile errors of an object (attribute ERROR), with line and column. */
+export async function objectErrors(conn: oracledb.Connection, obj: Pick<SourceObject, 'owner' | 'name' | 'type'>): Promise<CompileError[]> {
+  const err = await conn.execute<[number, number, string]>(
+    `select line, position, text from all_errors where owner = :o and name = :n and type = :t and attribute = 'ERROR' order by sequence`,
+    { o: obj.owner, n: obj.name, t: obj.type },
+  );
+  return (err.rows ?? []).map(([line, position, text]) => ({ line, position, text: text.trim() }));
+}
+
+/** Runs the statements of a SQL*Plus style script; "already exists" errors are skipped. */
+export async function runScript(conn: oracledb.Connection, statements: string[], where: string): Promise<void> {
+  for (const stmt of statements) {
+    try {
+      await conn.execute(stmt);
+    } catch (e) {
+      const msg = (e as Error).message;
+      if (/ORA-00955|ORA-01430|ORA-02260|ORA-02275|ORA-01920|ORA-24344/.test(msg)) continue;
+      throw new Error(`${where}: ${msg.split('\n')[0]}`);
+    }
+  }
+}

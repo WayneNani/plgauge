@@ -9,12 +9,19 @@
  *   pltest export <coverage.json> [--out file]          write the exchange format plcov-coverage/1
  *   pltest corpus <dir ...> [--db plcov.json]           robustness check on a corpus of PL/SQL files
  *   pltest restore --config plcov.json [--list]         put back code left changed by a killed run (journal)
+ *   pltest mutate run [dir] [--mode schema|naive] …     mutation testing of a project with plmut.json
+ *   pltest mutate points|schema [dir]                   list mutants / print the schema rewrite (offline)
+ *   pltest mutate compare a.json b.json                 compare two runs (also against the Go plmut)
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { connect, ensureJournal, journalEntries, preprocess, restoreAll, splitScript } from '@pltest/core';
 import { instrument, newIds, runCoverage, toCoverageExport, runCorpus, type RunConfig, type RunReport } from '@pltest/coverage';
 import { renderHtml } from '@pltest/report';
+import {
+  buildSchema, compare, htmlReport, jsonReport, mutationTestingReport, projectMutants, runMutation, switchable, textReport,
+  type Point,
+} from '@pltest/mutation';
 
 const args = process.argv.slice(2);
 const cmd = args.shift();
@@ -121,6 +128,50 @@ async function main() {
       }
       break;
     }
+    case 'mutate': {
+      const sub = args.shift();
+      const ops = opt('ops');
+      const opSet = ops && ops !== 'all' ? new Set(ops.split(',').map((o) => o.trim().toUpperCase())) : undefined;
+      const sampleN = Number(opt('sample') ?? 0);
+      const seed = Number(opt('seed') ?? 1);
+      const db = opt('db') ?? process.env.PLMUT_DB ?? '';
+      const mode = (opt('mode') ?? 'schema') as 'schema' | 'naive';
+      const factor = Number(opt('timeout-factor') ?? 5);
+      const jsonOut = opt('json');
+      const reportOut = opt('report');
+      const resetCmd = opt('reset-cmd');
+      const skipInstall = flag('skip-install');
+      const quiet = flag('q');
+      if (sub === 'compare') {
+        const [a, b] = args;
+        if (!a || !b) throw new Error('compare braucht zwei JSON-Dateien');
+        console.log(compare(a, b).text);
+        break;
+      }
+      const dir = args.shift() ?? '.';
+      if (sub === 'points') {
+        const { files, mutants } = projectMutants(dir, { ops: opSet });
+        for (const f of files) for (const e of f.errors) console.log(`${f.path}: Syntaxfehler ${e}`);
+        const one = (s: string) => s.split(/\s+/).filter(Boolean).join(' ');
+        for (const m of mutants) console.log(`${String(m.id).padStart(4)} ${m.file}:${m.line}:${m.col} ${m.op} ${m.sub} ${one(m.original)} → ${one(m.mutated)}`);
+        break;
+      }
+      if (sub === 'schema') {
+        const { mutants } = projectMutants(dir, { ops: opSet });
+        const naive = new Set<Point>(mutants.filter((m) => !switchable(m.point)).map((m) => m.point));
+        for (const su of buildSchema(mutants, new Set(), naive)) process.stdout.write(`-- ${su.key}\n${su.text}\n/\n`);
+        break;
+      }
+      if (sub !== 'run') throw new Error('Verwendung: pltest mutate run|points|schema|compare …');
+      const rep = await runMutation({
+        dir, dbUrls: db.split(',').filter(Boolean), ops: opSet, timeoutFactor: factor, mode, skipInstall,
+        resetCmd, sample: sampleN, seed, log: quiet ? undefined : (m) => console.error(m),
+      });
+      process.stdout.write(textReport(rep));
+      if (jsonOut) writeFileSync(jsonOut, jsonReport(rep));
+      if (reportOut) writeFileSync(reportOut, reportOut.endsWith('.html') ? htmlReport(rep, dir) : mutationTestingReport(rep, dir));
+      break;
+    }
     case 'restore': {
       const cfg = loadConfig(opt('config'));
       const listOnly = flag('list');
@@ -140,7 +191,7 @@ async function main() {
       break;
     }
     default:
-      console.error('Verwendung: pltest coverage|report|export|instrument|deploy|corpus|restore …  (siehe README.md)');
+      console.error('Verwendung: pltest coverage|mutate|report|export|instrument|deploy|corpus|restore …  (siehe README.md)');
       process.exitCode = 2;
   }
 }

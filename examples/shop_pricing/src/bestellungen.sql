@@ -1,0 +1,8 @@
+CREATE TABLE bestellungen (
+  id       NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  kunde    VARCHAR2(100) NOT NULL,
+  summe    NUMBER(12,2)  NOT NULL,
+  rabatt   NUMBER(12,2)  NOT NULL,
+  versand  NUMBER(12,2)  NOT NULL
+)
+/

@@ -1,0 +1,11 @@
+{
+  "install": [
+    "src/bestellungen.sql",
+    "src/shop_pricing.pks",
+    "src/shop_pricing.pkb",
+    "test/test_shop_pricing.pks",
+    "test/test_shop_pricing.pkb"
+  ],
+  "mutate": ["src/*.pkb"],
+  "tests": ["test_shop_pricing"]
+}

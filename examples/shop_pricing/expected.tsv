@@ -1,0 +1,77 @@
+# Erwartete Urteile, von Hand vor dem ersten Lauf festgelegt.
+# Unterprogramm	Operator	Original	Mutiert	Urteil	Begründung
+rabatt	ROR	p_summe >= c_rabattgrenze	p_summe > c_rabattgrenze	SURVIVED	Grenze 100 wird nicht getestet
+rabatt	ROR	p_summe >= c_rabattgrenze	p_summe = c_rabattgrenze	KILLED	rabatt(200) liefert 0
+rabatt	ROR	p_summe >= c_rabattgrenze	TRUE	KILLED	rabatt(50) liefert 5
+versandkosten	SBR	l_kosten := 15;	NULL;	KILLED	Express-Test erwartet 15
+versandkosten	ROR	p_summe < c_versandfrei	p_summe <= c_versandfrei	SURVIVED	Grenze 50 wird nicht getestet
+versandkosten	ROR	p_summe < c_versandfrei	p_summe <> c_versandfrei	KILLED	endpreis(200) wird 185
+versandkosten	ROR	p_summe < c_versandfrei	FALSE	KILLED	versandkosten(20) liefert 0
+versandkosten	SBR	l_kosten := 5;	NULL;	KILLED	versand_klein erwartet 5
+endpreis	ROR	p_summe <= 0	p_summe < 0	SURVIVED	0 wird nicht getestet
+endpreis	ROR	p_summe <= 0	p_summe = 0	SURVIVED	negative Summen werden nicht getestet
+endpreis	ROR	p_summe <= 0	TRUE	KILLED	endpreis(200) wirft
+endpreis	SBR	RAISE_APPLICATION_ERROR(-20001, 'Summe muss positiv sein');	NULL;	KILLED	endpreis_null erwartet -20001
+buche	SBR	l_rabatt := rabatt(p_summe);	NULL;	KILLED	NOT NULL auf rabatt
+buche	SBR	INSERT INTO bestellungen (kunde, summe, rabatt, versand)\n    VALUES (p_kunde, p_summe, l_rabatt, versandkosten(p_summe, FALSE));	NULL;	KILLED	keine Zeile angelegt
+raten	ROR	l_rest > 0	l_rest >= 0	SURVIVED	Rest 0 wird nicht getestet
+raten	ROR	l_rest > 0	l_rest <> 0	TIMEOUT	Rest wird nie genau 0
+raten	ROR	l_rest > 0	FALSE	KILLED	0 Raten
+raten	SBR	l_rest := l_rest - p_rate;	NULL;	TIMEOUT	Rest sinkt nie
+raten	SBR	l_n := l_n + 1;	NULL;	KILLED	0 Raten
+rabatt	RET		 RETURN NULL;	KILLED	rabatt(200) liefert NULL
+rabatt	AOR	p_summe * 0.1	p_summe / 0.1	KILLED	rabatt(200) liefert 2000
+versandkosten	RET		 RETURN NULL;	KILLED	Express-Test erwartet 15
+endpreis	RET		 RETURN NULL;	KILLED	endpreis(200) liefert NULL
+endpreis	LCR	p_summe IS NULL OR p_summe <= 0	p_summe IS NULL	SURVIVED	nicht-positive Summen werden nicht getestet
+endpreis	LCR	p_summe IS NULL OR p_summe <= 0	p_summe <= 0	KILLED	NULL wirft nicht mehr
+endpreis	LCR	p_summe IS NULL OR p_summe <= 0	(p_summe IS NULL) <> (p_summe <= 0)	KILLED	NULL wirft nicht mehr
+endpreis	LCR	p_summe IS NULL OR p_summe <= 0	TRUE	KILLED	endpreis(200) wirft
+endpreis	AOR	p_summe - rabatt(p_summe)	p_summe + rabatt(p_summe)	KILLED	endpreis(200) wird 220
+endpreis	AOR	p_summe - rabatt(p_summe) + versandkosten(p_summe, p_express)	p_summe - rabatt(p_summe) - versandkosten(p_summe, p_express)	SURVIVED	Versand ist im getesteten Fall 0
+buche	RET		 RETURN;	KILLED	keine Zeile angelegt
+raten	RET		 RETURN NULL;	KILLED	NULL statt 4
+raten	AOR	l_rest - p_rate	l_rest + p_rate	TIMEOUT	Rest wächst
+raten	AOR	l_n + 1	l_n - 1	KILLED	-4 statt 4
+storniere	RET		 RETURN;	KILLED	Bestellung bleibt
+storniere	SBR	DELETE FROM bestellungen WHERE id = p_id;	NULL;	KILLED	Bestellung bleibt
+storniere	ROR	p_modus = 'final'	FALSE	SURVIVED	Modus 'final' wird nicht getestet
+storniere	SBR	COMMIT;	NULL;	SURVIVED	Modus 'final' wird nicht getestet
+storniere	ROR	id = p_id	id <= p_id	SURVIVED	löscht mehr, Test prüft nur Bert
+storniere	ROR	id = p_id	id >= p_id	SURVIVED	löscht mehr, Test prüft nur Bert
+storniere	ROR	id = p_id	FALSE	KILLED	nichts gelöscht
+endpreis	NUL	p_summe IS NULL	p_summe IS NOT NULL	KILLED	NULL wirft nicht mehr
+umsatz	ROR	kunde = p_kunde	kunde <= p_kunde	SURVIVED	nur Claras Zeilen in der Tabelle
+umsatz	ROR	kunde = p_kunde	kunde >= p_kunde	SURVIVED	nur Claras Zeilen in der Tabelle
+umsatz	ROR	kunde = p_kunde	FALSE	KILLED	Umsatz 0 statt 150
+umsatz	RET		 RETURN NULL;	KILLED	NULL statt 0
+umsatz	SBR	EXIT WHEN c%NOTFOUND;	NULL;	TIMEOUT	Schleife endet nie
+umsatz	CUR	c%NOTFOUND	c%FOUND	TIMEOUT	ohne Bestellungen endet die Schleife nie (zuerst falsch als KILLED erwartet)
+umsatz	SBR	l_gesamt := l_gesamt + NVL(l_summe, 0);	NULL;	KILLED	0 statt 150
+umsatz	AOR	l_gesamt + NVL(l_summe, 0)	l_gesamt - NVL(l_summe, 0)	KILLED	-150
+umsatz	NUL	NVL(l_summe, 0)	l_summe	SURVIVED	äquivalent: summe ist NOT NULL
+umsatz	NUL	NVL(l_summe, 0)	0	KILLED	0 statt 150
+treuepunkte	RET		 RETURN NULL;	KILLED	NULL statt 10
+treuepunkte	CUR	1	(1) + 1	KILLED	9 statt 10
+treuepunkte	CUR	p_n	(p_n) - 1	KILLED	6 statt 10
+treuepunkte	SBR	l := l + k;	NULL;	KILLED	0 statt 10
+treuepunkte	AOR	l + k	l - k	KILLED	-10
+anteil	RET		 RETURN NULL;	KILLED	wirft nicht
+anteil	AOR	p_teil / p_ganzes	p_teil * p_ganzes	KILLED	wirft nicht
+anteil	EXC	DBMS_OUTPUT.PUT_LINE('anteil: Ganzes ist 0');\n      RAISE_APPLICATION_ERROR(-20002, 'Ganzes ist 0');	NULL;	KILLED	ORA-06503 statt -20002
+anteil	SBR	DBMS_OUTPUT.PUT_LINE('anteil: Ganzes ist 0');	NULL;	SURVIVED	Ausgabe wird nicht geprüft
+anteil	SBR	RAISE_APPLICATION_ERROR(-20002, 'Ganzes ist 0');	NULL;	KILLED	ORA-06503 statt -20002
+storniere	ROR	p_modus = 'final'	TRUE	SURVIVED	Test merkt den Commit nicht; Nebenwirkung
+rabatt	RET		 RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');	KILLED	wirft -20998
+versandkosten	RET		 RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');	KILLED	wirft -20998
+endpreis	RET		 RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');	KILLED	wirft -20998
+buche	RET		 RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');	KILLED	wirft -20998
+storniere	RET		 RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');	KILLED	wirft -20998
+umsatz	RET		 RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');	KILLED	wirft -20998
+treuepunkte	RET		 RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');	KILLED	wirft -20998
+anteil	RET		 RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');	KILLED	wirft -20998
+raten	RET		 RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');	KILLED	wirft -20998
+bestellnummer	RET		 RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');	KILLED	wirft -20998
+bestellnummer	RET		 RETURN NULL;	KILLED	NULL statt B-2345
+bestellnummer	AOR	'B-' || LPAD(MOD(p_id, 10000), 4, '0')	'B-'	KILLED	nur B-
+bestellnummer	AOR	MOD(p_id, 10000)	(p_id) * (10000)	KILLED	B-1234 statt B-2345

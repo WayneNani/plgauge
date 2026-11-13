@@ -1,0 +1,26 @@
+
+Prüfung, die sich abschwächen lässt:
+  SURVIVED    shop_pricing.pkb:26  LCR  endpreis  p_summe IS NULL OR p_summe <= 0 → p_summe IS NULL
+  SURVIVED    shop_pricing.pkb:26  ROR  endpreis  p_summe <= 0 → p_summe < 0
+  SURVIVED    shop_pricing.pkb:26  ROR  endpreis  p_summe <= 0 → p_summe = 0
+
+Weitere:
+  SURVIVED    shop_pricing.pkb:6  ROR  rabatt  p_summe >= c_rabattgrenze → p_summe > c_rabattgrenze
+  SURVIVED    shop_pricing.pkb:18  ROR  versandkosten  p_summe < c_versandfrei → p_summe <= c_versandfrei
+  SURVIVED    shop_pricing.pkb:29  AOR  endpreis  p_summe - rabatt(p_summe) + versandkosten(p_summe, p_expr… → p_summe - rabatt(p_summe) - versandkosten(p_summe, p_expr…
+  SURVIVED    shop_pricing.pkb:43  ROR  storniere  id = p_id → id <= p_id
+  SURVIVED    shop_pricing.pkb:43  ROR  storniere  id = p_id → id >= p_id
+  SURVIVED    shop_pricing.pkb:44  ROR  storniere  p_modus = 'final' → TRUE
+  SURVIVED    shop_pricing.pkb:44  ROR  storniere  p_modus = 'final' → FALSE
+  NOT_COVERED shop_pricing.pkb:45  SBR  storniere  COMMIT; → NULL;
+  SURVIVED    shop_pricing.pkb:51  ROR  umsatz  kunde = p_kunde → kunde <= p_kunde
+  SURVIVED    shop_pricing.pkb:51  ROR  umsatz  kunde = p_kunde → kunde >= p_kunde
+  SURVIVED    shop_pricing.pkb:59  NUL  umsatz  NVL(l_summe, 0) → l_summe
+  SURVIVED    shop_pricing.pkb:80  SBR  anteil  DBMS_OUTPUT.PUT_LINE('anteil: Ganzes ist 0'); → NULL;
+  SURVIVED    shop_pricing.pkb:95  ROR  raten  l_rest > 0 → l_rest >= 0
+
+Nebenwirkung, ein Test hat committet:
+  SURVIVED    shop_pricing.pkb:44  ROR  storniere  p_modus = 'final' → TRUE
+
+75 Mutanten: KILLED 54, SURVIVED 15, NOT_COVERED 1, TIMEOUT 5
+Mutation Score 78.7 % · 14 Tests · Baseline 93ms · Laufzeit 4s
