@@ -169,3 +169,22 @@ test('regression corpus: tricky boolean structures', () => {
     assert.deepEqual(r.map.decisions[0].conds.map((c) => c.text), expected, cond);
   }
 });
+
+test('offline preprocessor keeps the last $IF branch and every line break', async () => {
+  const { preprocess } = await import('../src/preprocess.js');
+  const src = "begin\n  $if dbms_db_version.version < 12 $then\n  old;\n  $elsif x $then mid;\n  $else\n  new($$plsql_line);\n  $end\n  $error 'nope' $end\nend;\n";
+  const out = preprocess(src);
+  assert.equal(out.length, src.length);
+  assert.equal(out.split('\n').length, src.split('\n').length);
+  assert.doesNotMatch(out, /old|mid|\$if|\$else|\$end|nope/);
+  assert.match(out, /new\(\$\$plsql_line\);/);
+});
+
+test('keywords glued to parentheses stay separate tokens (found by the corpus compile check)', () => {
+  const r = run(proc('  if(a = 1)then null; elsif(b = 2) then null; end if;\n  while(a > 0) loop a := a - 1; end loop;\n  if not(c) then null; end if;'));
+  assert.match(r.instrumented, /if cov\$\.d\(1,/);
+  assert.match(r.instrumented, /elsif cov\$\.d\(2,/);
+  assert.match(r.instrumented, /while cov\$\.d\(3,/);
+  assert.match(r.instrumented, /not cov\$\.n\(4,1,\(c\)\)/);
+  assert.doesNotMatch(r.instrumented, /[a-z]cov\$/);
+});

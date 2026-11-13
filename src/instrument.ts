@@ -777,10 +777,22 @@ class Parser {
 
   applyEdits(): string {
     const sorted = [...this.edits].sort((x, y) => x.pos - y.pos || x.gen - y.gen);
+    // Merge insertions per position, then keep tokens apart: "if(" or "not(" in the source must not
+    // turn into "ifcov$…" / "notcov$…", and inserted text must not glue to a following identifier.
+    const merged: { pos: number; text: string }[] = [];
+    for (const e of sorted) {
+      const lastM = merged[merged.length - 1];
+      if (lastM && lastM.pos === e.pos) lastM.text += e.text;
+      else merged.push({ pos: e.pos, text: e.text });
+    }
+    const word = /[A-Za-z0-9_$#]/;
     let out = '';
     let last = 0;
-    for (const e of sorted) {
-      out += this.src.slice(last, e.pos) + e.text;
+    for (const e of merged) {
+      let text = e.text;
+      if (e.pos > 0 && word.test(this.src[e.pos - 1]) && word.test(text[0])) text = ' ' + text;
+      if (e.pos < this.src.length && word.test(this.src[e.pos]) && word.test(text[text.length - 1])) text += ' ';
+      out += this.src.slice(last, e.pos) + text;
       last = e.pos;
     }
     return out + this.src.slice(last);

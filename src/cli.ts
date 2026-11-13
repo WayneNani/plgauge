@@ -7,15 +7,18 @@
  *   plcov deploy <file.sql ...> --config plcov.json  run SQL*Plus-style scripts (demo setup)
  *   plcov report <coverage.json> [--out report]      re-render HTML from saved JSON
  *   plcov export <coverage.json> [--out file]         write the exchange format plcov-coverage/1
+ *   plcov corpus <dir ...> [--db plcov.json]          robustness check on a corpus of PL/SQL files
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import oracledb from 'oracledb';
 import { instrument } from './instrument.js';
+import { preprocess } from './preprocess.js';
 import { newIds } from './model.js';
 import { runCoverage, type RunConfig, type RunReport } from './run.js';
 import { renderHtml } from './report.js';
 import { toCoverageExport } from './export.js';
+import { runCorpus } from './corpus.js';
 
 const args = process.argv.slice(2);
 const cmd = args.shift();
@@ -95,12 +98,29 @@ async function main() {
       console.error(`Export: ${out}`);
       break;
     }
+    case 'corpus': {
+      const dbCfg = opt('db');
+      const out = opt('out');
+      const cfg = dbCfg ? loadConfig(dbCfg) : undefined;
+      const r = await runCorpus(args, cfg && { user: cfg.user, password: cfg.password, connectString: cfg.connectString });
+      const pct = (a: number, b: number) => (b ? `${((a / b) * 100).toFixed(1)} %` : '–');
+      console.log(`Dateien ${r.files} · Bodies ${r.units.body} · Spezifikationen ${r.units.spec} · Latin-1-Dateien ${r.latin1Files.length}`);
+      console.log(`Geparst und instrumentiert: ${r.parsed}/${r.units.body} (${pct(r.parsed, r.units.body)}) in ${r.ms.toFixed(0)} ms`);
+      console.log(`Anweisungen ${r.statements} · Entscheidungen ${r.decisions} · Teilbedingungen ${r.conditions} · nicht gemessen ${r.gaps}`);
+      for (const f of r.failures) console.log(`  ✗ ${f.unit}: ${f.error}`);
+      if (r.db) {
+        console.log(`DB: Original kompiliert ${r.db.originalOk} · instrumentiert kompiliert ${r.db.instrumentedOk}/${r.db.originalOk} (${pct(r.db.instrumentedOk, r.db.originalOk)})`);
+        for (const f of r.db.failures) console.log(`  ✗ ${f.unit}: ${f.error}`);
+      }
+      if (out) writeFileSync(out, JSON.stringify(r, null, 1));
+      break;
+    }
     case 'instrument': {
       const noSql = flag('no-sql');
       const file = args.shift();
       if (!file) throw new Error('Datei fehlt');
       for (const stmt of splitScript(readFileSync(file, 'utf8'))) {
-        const r = instrument(stmt + '\n', 'SCHEMA', newIds(), { sqlProbes: !noSql });
+        const r = instrument(preprocess(stmt + '\n'), 'SCHEMA', newIds(), { sqlProbes: !noSql });
         process.stdout.write(r.instrumented + '/\n');
       }
       break;

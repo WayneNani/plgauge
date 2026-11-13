@@ -1,6 +1,6 @@
 {
  "format": "plcov-coverage/1",
- "generated": "2026-11-13T19:18:19.287Z",
+ "generated": "2026-11-13T19:41:45.644Z",
  "database": "Oracle AI Database 26ai Free Release 23.26.3.0.0 - Develop, Learn, and Run for Free",
  "schema": "DEMO",
  "coordinates": "all_source",
@@ -9,70 +9,70 @@
    "path": "demo.test_order_pricing.archive_in_batches",
    "setup": false,
    "status": "passed",
-   "ms": 1.372,
+   "ms": 1.833,
    "baselineRuns": 1
   },
   {
    "path": "demo.test_order_pricing.bulk_discount",
    "setup": false,
    "status": "passed",
-   "ms": 4.094,
+   "ms": 4.421,
    "baselineRuns": 1
   },
   {
    "path": "demo.test_order_pricing.coupon_discount",
    "setup": false,
    "status": "passed",
-   "ms": 0.85,
+   "ms": 0.81,
    "baselineRuns": 1
   },
   {
    "path": "demo.test_order_pricing.no_discount",
    "setup": false,
    "status": "passed",
-   "ms": 0.813,
+   "ms": 0.883,
    "baselineRuns": 1
   },
   {
    "path": "demo.test_order_pricing.pricing_load",
    "setup": false,
    "status": "passed",
-   "ms": 103.291,
+   "ms": 113.288,
    "baselineRuns": 1
   },
   {
    "path": "demo.test_order_pricing.risk_high",
    "setup": false,
    "status": "passed",
-   "ms": 6.134,
+   "ms": 6.811,
    "baselineRuns": 1
   },
   {
    "path": "demo.test_order_pricing.risk_unknown",
    "setup": false,
    "status": "passed",
-   "ms": 0.852,
+   "ms": 0.838,
    "baselineRuns": 1
   },
   {
    "path": "demo.test_order_pricing.shipping_de",
    "setup": false,
    "status": "passed",
-   "ms": 0.723,
+   "ms": 0.867,
    "baselineRuns": 1
   },
   {
    "path": "demo.test_order_pricing.shipping_unknown_country",
    "setup": false,
    "status": "passed",
-   "ms": 0.935,
+   "ms": 0.891,
    "baselineRuns": 1
   },
   {
    "path": "demo.test_order_pricing.vip_large_order",
    "setup": false,
    "status": "passed",
-   "ms": 0.987,
+   "ms": 0.985,
    "baselineRuns": 1
   },
   {

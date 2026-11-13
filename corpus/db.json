@@ -1,0 +1,1 @@
+{ "user": "plcov_corpus", "password": "corpus", "connectString": "localhost:1521/FREEPDB1", "schema": "PLCOV_CORPUS", "tests": [] }

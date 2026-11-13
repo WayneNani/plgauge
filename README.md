@@ -48,10 +48,45 @@ npm run demo -- --out demo/report
 | `plcov run --config plcov.json [--out dir]` | Kompletter Lauf: Baseline, utPLSQL-Coverage, Instrumentieren, Testlauf, Wiederherstellen, Bericht |
 | `plcov instrument datei.sql [--no-sql]` | Zeigt offline, wie instrumentierter Code aussieht |
 | `plcov report coverage.json [--out dir]` | Bericht aus gespeicherten Rohdaten neu erzeugen |
+| `plcov export coverage.json [--out datei]` | Austauschformat `plcov-coverage/1` erzeugen (schreibt `run` automatisch mit) |
+| `plcov corpus verzeichnis… [--db plcov.json]` | Robustheitstest des Parsers auf einem Korpus, optional mit Kompilierprüfung |
 | `plcov deploy --config plcov.json dateien…` | SQL*Plus-artige Skripte einspielen (für die Demo) |
 
 `plcov.json`: `user`, `password` (oder Umgebungsvariable `PLCOV_PASSWORD`), `connectString`, `schema`, `tests` (utPLSQL-Pfade),
-optional `include` / `exclude` (Regex auf Objektnamen) und `sqlProbes` (`"auto"` = ab 23ai).
+optional `include` / `exclude` (Regex auf Objektnamen), `sqlProbes` (`"auto"` = ab 23ai) und `perTest` (Standard `true`).
+
+## Coverage pro Test und Austauschformat
+
+plcov ordnet jeden Treffer dem laufenden utPLSQL-Test zu. Die Zuordnung läuft über `SYS_CONTEXT('UT3_INFO', 'TEST_NAME')`, gelesen einmal pro
+Anweisungssonde, in einem einzigen `ut_runner.run`. Treffer außerhalb eines Tests (`beforeall`/`afterall`) landen in einem eigenen
+Setup-Eintrag `#owner.package`. Im Bericht zeigt die Trefferzahl einer Zeile per Tooltip die Tests, die sie erreichen.
+
+`plcov-coverage.json` (Format `plcov-coverage/1`) ist für andere Werkzeuge gedacht, z. B. das Mutation-Testing-Projekt plmut:
+- **Koordinaten:** wie in ALL_SOURCE, 1-basiert. Zeile 1 ist die Zeile mit dem Typ-Schlüsselwort (`package body …`), ohne `CREATE`.
+- **Tests:** Pfade klein geschrieben (`owner.package.procedure`). Mögliche Status: passed, failed, error, skipped, excluded (schon ohne Instrumentierung rot) und unknown.
+- **Pro Objekt:**
+  - `sourceSha256` (post-processed) und `rawSha256` (ALL_SOURCE roh)
+  - `lines` (Treffer und Test-Indizes)
+  - `branches` (mit Bereich der Bedingung)
+  - `conditions` (Spaltenbereich, Tests getrennt nach WAHR, FALSCH und NULL)
+  - `notMeasured`
+
+## Robustheit: Korpus
+
+`corpus/fetch.sh` lädt öffentlichen PL/SQL-Code auf festen Commits nach `corpus/.cache/`: utPLSQL 3.1.14, Logger, alexandria-plsql-utils
+und pljson, dieselbe Auswahl wie bei plmut. Lizenzen bitte pro Datei prüfen, der Code wird nicht eingecheckt.
+
+```bash
+corpus/fetch.sh
+npx tsx src/cli.ts corpus corpus/.cache/*                        # offline: parsen, instrumentieren, Zeilenzahl prüfen
+npx tsx src/cli.ts corpus corpus/.cache/* --db corpus/db.json    # zusätzlich: instrumentiert kompiliert, wo das Original kompiliert
+```
+
+Stand: 747 Dateien, **280/280 Bodies** offline instrumentiert (0,6 s), darunter zwei Latin-1-Dateien. In der Datenbank kompilieren
+**174/174** Bodies auch instrumentiert; das sind alle Bodies, deren Original im leeren Testschema kompiliert. Für Dateien gibt es einen
+eigenen Präprozessor (`src/preprocess.ts`), der wie plmut den letzten `$IF`-Zweig behält und den Rest durch Leerzeichen ersetzt. Im
+Datenbank-Ablauf wird weiterhin `DBMS_PREPROCESSOR` verwendet. Der Korpus hat zwei Fehler gefunden (`if(`/`not(` direkt vor einer Klammer),
+die jetzt als Tests abgesichert sind.
 
 ## Ablauf eines Laufs
 
@@ -86,6 +121,7 @@ cov$.s(1);if cov$.d(1,cov$.o(1) and (cov$.c(1,1,p_vip) and cov$.c(1,2,p_amount >
 
 - **TypeScript passt.** Parsen und Instrumentieren der Demo dauert ~5 ms. Die Laufzeit entsteht ausschließlich in der Datenbank
   (Kompilieren ~50–120 ms, Testlauf). Die Sprache ist für die Performance nicht entscheidend.
+- **Coverage pro Test** kostet zusätzlich etwa 50 % im Lasttest (103–133 ms statt 78–84 ms), weil pro Anweisung einmal `SYS_CONTEXT` gelesen wird.
 - **Datenbank-Overhead:** Probes zählen nur in Package-Speicher (assoziative Arrays mit Ganzzahl-Schlüsseln). Geschrieben wird einmal am
   Ende per autonomer Transaktion. Im sondenreichsten Test (20 000 Aufrufe einer trivialen Funktion) liegt plcov bei 48–90 ms gegenüber
   6 ms ohne und 30–50 ms mit utPLSQL-eigener Coverage. Bei Code mit echtem SQL-Anteil fällt der relative Overhead deutlich kleiner aus.
