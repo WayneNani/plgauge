@@ -167,10 +167,29 @@ PLCOV_DB=demo/demo@localhost:1521/FREEPDB1 npm test        # zusätzlich Äquiva
 npm run typecheck
 ```
 
+## Mehrere Schemas
+
+Mit `"schemas": ["APP_CORE", "APP_UTIL"]` misst ein Lauf die Objekte mehrerer Schemas. Die Laufzeit `cov$` und die
+Treffertabelle bleiben im Schema des angemeldeten Benutzers (oder `runtimeSchema`); instrumentierter Code anderer Schemas
+ruft sie qualifiziert auf (`benutzer.cov$`), und der Lauf vergibt `EXECUTE` auf `cov$` an diese Schemas. Kompiliert wird
+im Schema des Objekts. Mindestrechte des angemeldeten Benutzers:
+
+| Recht | Wofür |
+|---|---|
+| `CREATE ANY PROCEDURE` (`CREATE ANY TYPE`, `CREATE ANY TRIGGER` für Type Bodies und Trigger) | instrumentierten Code und das Original in fremden Schemas kompilieren |
+| `EXECUTE ANY PROCEDURE` oder `EXECUTE` auf den Objekten | Quelltext in `ALL_SOURCE` sehen und die Tests ausführen lassen |
+| eigene: `CREATE PROCEDURE`, `CREATE TABLE` | `cov$`, Treffertabelle, Wiederherstellungs-Journal |
+
+Die Tests (`tests`) laufen mit den Rechten ihres Besitzers wie sonst auch. Ohne `schemas` gilt das bisherige Verhalten:
+Laufzeit und Objekte liegen in `schema`.
+
 ## Grenzen
 
-- Objekte müssen im verbundenen Schema liegen (Laufzeit `cov$` wird dort installiert).
-- Treffer aus anderen Sessions (Scheduler-Jobs, parallele Abfragen) werden nicht eingesammelt.
+- Treffer aus anderen Sessions: Während des Messlaufs steht der Lauf in `plcov_runs`. Eine andere Session des
+  Schema-Benutzers, die instrumentierten Code ausführt (ein Scheduler-Job, den ein Test startet), zählt unter dem Eintrag
+  `#background` und schreibt ihre Treffer beim Abmelden (Trigger `cov$_logoff`, nur während des Laufs vorhanden, braucht
+  `CREATE TRIGGER`) und alle 1000 Anweisungen. Der Lauf wartet bis zu einer Minute auf laufende Jobs. Sessions anderer
+  Benutzer und Parallel-Query-Slaves, die weniger als 1000 Anweisungen ausführen, gehen weiterhin verloren.
 - Nicht gemessen: dynamisches SQL (die Anweisung `EXECUTE IMMEDIATE` selbst zählt), mit `wrap` verschlüsselter Code und
   Trigger-`WHEN`-Klauseln (Oracle erlaubt dort keine PL/SQL-Aufrufe; ob der Rumpf lief, zeigt seine erste Anweisung). Der
   Bericht listet solche Stellen unter „Nicht gemessen“.

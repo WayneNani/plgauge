@@ -35,6 +35,11 @@ ausgeführt haben).
 Projektdatei `pltest.json` (oder `plmut.json`): `install` (Skripte), `mutate` (Globs der Dateien),
 `tests` (utPLSQL-Pfade).
 
+Mehrere Schemas: Eine Einheit, die mit Schema geschrieben ist (`CREATE OR REPLACE PACKAGE BODY app_util.calc …`), wird in
+diesem Schema mutiert. Das Laufzeitpaket `plmut_ctl` bleibt beim angemeldeten Benutzer und wird qualifiziert aufgerufen;
+der Lauf vergibt `EXECUTE` darauf. Rechte wie bei der Coverage (`CREATE ANY PROCEDURE`, `EXECUTE ANY PROCEDURE`). Der
+Kontext für Schleifengrenzen heißt pro Schema anders, so stören sich Läufe verschiedener Benutzer in einer Datenbank nicht.
+
 ## Zusammen mit Coverage
 
 Coverage und Mutation lesen dieselbe Projektdatei, und die Ergebnisse passen zueinander:

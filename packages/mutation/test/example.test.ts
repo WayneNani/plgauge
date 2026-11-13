@@ -5,7 +5,9 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { CoverageIndex, crossCheck, projectCoverageConfig, runMutation, type Result } from '@pltest/mutation';
 import { runCoverage, toCoverageExport } from '@pltest/coverage';
@@ -68,3 +70,50 @@ for (const mode of ['naive', 'schema'] as const) {
     assert.deepEqual(wrong, []);
   });
 }
+
+// Several schemas (A4): units written as other_schema.name. Needs CREATE ANY PROCEDURE and
+// EXECUTE ANY PROCEDURE for the user of PLMUT_DB and a second schema, e.g. PLMUT_LIB_SCHEMA=DEMO_LIB.
+const lib = process.env.PLMUT_LIB_SCHEMA;
+test('several schemas: a unit of another schema is mutated in both modes', { skip: (!db || !lib) && 'PLMUT_DB / PLMUT_LIB_SCHEMA nicht gesetzt', timeout: 600_000 }, async () => {
+  const L = lib!.toLowerCase();
+  const p = mkdtempSync(join(tmpdir(), 'pltest-multi-'));
+  mkdirSync(join(p, 'src'));
+  writeFileSync(join(p, 'src', 'calc.sql'), `CREATE OR REPLACE PACKAGE ${L}.pltest_mcalc AS
+  FUNCTION fee(n NUMBER) RETURN NUMBER;
+END;
+/
+CREATE OR REPLACE PACKAGE BODY ${L}.pltest_mcalc AS
+  FUNCTION fee(n NUMBER) RETURN NUMBER IS
+  BEGIN
+    IF n > 100 THEN
+      RETURN n * 0.02;
+    END IF;
+    RETURN 2;
+  END;
+END;
+/
+`);
+  writeFileSync(join(p, 'src', 'test.sql'), `CREATE OR REPLACE PACKAGE pltest_mcalc_test AS
+  --%suite
+
+  --%test
+  PROCEDURE big;
+  --%test
+  PROCEDURE small;
+END;
+/
+CREATE OR REPLACE PACKAGE BODY pltest_mcalc_test AS
+  PROCEDURE big IS BEGIN ut.expect(${L}.pltest_mcalc.fee(1000)).to_equal(20); END;
+  PROCEDURE small IS BEGIN ut.expect(${L}.pltest_mcalc.fee(50)).to_equal(2); END;
+END;
+/
+`);
+  writeFileSync(join(p, 'pltest.json'), JSON.stringify({ install: ['src/calc.sql', 'src/test.sql'], mutate: ['src/calc.sql'], tests: ['pltest_mcalc_test'] }));
+  const verdict = (rs: Result[]) => rs.map((r) => `${r.op} ${r.original.trim()} → ${r.mutated.trim()}: ${r.status === 'NOT_COVERED' ? 'SURVIVED' : r.status}`).sort();
+  const schema = await runMutation({ dir: p, dbUrls: [db!], mode: 'schema' });
+  const naive = await runMutation({ dir: p, dbUrls: [db!], mode: 'naive', skipInstall: true });
+  assert.equal(schema.results.length, 6); // RET ×2, ROR ×3 on n > 100, AOR on n * 0.02
+  assert.deepEqual(verdict(schema.results), verdict(naive.results));
+  // the boundary n > 100 → n >= 100 is not tested: survives; everything else is killed
+  assert.deepEqual(schema.results.filter((r) => r.status === 'SURVIVED').map((r) => r.mutated.trim()), ['n >= 100']);
+});

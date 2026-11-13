@@ -53,6 +53,13 @@ Ausdrücke mit Oracles Rangfolge. Coverage setzt darauf ihre Sonden, Mutation ih
 der Parser nicht versteht, wird als undurchsichtiger Bereich behandelt: Er kostet die Messstellen
 darin, erzeugt aber nie falsche. Abgleich mit den alten Fassungen: `baseline/plmut/PARITY.md`.
 
+## Stand
+
+Alle Phasen des Umsetzungsplans sind abgeschlossen, dazu aus der Ausbaustufe: CI-Formate und Schwellen mit Vorlagen
+(A1, A2), größerer Korpus mit 898 Bodies (A5), Compound-Trigger, einfache CASE-Ausdrücke und FOR-Filter (A6),
+Diff-Modus (A7), Treffer aus Scheduler-Jobs (A8), unzuverlässige Tests in der Coverage (A9) und mehrere Schemas (A4).
+Zurückgestellt: die Versionsmatrix mit 19c (A3). Die Auswertung an echtem Code steht in `eval/console/EVAL.md` (A11).
+
 ## Wiederherstellungs-Journal
 
 Bevor pltest ein Objekt instrumentiert oder mutiert, sichert es den Originalquelltext und die

@@ -1,0 +1,6 @@
+{
+  "install": [],
+  "mutate": ["src/CONSOLE.pkb"],
+  "tests": ["console_test", "console_parameter_test", "console_config_test", "console_utils_test",
+            "console_timers_counters_test", "console_purge_test"]
+}

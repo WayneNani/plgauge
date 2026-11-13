@@ -26,8 +26,10 @@ export interface LineCoverage {
  * Runs the given paths with a JUnit reporter; with coverageSchema also with utPLSQL's
  * own coverage (Sonar format) for comparison.
  */
-export async function runTestsJunit(conn: oracledb.Connection, paths: string[], coverageSchema: string | null) {
+export async function runTestsJunit(conn: oracledb.Connection, paths: string[], coverageSchema: string | string[] | null) {
   const pathList = paths.map((p) => `'${p.replace(/'/g, "''")}'`).join(', ');
+  const schemes = coverageSchema === null ? [] : Array.isArray(coverageSchema) ? coverageSchema : [coverageSchema];
+  const schemeList = schemes.length ? schemes.map((s) => `'${s.replace(/'/g, "''")}'`).join(', ') : "''";
   const t0 = performance.now();
   const res = await conn.execute(
     `declare
@@ -42,7 +44,7 @@ export async function runTestsJunit(conn: oracledb.Connection, paths: string[], 
        ut_runner.run(
          a_paths => ut_varchar2_list(${pathList}),
          a_reporters => l_reporters,
-         a_coverage_schemes => case when :with_cov = 1 then ut_varchar2_list(:schema) end
+         a_coverage_schemes => case when :with_cov = 1 then ut_varchar2_list(${schemeList}) end
        );
        :junit := l_junit.get_lines_cursor(a_initial_timeout => 1, a_timeout_sec => 1);
        if :with_cov = 1 then
@@ -52,8 +54,7 @@ export async function runTestsJunit(conn: oracledb.Connection, paths: string[], 
        end if;
      end;`,
     {
-      with_cov: coverageSchema ? 1 : 0,
-      schema: coverageSchema ?? '',
+      with_cov: schemes.length ? 1 : 0,
       junit: { dir: oracledb.BIND_OUT, type: oracledb.CURSOR },
       sonar: { dir: oracledb.BIND_OUT, type: oracledb.CURSOR },
     },

@@ -129,6 +129,14 @@ export function mutatedUnit(m: Mutant): string {
   ]).toString('utf8');
 }
 
+/** The schema of a qualified unit name (dictionary form), or undefined. */
+export function objectOwner(name: string): string | undefined {
+  const i = name.lastIndexOf('.');
+  if (i < 0) return undefined;
+  const o = name.slice(0, i).trim();
+  return o.startsWith('"') ? o.replace(/"/g, '') : o.toUpperCase();
+}
+
 /** The unit name as stored in the data dictionary: without schema, upper case unless quoted. */
 export function objectName(name: string): string {
   const i = name.lastIndexOf('.');

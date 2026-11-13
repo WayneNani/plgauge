@@ -143,3 +143,110 @@ end plcov_constructs_trg;`;
     await conn.close();
   }
 });
+
+// Several schemas (A4): needs a second schema and CREATE ANY PROCEDURE, EXECUTE ANY PROCEDURE for the
+// connected user, e.g. PLCOV_LIB_SCHEMA=DEMO_LIB (ci/setup-db.sh creates it as APP_LIB).
+const lib = process.env.PLCOV_LIB_SCHEMA;
+test('several schemas: code of another schema is measured, the runtime stays with the user', { skip: (!m || !lib) && 'PLCOV_DB / PLCOV_LIB_SCHEMA not set', timeout: 300_000 }, async () => {
+  const conn = await oracledb.getConnection({ user: m![1], password: m![2], connectString: m![3] });
+  const L = lib!.toUpperCase();
+  try {
+    await conn.execute(`create or replace package ${L}.pltest_calc is function grade(n number) return varchar2; end;`);
+    await conn.execute(`create or replace package body ${L}.pltest_calc is
+      function grade(n number) return varchar2 is
+      begin
+        if n >= 90 then return 'A'; elsif n >= 50 then return 'B'; end if;
+        return 'C';
+      end;
+    end;`);
+    await conn.execute(`create or replace package pltest_multi_test is
+      --%suite
+
+      --%test
+      procedure top;
+      --%test
+      procedure middle;
+    end;`);
+    await conn.execute(`create or replace package body pltest_multi_test is
+      procedure top is begin ut.expect(${L}.pltest_calc.grade(95)).to_equal('A'); end;
+      procedure middle is begin ut.expect(${L}.pltest_calc.grade(60)).to_equal('B'); end;
+    end;`);
+    const { runCoverage } = await import('@pltest/coverage');
+    const r = await runCoverage({
+      user: m![1], password: m![2], connectString: m![3], schema: m![1], schemas: [L], include: '^PLTEST_CALC$',
+      tests: ['pltest_multi_test'], baselineRuns: 1,
+    }, () => {});
+    assert.ok(r.equivalent, 'same results with instrumentation');
+    const o = r.objects.find((x) => x.name === 'PLTEST_CALC')!;
+    assert.equal(o.owner, L);
+    assert.equal(o.instrumentError, undefined);
+    assert.deepEqual(o.metrics.stmt, { covered: 3, total: 4 }); // IF and two RETURNs ran, RETURN 'C' never
+    assert.equal(o.lineTests[4]?.length, 2, 'both tests reach the IF');
+    // the original code is back
+    const src = await conn.execute<[string]>(`select text from all_source where owner = :o and name = 'PLTEST_CALC' and type = 'PACKAGE BODY' and text like '%cov$%'`, { o: L });
+    assert.equal(src.rows!.length, 0);
+  } finally {
+    await conn.execute(`drop package pltest_multi_test`).catch(() => undefined);
+    await conn.execute(`drop package ${L}.pltest_calc`).catch(() => undefined);
+    await conn.close();
+  }
+});
+
+// Other sessions (A8): a scheduler job started by a test. Needs CREATE JOB.
+test('hits of a scheduler job started by a test are collected under #background', { skip: !m && 'PLCOV_DB not set', timeout: 300_000 }, async () => {
+  const conn = await oracledb.getConnection({ user: m![1], password: m![2], connectString: m![3] });
+  const canJob = (await conn.execute<[number]>(`select count(*) from session_privs where privilege = 'CREATE JOB'`)).rows![0][0] > 0;
+  if (!canJob) {
+    await conn.close();
+    return; // nothing to check without the privilege
+  }
+  try {
+    await conn.execute(`create or replace procedure pltest_bg_work(n number) is
+      s number := 0;
+    begin
+      for i in 1 .. n loop
+        s := s + i;
+      end loop;
+      if s > 10 then
+        dbms_output.put_line(s);
+      end if;
+    end;`);
+    await conn.execute(`create or replace package pltest_bg_test is
+      --%suite
+
+      --%test
+      procedure job_runs;
+    end;`);
+    await conn.execute(`create or replace package body pltest_bg_test is
+      procedure job_runs is
+        n number;
+      begin
+        dbms_scheduler.create_job(job_name => 'PLTEST_BG_JOB', job_type => 'PLSQL_BLOCK',
+          job_action => 'begin pltest_bg_work(5); end;', enabled => true, auto_drop => true);
+        for i in 1 .. 60 loop
+          select count(*) into n from user_scheduler_jobs where job_name = 'PLTEST_BG_JOB';
+          exit when n = 0;
+          dbms_session.sleep(0.5);
+        end loop;
+        ut.expect(n).to_equal(0);
+      end;
+    end;`);
+    const { runCoverage } = await import('@pltest/coverage');
+    const r = await runCoverage({
+      user: m![1], password: m![2], connectString: m![3], schema: m![1], include: '^PLTEST_BG_WORK$', tests: ['pltest_bg_test'], baselineRuns: 1,
+    }, () => {});
+    const o = r.objects.find((x) => x.name === 'PLTEST_BG_WORK')!;
+    assert.equal(o.instrumentError, undefined);
+    assert.deepEqual(o.metrics.stmt, { covered: 4, total: 4 }, 'the job ran every statement');
+    const bg = r.tests.findIndex((t) => t.path === '#background');
+    assert.ok(bg >= 0, 'background bucket');
+    assert.ok(o.statements.every((s) => s.tests?.includes(bg)));
+    const left = await conn.execute<[number]>(`select count(*) from user_triggers where trigger_name = 'COV$_LOGOFF'`);
+    assert.equal(left.rows![0][0], 0, 'logoff trigger removed after the run');
+  } finally {
+    await conn.execute(`begin dbms_scheduler.drop_job('PLTEST_BG_JOB', force => true); end;`).catch(() => undefined);
+    await conn.execute(`drop package pltest_bg_test`).catch(() => undefined);
+    await conn.execute(`drop procedure pltest_bg_work`).catch(() => undefined);
+    await conn.close();
+  }
+});

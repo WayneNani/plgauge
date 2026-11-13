@@ -14,7 +14,7 @@
  * so the worker resets package state when it switches mutants), plmut_ctl.active()
  * elsewhere. ID -1 is the recording run.
  */
-import { objectName, withoutCreate, type Mutant, type Point, type SourceFile, type Unit } from './mutant.js';
+import { objectName, objectOwner, withoutCreate, type Mutant, type Point, type SourceFile, type Unit } from './mutant.js';
 
 export interface Region {
   start: number;
@@ -29,6 +29,8 @@ export interface SchemaUnit {
   type: string;
   /** Data dictionary name. */
   name: string;
+  /** Schema of a qualified unit (CREATE … other_schema.name); else the connected user's. */
+  owner?: string;
   /** Generated text without CREATE, as Oracle stores it: compile error positions refer to it. */
   text: string;
   /** The unit's original text without CREATE. */
@@ -50,7 +52,10 @@ interface Node {
  * Rewrites every unit that has mutants. Mutants in dropped are left out (they did not
  * compile); points in naive are not switched (their mutants run with the oracle rewriter).
  */
-export function buildSchema(ms: Mutant[], dropped: Set<number> = new Set(), naive: Set<Point> = new Set()): SchemaUnit[] {
+/**
+ * runtimeOwner: the schema of plmut_ctl. Units of other schemas call it qualified (A4).
+ */
+export function buildSchema(ms: Mutant[], dropped: Set<number> = new Set(), naive: Set<Point> = new Set(), runtimeOwner?: string): SchemaUnit[] {
   const byUnit = new Map<Unit, { f: SourceFile; points: Map<Point, Mutant[]> }>();
   for (const m of ms) {
     let e = byUnit.get(m.unitRef);
@@ -64,7 +69,7 @@ export function buildSchema(ms: Mutant[], dropped: Set<number> = new Set(), naiv
   for (const [u, { f, points }] of byUnit) {
     const fullOriginal = f.src.subarray(u.start, u.end).toString('utf8');
     const su: SchemaUnit = {
-      key: `${f.path}#${u.type} ${u.name}`, type: u.type, name: objectName(u.name),
+      key: `${f.path}#${u.type} ${u.name}`, type: u.type, name: objectName(u.name), owner: objectOwner(u.name),
       text: '', original: withoutCreate(fullOriginal), regions: [], mutants: [], loops: 0,
     };
     const nodes: Node[] = [];
@@ -90,12 +95,13 @@ export function buildSchema(ms: Mutant[], dropped: Set<number> = new Set(), naiv
       }
     }
     const roots = nest(nodes);
-    const r = new Renderer(f.src, su, 'plmut_ctl.active()');
+    const ctl = su.owner && runtimeOwner && su.owner !== runtimeOwner.toUpperCase() ? `${runtimeOwner.toLowerCase()}.plmut_ctl` : 'plmut_ctl';
+    const r = new Renderer(f.src, su, `${ctl}.active()`, ctl);
     let start = u.start;
     if (u.decl >= 0) {
       r.active = 'plmut$a';
       r.write(f.src.subarray(u.start, u.decl).toString('utf8'));
-      r.write('\n  plmut$a CONSTANT PLS_INTEGER := plmut_ctl.active;');
+      r.write(`\n  plmut$a CONSTANT PLS_INTEGER := ${ctl}.active;`);
       start = u.decl;
     }
     r.rangeWith(start, u.end, roots);
@@ -130,7 +136,7 @@ const identChar = (s: string) => s.length > 0 && identByte(s.charCodeAt(0));
 
 class Renderer {
   b = '';
-  constructor(private src: Buffer, private su: SchemaUnit, public active: string) {}
+  constructor(private src: Buffer, private su: SchemaUnit, public active: string, private ctl = 'plmut_ctl') {}
 
   write(s: string) {
     this.b += s;
@@ -159,7 +165,7 @@ class Renderer {
     if (n.loop > 0) {
       // Counts iterations in the recording run and while a mutant is active; beyond
       // the recorded maximum ×10 the guard aborts (deterministic timeout).
-      this.write(` IF ${a} <> 0 THEN plmut_ctl.tick(${n.loop}); END IF;`);
+      this.write(` IF ${a} <> 0 THEN ${this.ctl}.tick(${n.loop}); END IF;`);
       return;
     }
     if (!n.ms.length) {
@@ -175,13 +181,13 @@ class Renderer {
     switch (true) {
       case p.kind === 'stmt': {
         const id = n.ms[0].id;
-        this.write(`IF ${a} = -1 THEN plmut_ctl.reach(${id}, 1); END IF; IF ${a} <> ${id} THEN `);
+        this.write(`IF ${a} = -1 THEN ${this.ctl}.reach(${id}, 1); END IF; IF ${a} <> ${id} THEN `);
         this.orig(n);
         this.write(' END IF;');
         break;
       }
       case p.kind === 'insert': {
-        this.write(` IF ${a} = -1 THEN plmut_ctl.reach(${base}, ${count}); END IF;`);
+        this.write(` IF ${a} = -1 THEN ${this.ctl}.reach(${base}, ${count}); END IF;`);
         for (const m of n.ms) {
           this.write(` IF ${a} = ${m.id} THEN `);
           const vs = this.b.length;
@@ -192,7 +198,7 @@ class Renderer {
         break;
       }
       case p.kind === 'bool' && p.ctx === 'sql': {
-        this.write(`(CASE CASE ${a} WHEN -1 THEN plmut_ctl.hit(${base}, ${count}) ELSE ${a} END`);
+        this.write(`(CASE CASE ${a} WHEN -1 THEN ${this.ctl}.hit(${base}, ${count}) ELSE ${a} END`);
         for (const m of n.ms) {
           this.write(` WHEN ${m.id} THEN `);
           const vs = this.b.length;
@@ -208,7 +214,7 @@ class Renderer {
       }
       default: {
         // bool in PL/SQL, value anywhere
-        this.write(`(CASE CASE ${a} WHEN -1 THEN plmut_ctl.hit(${base}, ${count}) ELSE ${a} END`);
+        this.write(`(CASE CASE ${a} WHEN -1 THEN ${this.ctl}.hit(${base}, ${count}) ELSE ${a} END`);
         for (const m of n.ms) {
           this.write(` WHEN ${m.id} THEN `);
           const vs = this.b.length;

@@ -3,7 +3,25 @@
  *
  * Probes only count in package memory (associative arrays); nothing is written
  * per hit. flush() persists the counters in one autonomous transaction.
+ *
+ * Other sessions (A8): while a run is registered in plcov_runs, a session that is not the
+ * runner (a scheduler job started by a test, say) records its hits under the test name
+ * "#background" and writes them itself: every 1000 statements and at logoff (trigger
+ * cov$_logoff, only present during the run).
  */
+
+export const RUNS_TABLE = `
+create table plcov_runs (
+  run_id  varchar2(64) primary key,
+  started timestamp default systimestamp
+)`;
+
+export const LOGOFF_TRIGGER = `
+create or replace trigger cov$_logoff before logoff on schema
+begin
+  cov$.flush_background;
+exception when others then null;
+end;`;
 
 export const HITS_TABLE = `
 create table plcov_hits (
@@ -34,6 +52,11 @@ create or replace package cov$ authid definer is
   procedure per_test(p_on boolean);
   procedure reset;
   procedure flush(p_run varchar2);
+  /* Runner: makes the run visible to other sessions / ends that. */
+  procedure start_run(p_run varchar2);
+  procedure stop_run(p_run varchar2);
+  /* Other sessions: write their hits (called by the logoff trigger). */
+  procedure flush_background;
 end cov$;`;
 
 /* Recording logic shared by the condition probes c and n (inlined: one call less per condition). */
@@ -86,8 +109,15 @@ create or replace package body cov$ is
   g_names t_names;   -- id -> test name ('#owner.package' = suite setup outside a test)
   g_ps t_set; g_pb t_set; g_pc t_set; g_pd t_set;
 
+  -- other sessions during a run
+  g_runner boolean := false;
+  g_bg     boolean := false;
+  g_bg_run varchar2(64);
+  g_bg_cnt pls_integer := 0;
+  g_partial boolean := false;   -- periodic flush of another session: keep open loops
+
   procedure set_test is
-    l_name varchar2(400) := sys_context('UT3_INFO', 'TEST_NAME');
+    l_name varchar2(400) := case when g_bg then '#background' else sys_context('UT3_INFO', 'TEST_NAME') end;
     l_empty t_num;
   begin
     if l_name is null then
@@ -174,6 +204,14 @@ create or replace package body cov$ is
       set_test;
       g_ps(g_tid)(p_s) := 1;
     end if;
+    if g_bg then
+      g_bg_cnt := g_bg_cnt + 1;
+      if g_bg_cnt >= 1000 then
+        g_partial := true;
+        flush_background;
+        g_partial := false;
+      end if;
+    end if;
   exception when others then null;
   end;
 
@@ -236,6 +274,7 @@ create or replace package body cov$ is
     pragma autonomous_transaction;
     k  pls_integer;
     ks varchar2(200);
+    l_li t_num;   -- variables before the nested subprograms
     procedure put(p_kind varchar2, p_k varchar2, p_hits pls_integer, p_test varchar2 := null) is
     begin
       insert into plcov_hits (run_id, kind, k, hits, test) values (p_run, p_kind, p_k, p_hits, p_test);
@@ -245,11 +284,15 @@ create or replace package body cov$ is
       return case p when 0 then 'T' when 1 then 'F' else 'N' end;
     end;
   begin
-    k := g_li.first;
-    while k is not null loop
-      close_loop(k);
+    if g_partial then
+      l_li := g_li;
+    else
       k := g_li.first;
-    end loop;
+      while k is not null loop
+        close_loop(k);
+        k := g_li.first;
+      end loop;
+    end if;
     k := g_s.first; while k is not null loop put('S', k, g_s(k)); k := g_s.next(k); end loop;
     k := g_b.first; while k is not null loop put('B', k, g_b(k)); k := g_b.next(k); end loop;
     k := g_c.first;
@@ -281,9 +324,46 @@ create or replace package body cov$ is
     end loop;
     commit;
     reset;
+    if g_partial then g_li := l_li; end if;
+  end;
+
+  procedure start_run(p_run varchar2) is
+    pragma autonomous_transaction;
+  begin
+    delete from plcov_runs;
+    insert into plcov_runs (run_id) values (p_run);
+    commit;
+    g_runner := true;
+    g_bg := false;
+  end;
+
+  procedure stop_run(p_run varchar2) is
+    pragma autonomous_transaction;
+  begin
+    delete from plcov_runs where run_id = p_run;
+    commit;
+  end;
+
+  procedure flush_background is
+  begin
+    if g_bg and not g_runner and g_bg_run is not null then
+      g_bg_cnt := 0;
+      flush(g_bg_run);
+      g_tid := 0;
+    end if;
+  exception when others then null;
   end;
 
 begin
+  -- a session that loads cov$ while a run is registered is not the runner: record for it
+  begin
+    select max(run_id) into g_bg_run from plcov_runs;
+    if g_bg_run is not null then
+      g_bg := true;
+      g_pt := true;
+    end if;
+  exception when others then null;
+  end;
   for i in 1 .. 30 loop
     g_pow(i) := power(2, i - 1);
   end loop;

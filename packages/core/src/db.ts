@@ -118,8 +118,23 @@ export async function loadObject(conn: oracledb.Connection, owner: string, name:
   };
 }
 
-/** Compiles source (without CREATE) with the object's original settings. Returns error text or null. */
+/**
+ * Compiles source (without CREATE) with the object's original settings, in the object's
+ * schema (CURRENT_SCHEMA is switched for the statement if needed: objects of other
+ * schemas need CREATE ANY PROCEDURE / TYPE / TRIGGER). Returns error text or null.
+ */
 export async function compile(conn: oracledb.Connection, obj: SourceObject, source: string): Promise<string | null> {
+  const cur = (await conn.execute<[string]>(`select sys_context('USERENV', 'CURRENT_SCHEMA') from dual`)).rows![0][0];
+  if (cur === obj.owner) return compileHere(conn, obj, source);
+  await conn.execute(`alter session set current_schema = ${dbIdent(obj.owner)}`);
+  try {
+    return await compileHere(conn, obj, source);
+  } finally {
+    await conn.execute(`alter session set current_schema = ${dbIdent(cur)}`);
+  }
+}
+
+async function compileHere(conn: oracledb.Connection, obj: SourceObject, source: string): Promise<string | null> {
   const st = obj.settings;
   if (st.plsql_optimize_level) await conn.execute(`alter session set plsql_optimize_level = ${Number(st.plsql_optimize_level)}`);
   if (st.plsql_code_type) await conn.execute(`alter session set plsql_code_type = '${st.plsql_code_type.replace(/'/g, '')}'`);

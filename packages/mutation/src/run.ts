@@ -18,12 +18,12 @@ import { promisify } from 'node:util';
 import { join } from 'node:path';
 import oracledb from 'oracledb';
 import {
-  ensureJournal, loadObject, objectErrors, replaceSource, restoreAll, runScript, sha256, splitScript, touches,
+  dbIdent, ensureJournal, journalEntries, loadObject, objectErrors, replaceSource, restoreAll, runScript, sha256, splitScript, touches,
   type ChangedLines, type SourceObject,
 } from '@pltest/core';
 import type { CoverageExport } from '@pltest/coverage';
 import { CoverageIndex, unitLineOf } from './link.js';
-import { expand, mutatedUnit, objectName, unitKey, withoutCreate, type Mutant, type Point, type SourceFile } from './mutant.js';
+import { expand, mutatedUnit, objectName, objectOwner, unitKey, withoutCreate, type Mutant, type Point, type SourceFile } from './mutant.js';
 import { findPoints } from './find.js';
 import { buildSchema, locate, switchable, type SchemaUnit } from './schema.js';
 import {
@@ -153,7 +153,7 @@ export function sample<T>(items: T[], n: number, seed: number): T[] {
 
 const sleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
 const isCompanion = (text: string) => text.includes('Statement ignored') || text.includes('Item ignored');
-const lostConnection = (e?: Error) => !!e && /NJS-500|NJS-003|DPI-1010|DPI-1080|ORA-00028|ORA-03113|ORA-03135/.test(e.message);
+const lostConnection = (e?: Error) => !!e && /NJS-500|NJS-003|NJS-521|DPI-1010|DPI-1080|ORA-00028|ORA-03113|ORA-03135|ORA-07445/.test(e.message);
 
 class Worker {
   deploy!: oracledb.Connection;
@@ -203,7 +203,8 @@ class Worker {
       if (!m) continue;
       const type = m[1].toUpperCase().replace(/\s+/g, ' ');
       const name = objectName(m[2]);
-      const r = await this.deploy.execute<[string]>(`select status from user_objects where object_name = :n and object_type = :t`, { n: name, t: type });
+      const owner = objectOwner(m[2]) ?? (await this.currentSchema());
+      const r = await this.deploy.execute<[string]>(`select status from all_objects where owner = :o and object_name = :n and object_type = :t`, { o: owner, n: name, t: type });
       if (r.rows?.[0]?.[0] !== 'VALID') out.push(`${type} ${name}`);
     }
     return out;
@@ -213,15 +214,32 @@ class Worker {
     for (const c of [this.test?.conn, this.deploy, this.monitor]) await c?.close().catch(() => {});
   }
 
-  /** The database object of a unit, loaded once (it goes into the restore journal). */
+  /**
+   * The database object of a unit, loaded once (it goes into the restore journal). A unit
+   * written with a schema (other_schema.name) lives there (A4); the schema mode then gives
+   * that schema the right to call plmut_ctl.
+   */
   async object(key: string, type: string, name: string): Promise<SourceObject> {
     let o = this.objects.get(key);
     if (!o) {
-      const owner = (await this.deploy.execute<[string]>(`select sys_context('USERENV','CURRENT_SCHEMA') from dual`)).rows![0][0];
+      const user = await this.currentSchema();
+      const owner = objectOwner(name) ?? user;
       o = await loadObject(this.deploy, owner, objectName(name), type);
+      if (owner !== user && !this.granted.has(owner)) {
+        await this.deploy.execute(`grant execute on plmut_ctl to ${dbIdent(owner)}`).catch(() => {});
+        this.granted.add(owner);
+      }
       this.objects.set(key, o);
     }
     return o;
+  }
+
+  schemaName?: string;
+  private granted = new Set<string>();
+
+  async currentSchema(): Promise<string> {
+    this.schemaName ??= (await this.deploy.execute<[string]>(`select sys_context('USERENV','CURRENT_SCHEMA') from dual`)).rows![0][0];
+    return this.schemaName;
   }
 
   /** Compiles a unit's new text; returns the compile errors (empty = valid). */
@@ -246,6 +264,49 @@ class Worker {
     this.lastUnit = '';
   }
 
+  retired = false;
+
+  /** Whether the deploy connection still answers. */
+  async alive(): Promise<boolean> {
+    try {
+      await this.deploy.execute('select 1 from dual');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * New connections after a broken one: the originals come back from the restore journal
+   * (the database may hold a mutated unit), then the schema build is installed again.
+   */
+  async reopen(): Promise<boolean> {
+    await this.close();
+    this.objects.clear();
+    this.changed.clear();
+    this.lastUnit = '';
+    this.schemaName = undefined;
+    this.granted.clear();
+    try {
+      this.deploy = await oracledb.getConnection(this.db);
+      this.monitor = await oracledb.getConnection(this.db);
+      this.test = await newSession(this.db);
+      await ensureJournal(this.deploy);
+      const mine = (await journalEntries(this.deploy)).filter((e) => e.tool === 'mutation');
+      if (mine.length) await restoreAll(this.deploy, mine.map((e) => e.object), () => {});
+      await installRuntime(this.deploy);
+      if (this.schema) {
+        await this.installSchema(this.schema);
+        if (this.loopLimits) await setLoopLimits(this.test, this.loopLimits);
+      }
+      this.logf(`Worker${this.name} neu verbunden`);
+      return true;
+    } catch (e) {
+      this.logf(`Neuaufbau${this.name} gescheitert: ${firstLine(e as Error)}`);
+      return false;
+    }
+  }
+
   async reconnectTest(): Promise<void> {
     await this.test.conn.close().catch(() => {});
     this.test = await newSession(this.db);
@@ -263,7 +324,8 @@ class Worker {
   }
 
   classify(res: Result, run: RunResult): void {
-    if (run.committed) {
+    // When the tests commit by themselves, a commit says nothing about the mutant.
+    if (run.committed && !this.run.testsCommit) {
       res.sideEffect = true;
       this.logf(`WARNUNG${this.name}: Mutant ${res.id} hat einen Commit ausgelöst; Daten dieser Datenbank können verändert sein`);
     }
@@ -339,7 +401,7 @@ class Worker {
   async installSchema(units: SchemaUnit[]): Promise<void> {
     await installControl(this.deploy);
     for (const su of units) {
-      const errs = await this.compileUnit(su.key, su.type, su.name, su.text);
+      const errs = await this.compileUnit(su.key, su.type, su.owner ? `"${su.owner}"."${su.name}"` : su.name, su.text);
       if (errs.length) throw new Error(`${su.key} ungültig${this.name}: ${errs.slice(0, 3).map((e) => e.text).join('; ')}`);
     }
   }
@@ -435,25 +497,50 @@ class Run {
   }
 
   /** Runs fn for every mutant, spread over all workers; results in input order. */
+  /**
+   * Runs fn for every mutant, spread over all workers; results in input order. A worker
+   * whose database connection breaks (a crashed server process, say) is rebuilt and tries
+   * the mutant again; if that fails it retires and the others take its mutants.
+   */
   async dispatch(ms: Mutant[], fn: (w: Worker, m: Mutant) => Promise<Result>, stop: () => boolean): Promise<Result[]> {
     const results: (Result | undefined)[] = new Array(ms.length);
     let next = 0;
+    const again: number[] = [];
+    const broken = (r: Result) => r.status === 'ERROR' && lostConnection(new Error(r.detail ?? ''));
     await Promise.all(this.workers.map(async (w) => {
-      while (!stop()) {
-        const i = next++;
+      while (!stop() && !w.retired) {
+        const i = again.length ? again.shift()! : next++;
         if (i >= ms.length) return;
-        const r = await fn(w, ms[i]);
+        let r = await fn(w, ms[i]);
+        if (broken(r) || !(await w.alive())) {
+          this.logf(`Worker${w.name}: Verbindung verloren (${r.detail ?? 'Verwaltungsverbindung'}), baue neu auf …`);
+          if (await w.reopen()) {
+            r = await fn(w, ms[i]);
+          } else {
+            w.retired = true;
+            again.push(i);
+            this.logf(`Worker${w.name} scheidet aus, die anderen übernehmen seine Mutanten`);
+            return;
+          }
+        }
         if (r.sideEffect) await w.resetAfterSideEffect();
         results[i] = r;
         this.progress(w, r);
       }
     }));
+    // all workers retired with work left: nothing more can run
+    if (again.length || next < ms.length) {
+      if (this.workers.every((w) => w.retired)) throw new Error('alle Worker-Datenbanken ausgefallen');
+    }
     return results.filter((r): r is Result => !!r);
   }
 
   async restoreEverywhere() {
     await Promise.all(this.workers.map((w) => w.restoreAll()));
   }
+
+  /** The baseline committed: commits under mutants are no side effect of theirs. */
+  testsCommit = false;
 
   shareBaseline() {
     for (const h of this.workers.slice(1)) Object.assign(h, { limitMs: this.primary.limitMs, passing: this.primary.passing, excluded: this.primary.excluded, flaky: this.primary.flaky });
@@ -469,6 +556,10 @@ class Run {
       await resetPackages(w.test);
       const r = await w.runTests(this.cfg.tests, 10 * 60_000);
       if (r.err) throw new Error(`Baseline: ${firstLine(r.err)}`);
+      if (r.committed && !this.testsCommit) {
+        this.testsCommit = true;
+        this.logf('Hinweis: Die Tests committen schon ohne Mutanten; Commits unter Mutanten gelten nicht als Nebenwirkung, kein Zurücksetzen');
+      }
       for (const t of r.tests) if (t.failed) failedNames.set(t.name, t.message);
       slowest = Math.max(slowest, r.elapsedMs);
       last = r.tests;
@@ -589,7 +680,7 @@ async function runSchema(run: Run, ms: Mutant[], stop: () => boolean): Promise<R
   const t0 = performance.now();
   await installControl(w.deploy);
   const rounds = await compileSchema(run, ms, dropped, naive);
-  const units = buildSchema(ms, new Set(dropped.keys()), naive);
+  const units = buildSchema(ms, new Set(dropped.keys()), naive, await w.currentSchema());
   w.schema = units;
   await Promise.all(run.workers.slice(1).map(async (h) => {
     h.schema = units;
@@ -642,8 +733,8 @@ async function compileSchema(run: Run, ms: Mutant[], dropped: Map<number, string
   const w = run.primary;
   for (let round = 1; round <= 20; round++) {
     let bad = false;
-    for (const su of buildSchema(ms, new Set(dropped.keys()), naive)) {
-      const errs = await w.compileUnit(su.key, su.type, su.name, su.text);
+    for (const su of buildSchema(ms, new Set(dropped.keys()), naive, await w.currentSchema())) {
+      const errs = await w.compileUnit(su.key, su.type, su.owner ? `"${su.owner}"."${su.name}"` : su.name, su.text);
       if (!errs.length) continue;
       bad = true;
       for (const e of errs) {

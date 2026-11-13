@@ -4,6 +4,7 @@
  * reading recorded hits and loop counts.
  */
 import oracledb from 'oracledb';
+import { createHash } from 'node:crypto';
 import { CTL_BODY, CTL_SPEC, CTX, MARKER_TABLE, RT_BODY, RT_SPEC } from './ddl.js';
 
 export interface ConnectConfig {
@@ -62,15 +63,27 @@ export async function installRuntime(conn: oracledb.Connection): Promise<void> {
   await compileDdl(conn, RT_BODY, 'PACKAGE BODY', 'PLMUT_RT');
 }
 
+/**
+ * A context name is global in the database: one per schema, so that runs of several users
+ * in one database do not take each other's context away. PLMUT_CTX for a user called PLMUT
+ * (as before), else PLMUT_CTX_<hash of the schema>.
+ */
+export function contextName(schema: string): string {
+  if (schema.toUpperCase() === 'PLMUT') return 'PLMUT_CTX';
+  return `PLMUT_CTX_${createHash('sha256').update(schema.toUpperCase()).digest('hex').slice(0, 12).toUpperCase()}`;
+}
+
 /** Context and plmut_ctl. */
 export async function installControl(conn: oracledb.Connection): Promise<void> {
+  const schema = (await conn.execute<[string]>(`select sys_context('USERENV','CURRENT_SCHEMA') from dual`)).rows![0][0];
+  const ctx = contextName(schema);
   try {
-    await conn.execute(CTX);
+    await conn.execute(CTX.replace(/plmut_ctx/i, ctx));
   } catch (e) {
     throw new Error(`CREATE CONTEXT (Recht CREATE ANY CONTEXT nötig): ${(e as Error).message}`);
   }
-  await compileDdl(conn, CTL_SPEC, 'PACKAGE', 'PLMUT_CTL');
-  await compileDdl(conn, CTL_BODY, 'PACKAGE BODY', 'PLMUT_CTL');
+  await compileDdl(conn, CTL_SPEC.replace(/PLMUT_CTX/g, ctx), 'PACKAGE', 'PLMUT_CTL');
+  await compileDdl(conn, CTL_BODY.replace(/PLMUT_CTX/g, ctx), 'PACKAGE BODY', 'PLMUT_CTL');
 }
 
 export interface TestResult {

@@ -19,7 +19,7 @@ import {
 import { instrument } from './instrument.js';
 import { analyze, type ObjectResult } from './analyze.js';
 import { newIds, type Hits, type ObjectMap, type TestHits, type TestInfo } from './model.js';
-import { HITS_TABLE, RUNTIME_BODY, RUNTIME_SPEC } from './runtime.js';
+import { HITS_TABLE, LOGOFF_TRIGGER, RUNS_TABLE, RUNTIME_BODY, RUNTIME_SPEC } from './runtime.js';
 
 export interface RunConfig {
   user: string;
@@ -27,6 +27,13 @@ export interface RunConfig {
   connectString: string;
   /** Schema whose code is measured. */
   schema: string;
+  /**
+   * Several schemas (A4): code objects of all of them are measured, the runtime cov$ stays in
+   * runtimeSchema (default: the connected user) and is called qualified. Needs CREATE ANY
+   * PROCEDURE (TYPE, TRIGGER for those) and GRANT on cov$; see README.
+   */
+  schemas?: string[];
+  runtimeSchema?: string;
   /** utPLSQL suite paths to run, e.g. ["demo"]. */
   tests: string[];
   /** Optional regular expression of object names to include / exclude. */
@@ -72,17 +79,25 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
   const say = (m: string) => { messages.push(m); log(m); };
   const conn = await connect(cfg);
   const schema = cfg.schema.toUpperCase();
+  const multi = !!cfg.schemas?.length;
+  const schemas = multi ? cfg.schemas!.map((s) => s.toUpperCase()) : [schema];
+  const rtOwner = (multi ? cfg.runtimeSchema ?? cfg.user : schema).toUpperCase();
   const restore: SourceObject[] = [];
   try {
-    await conn.execute(`alter session set current_schema = ${dbIdent(schema)}`);
+    await conn.execute(`alter session set current_schema = ${dbIdent(rtOwner)}`);
     const { banner, major } = await databaseInfo(conn);
     const sqlProbes = cfg.sqlProbes === 'auto' || cfg.sqlProbes === undefined ? major >= 23 : cfg.sqlProbes;
     say(`Datenbank: ${banner} · SQL-Sonden ${sqlProbes ? 'aktiv' : 'aus'}`);
 
     await installRuntime(conn);
     await ensureJournal(conn);
-    const objects = await loadObjects(conn, schema, { include: cfg.include, exclude: cfg.exclude, skip: ['COV$'] });
-    say(`${objects.length} Objekte gefunden: ${objects.map((o) => o.name).join(', ')}`);
+    const objects: SourceObject[] = [];
+    for (const s of schemas) objects.push(...(await loadObjects(conn, s, { include: cfg.include, exclude: cfg.exclude, skip: ['COV$'] })));
+    say(`${objects.length} Objekte gefunden: ${objects.map((o) => (multi ? `${o.owner}.${o.name}` : o.name)).join(', ')}`);
+    for (const owner of new Set(objects.map((o) => o.owner).filter((o) => o !== rtOwner))) {
+      // instrumented code of other schemas calls the runtime qualified
+      await conn.execute(`grant execute on ${dbIdent(rtOwner)}.cov$ to ${dbIdent(owner)}`);
+    }
 
     await runTests(conn, cfg.tests, null); // warm-up: utPLSQL builds its annotation cache on the first run
     say('1/4 Testlauf ohne Coverage …');
@@ -100,7 +115,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     }
     say('2/4 Testlauf mit utPLSQL-Coverage (DBMS_PROFILER) …');
     await fresh();
-    const utCov = await runTests(conn, cfg.tests, schema);
+    const utCov = await runTests(conn, cfg.tests, schemas);
 
     say('3/4 Instrumentieren und kompilieren …');
     const ids = newIds();
@@ -111,7 +126,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       const t0 = performance.now();
       let res;
       try {
-        res = instrument(obj.processed, schema, ids, { sqlProbes });
+        res = instrument(obj.processed, obj.owner, ids, { sqlProbes, runtime: obj.owner === rtOwner ? undefined : `${rtOwner.toLowerCase()}.cov$` });
       } catch (e) {
         maps.push({ error: `Parser: ${(e as Error).message}`, obj });
         say(`  ✗ ${obj.name}: ${(e as Error).message}`);
@@ -138,9 +153,17 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     const runId = randomUUID();
     const perTest = cfg.perTest !== false;
     await fresh();
-    await conn.execute(`begin cov$.reset; cov$.per_test(:p = 1); end;`, { p: perTest ? 1 : 0 });
-    const instrumentedRun = await runTests(conn, cfg.tests, null);
-    await conn.execute(`begin cov$.flush(:r); end;`, { r: runId });
+    await conn.execute(`begin cov$.reset; cov$.per_test(:p = 1); cov$.start_run(:r); end;`, { p: perTest ? 1 : 0, r: runId });
+    await conn.execute(LOGOFF_TRIGGER).catch((e) => say(`  Hinweis: ohne Logoff-Trigger (${(e as Error).message.split('\n')[0]}), andere Sessions schreiben nur alle 1000 Anweisungen`));
+    let instrumentedRun;
+    try {
+      instrumentedRun = await runTests(conn, cfg.tests, null);
+      await conn.execute(`begin cov$.flush(:r); end;`, { r: runId });
+      await waitForJobs(conn, say);
+    } finally {
+      await conn.execute(`begin cov$.stop_run(:r); end;`, { r: runId }).catch(() => {});
+      await conn.execute(`drop trigger cov$_logoff`).catch(() => {});
+    }
     const hits = await loadHits(conn, runId);
     await conn.execute(`delete from plcov_hits where run_id = :r`, { r: runId });
     await conn.commit();
@@ -162,7 +185,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     const equivalent = differing.length === 0 && baseline.run.tests.filter((t) => !flaky.has(key(t))).every((t) => instrumentedRun.run.tests.some((u) => key(u) === key(t)));
     for (const f of flaky) say(`  unzuverlässig (Ergebnis wechselt ohne Instrumentierung): ${f}`);
     for (const d of differing) say(`  abweichend mit Instrumentierung: ${d}`);
-    const tests = await loadTestCatalog(conn, schema, cfg.tests, baseline.run.tests, instrumentedRun.run.tests, hits);
+    const tests = await loadTestCatalog(conn, rtOwner, cfg.tests, baseline.run.tests, instrumentedRun.run.tests, hits);
     const testIndex = new Map(tests.map((t, k) => [t.path, k]));
     for (const t of tests) if (!t.setup && flaky.has(`${t.suite}::${t.description}`)) t.status = 'flaky';
     say(equivalent ? `Testergebnisse mit und ohne Instrumentierung identisch ✓${flaky.size ? ` (${flaky.size} unzuverlässige Tests ausgenommen)` : ''}` : 'ACHTUNG: Testergebnisse weichen ab!');
@@ -172,13 +195,13 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
         const lines = m.obj.processed.replace(/\n$/, '').split('\n');
         const empty = { covered: 0, total: 0 };
         return {
-          key: `${m.obj.type} ${schema}.${m.obj.name}`.toLowerCase(), owner: schema, name: m.obj.name, type: m.obj.type, lines,
+          key: `${m.obj.type} ${m.obj.owner}.${m.obj.name}`.toLowerCase(), owner: m.obj.owner, name: m.obj.name, type: m.obj.type, lines,
           metrics: { stmt: empty, branch: empty, cond: empty, mcdc: empty, loop: empty },
           statements: [], branches: [], decisions: [], loops: [], lineStatus: {}, lineHits: {}, lineTests: {}, gaps: [], findings: [],
           instrumentError: m.error, sourceSha256: sha256(m.obj.processed), rawSha256: sha256(m.obj.original),
         };
       }
-      const obj = objects.find((o) => o.name === m.name && o.type === m.type)!;
+      const obj = objects.find((o) => o.owner === m.owner && o.name === m.name && o.type === m.type)!;
       const r = analyze(m, hits, testIndex);
       r.sourceSha256 = sha256(obj.processed);
       r.rawSha256 = sha256(obj.original);
@@ -190,7 +213,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     return {
       generated: new Date().toISOString(),
       database: banner,
-      schema,
+      schema: multi ? schemas.join(',') : schema,
       sqlProbes,
       timings: { baselineMs: baseline.run.ms, utplsqlCoverageMs: utCov.run.ms, instrumentedMs: instrumentedRun.run.ms, instrumentMs, compileMs },
       baseline: baseline.run,
@@ -211,6 +234,19 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
   }
 }
 
+/** Scheduler jobs started by the tests write their hits when they end: wait for them (at most a minute). */
+async function waitForJobs(conn: oracledb.Connection, say: (m: string) => void) {
+  const running = async () => (await conn.execute<[number]>(`select count(*) from user_scheduler_running_jobs`)).rows![0][0];
+  let n = await running().catch(() => 0);
+  if (!n) return;
+  say(`  warte auf ${n} laufende Scheduler-Jobs …`);
+  for (let i = 0; i < 120 && n > 0; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    n = await running().catch(() => 0);
+  }
+  await new Promise((r) => setTimeout(r, 1000)); // their logoff writes the hits
+}
+
 export async function installRuntime(conn: oracledb.Connection) {
   try {
     await conn.execute(HITS_TABLE);
@@ -221,6 +257,11 @@ export async function installRuntime(conn: oracledb.Connection) {
     } catch (e2) {
       if (!(e2 as Error).message.includes('ORA-01430')) throw e2;
     }
+  }
+  try {
+    await conn.execute(RUNS_TABLE);
+  } catch (e) {
+    if (!(e as Error).message.includes('ORA-00955')) throw e;
   }
   await conn.execute(RUNTIME_SPEC);
   await conn.execute(RUNTIME_BODY);
@@ -305,7 +346,8 @@ async function loadTestCatalog(
   }
   for (const name of hits.perTest.keys()) {
     if (name.startsWith('#') && !tests.some((t) => t.path === name)) {
-      tests.push({ path: name, suite: name.slice(1), description: `Setup außerhalb eines Tests (${name.slice(1) || 'ohne utPLSQL'})`, setup: true, status: 'unknown', baselineStatus: 'unknown', ms: 0 });
+      const description = name === '#background' ? 'Andere Sessions (Scheduler-Jobs, parallele Abfragen)' : `Setup außerhalb eines Tests (${name.slice(1) || 'ohne utPLSQL'})`;
+      tests.push({ path: name, suite: name.slice(1), description, setup: true, status: 'unknown', baselineStatus: 'unknown', ms: 0 });
     }
   }
   return tests;

@@ -54,7 +54,10 @@ alter session set container=FREEPDB1;
 grant select on v_\\\$session to $APP;
 grant alter system to $APP;
 grant create any context to $APP;
-grant create view, create synonym, create materialized view to $APP;
+grant create view, create synonym, create materialized view, create job to $APP;
+-- a second schema for the tests with several schemas (PLCOV_LIB_SCHEMA / PLMUT_LIB_SCHEMA=${APP}_LIB)
+create user ${APP}_lib no authentication quota unlimited on users;
+grant create any procedure, execute any procedure to $APP;
 exit
 SQL" || { $C exec "$NAME" cat /tmp/grants.log >&2; exit 1; }
 echo "utPLSQL $UTPLSQL installiert" >&2
