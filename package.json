@@ -4,7 +4,7 @@
   "description": "Coverage (branches, conditions, MC/DC) and mutation testing for PL/SQL with utPLSQL",
   "scripts": {
     "typecheck": "tsc",
-    "test": "node --import tsx --test packages/*/test/*.test.ts",
+    "test": "node --import tsx --test --test-concurrency=1 packages/*/test/*.test.ts",
     "pltest": "tsx packages/cli/src/cli.ts",
     "parity:finder": "tsx scripts/finder-parity.ts",
     "parity:coverage": "tsx scripts/coverage-parity.ts",

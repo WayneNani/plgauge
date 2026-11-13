@@ -1,0 +1,61 @@
+# GitHub Actions: PL/SQL tests with coverage and mutation testing (pltest).
+# Copy to .github/workflows/plsql.yml of a project with pltest.json, adapt the thresholds.
+# pltest comes from your own Git server or a vendored copy, see PLTEST_REPO below.
+name: PL/SQL
+on:
+  push:
+  pull_request:
+
+env:
+  PLTEST_REPO: https://git.example.com/tools/pltest.git   # adapt
+  PLTEST_REF: main
+
+jobs:
+  plsql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0                       # the diff mode needs the merge base
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+      - name: pltest
+        run: |
+          git clone --depth 1 --branch "$PLTEST_REF" "$PLTEST_REPO" "$RUNNER_TEMP/pltest"
+          (cd "$RUNNER_TEMP/pltest" && npm ci)
+          echo "PLTEST=$RUNNER_TEMP/pltest/bin/pltest" >> "$GITHUB_ENV"
+      - name: Oracle 23ai Free and utPLSQL
+        run: echo "PLMUT_DB=$("$RUNNER_TEMP/pltest/ci/setup-db.sh" | tail -1)" >> "$GITHUB_ENV"
+      - name: Coverage
+        run: $PLTEST coverage . --out coverage --min-branch 70 --min-stmt 80
+      - name: Coverage of the changed code
+        if: github.event_name == 'pull_request'
+        run: $PLTEST coverage . --skip-install --out coverage-diff --diff "origin/${{ github.base_ref }}" --min-branch 80
+      - name: Export for GitHub and Sonar
+        if: always()
+        run: |
+          $PLTEST export coverage/coverage.json --format cobertura --src . --out coverage/cobertura.xml
+          $PLTEST export coverage/coverage.json --format sonar --src . --out coverage/sonar.xml
+          $PLTEST export coverage/coverage.json --format junit --out coverage/junit.xml
+      - name: Mutation testing (changed code)
+        if: github.event_name == 'pull_request'
+        run: >
+          $PLTEST mutate run . --skip-install --diff "origin/${{ github.base_ref }}"
+          --json mutation.json --report mutation.html --min-score 60
+      - name: Mutation testing (everything, nightly)
+        if: github.event_name == 'schedule'
+        run: $PLTEST mutate run . --skip-install --json mutation.json --report mutation.html
+      - name: Joint report
+        if: always() && hashFiles('mutation.json') != ''
+        run: $PLTEST report coverage/coverage.json --mutation mutation.json --out joint
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pltest-reports
+          path: |
+            coverage/
+            coverage-diff/
+            joint/
+            mutation.*

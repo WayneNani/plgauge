@@ -11,7 +11,7 @@ import { join, relative } from 'node:path';
 import { TextDecoder } from 'node:util';
 import oracledb from 'oracledb';
 import { instrument } from './instrument.js';
-import { preprocess } from '@pltest/core';
+import { parseUnit, preprocess, walk as walkTree } from '@pltest/core';
 import { newIds } from './model.js';
 import { HITS_TABLE, RUNTIME_BODY, RUNTIME_SPEC } from './runtime.js';
 
@@ -37,6 +37,8 @@ export interface CorpusResult {
   conditions: number;
   statements: number;
   gaps: number;
+  /** Parser completeness: expression regions the parser could not read fully. */
+  opaque: { regions: number; tokens: number; totalTokens: number; samples: { unit: string; line: number; text: string }[] };
   ms: number;
   db?: { originalOk: number; instrumentedOk: number; failures: { unit: string; error: string }[] };
 }
@@ -97,6 +99,7 @@ export async function runCorpus(dirs: string[], db?: { user: string; password: s
     latin1Files: [...new Set(units.filter((u) => u.latin1).map((u) => u.file))],
     units: { body: units.filter(isBody).length, spec: units.filter((u) => !isBody(u)).length },
     parsed: 0, failures: [], decisions: 0, conditions: 0, statements: 0, gaps: 0, ms: 0,
+    opaque: { regions: 0, tokens: 0, totalTokens: 0, samples: [] },
   };
   const instrumented = new Map<CorpusUnit, string>();
   for (const u of units.filter(isBody)) {
@@ -110,6 +113,18 @@ export async function runCorpus(dirs: string[], db?: { user: string; password: s
       res.statements += r.map.statements.length;
       res.gaps += r.map.gaps.length;
       instrumented.set(u, r.instrumented);
+      const p = parseUnit(preprocess(u.text));
+      res.opaque.totalTokens += p.tokens.length;
+      walkTree(p.unit, (n) => {
+        if (n.k !== 'opaque' || n.b <= n.a) return;
+        res.opaque.regions++;
+        res.opaque.tokens += n.b - n.a;
+        if (res.opaque.samples.length < 400) {
+          const text = p.tokens.slice(n.a, n.b).map((t) => t.text).join(' ');
+          res.opaque.samples.push({ unit: id, line: p.tokens[n.a].line, text: text.length > 160 ? text.slice(0, 160) + '…' : text });
+        }
+        return false;
+      });
     } catch (e) {
       res.failures.push({ unit: id, error: (e as Error).message });
     }

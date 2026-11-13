@@ -8,6 +8,8 @@
  * they look at the same code. Test paths are lower case: owner.package.procedure.
  * Probes reached outside any test (suite beforeall/afterall) are attributed to explicit
  * setup entries ("#owner.package", setup: true) instead of to a test.
+ * Optional since pltest: `statements` with their line range, so that a consumer can find
+ * the statement around a position (mutation testing selects tests with it).
  */
 import type { RunReport } from './run.js';
 import type { Span } from './model.js';
@@ -34,8 +36,14 @@ export interface CoverageExport {
     rawSha256?: string;
     instrumented: boolean;
     lines: Record<string, { hits: number; tests: number[] }>;
-    branches: { line: number; col: number; label: string; kind: string; hits: number; tests: number[]; condition?: Range }[];
-    conditions: { decision: number; index: number; text: string; context: 'plsql' | 'sql'; range: Range; tests: { T: number[]; F: number[]; N: number[] } }[];
+    statements?: { line: number; endLine: number; col?: number; endCol?: number; hits: number; tests: number[] }[];
+    branches: { line: number; col: number; label: string; kind: string; hits: number; tests: number[]; condition?: Range; construct?: number; nf?: boolean }[];
+    conditions: {
+      decision: number; index: number; text: string; context: 'plsql' | 'sql'; range: Range; tests: { T: number[]; F: number[]; N: number[] };
+      t?: number; f?: number; n?: number; mcdc?: 'yes' | 'no' | 'na'; nf?: boolean;
+    }[];
+    /** Quotas as measured (pltest). Missing after merging runs: recomputed from hits. */
+    metrics?: Record<'stmt' | 'branch' | 'cond' | 'mcdc' | 'loop', { covered: number; total: number }>;
     notMeasured: { line: number; reason: string }[];
   }[];
 }
@@ -53,9 +61,9 @@ export function toCoverageExport(r: RunReport): CoverageExport {
     tests: (r.tests ?? []).map((t) => ({
       path: t.path,
       setup: t.setup,
-      status: t.setup ? 'unknown' : t.baselineStatus !== 'passed' && t.baselineStatus !== 'unknown' ? 'excluded' : t.status,
+      status: t.setup ? 'unknown' : t.status === 'flaky' ? 'flaky' : t.baselineStatus !== 'passed' && t.baselineStatus !== 'unknown' ? 'excluded' : t.status,
       ms: Math.round(t.ms * 1000) / 1000,
-      baselineRuns: 1,
+      baselineRuns: r.baselineRuns ?? 1,
     })),
     objects: r.objects.map((o) => {
       const lines: Record<string, { hits: number; tests: number[] }> = {};
@@ -72,14 +80,17 @@ export function toCoverageExport(r: RunReport): CoverageExport {
         rawSha256: o.rawSha256,
         instrumented: !o.instrumentError,
         lines,
+        statements: o.statements.filter((s) => !s.nf).map((s) => ({ line: s.line, endLine: s.endLine, col: s.col, endCol: s.endCol, hits: s.hits, tests: s.tests ?? [] })),
         branches: o.branches.map((b) => ({
           line: b.line, col: b.col, label: b.label, kind: b.constructKind, hits: b.hits, tests: b.tests ?? [],
-          ...(b.condition ? { condition: range(b.condition) } : {}),
+          ...(b.condition ? { condition: range(b.condition) } : {}), construct: b.construct, nf: b.nf,
         })),
         conditions: o.decisions.flatMap((d) => d.conds.map((c) => ({
           decision: d.id, index: c.i, text: c.text, context: d.ctx, range: range(c.span), tests: c.tests ?? { T: [], F: [], N: [] },
+          t: c.t, f: c.f, n: c.n, mcdc: c.mcdc, nf: d.nf,
         }))),
         notMeasured: o.gaps,
+        ...(o.instrumentError ? {} : { metrics: o.metrics }),
       };
     }),
   };

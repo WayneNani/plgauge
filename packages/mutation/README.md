@@ -28,8 +28,41 @@ npx pltest mutate run eval/pljson --mode naive --sample 200 --seed 7 --json naiv
 npx pltest mutate compare a.json b.json                     # auch gegen JSON der Go-Fassung
 ```
 
-Weitere Optionen: `--ops ROR,SBR`, `--timeout-factor 5`, `--skip-install`, `-q`.
-Projektdatei `plmut.json`: `install` (Skripte), `mutate` (Globs der Dateien), `tests` (utPLSQL-Pfade).
+Für die CI: `--diff origin/main` (nur Mutanten auf Zeilen, die sich seit der Merge-Basis geändert haben) und
+`--min-score 60` (Exit-Code 3 darunter). Weitere Optionen: `--ops ROR,SBR`, `--timeout-factor 5`, `--skip-install`, `-q`,
+`--coverage plcov-coverage.json` (Orakel-Modus: nur die Tests, die die Anweisung um den Mutanten
+ausgeführt haben).
+Projektdatei `pltest.json` (oder `plmut.json`): `install` (Skripte), `mutate` (Globs der Dateien),
+`tests` (utPLSQL-Pfade).
+
+## Zusammen mit Coverage
+
+Coverage und Mutation lesen dieselbe Projektdatei, und die Ergebnisse passen zueinander:
+
+```bash
+npx pltest coverage examples/shop_pricing --out cov          # misst genau die Einheiten des Projekts
+npx pltest mutate run examples/shop_pricing --json run.json
+npx pltest crosscheck --coverage cov/plcov-coverage.json --mutation run.json
+npx pltest report cov/coverage.json --mutation run.json --out joint
+npx pltest mutate run examples/shop_pricing --mode naive --coverage cov/plcov-coverage.json
+```
+
+- **Gegenprobe** (`crosscheck`): Jeder Test, der im Aufzeichnungslauf einen Mutanten erreicht, muss
+  laut Coverage die Anweisung um ihn ausgeführt haben. Ein Widerspruch zeigt einen Fehler in einem
+  der beiden Werkzeuge.
+- **Gemeinsamer Bericht**: Der Coverage-Bericht zeigt pro Zeile die Mutanten und ihre Urteile und
+  führt jeden überlebenden Mutanten auf einer ausgeführten Zeile als Lücke: Die Tests laufen durch
+  den Code, prüfen ihn aber nicht.
+  Bekannter Effekt: Code, der nur beim ersten Aufruf pro Session läuft (Initialisierung von Paketzustand), gehört dem Test,
+  der ihn zuerst auslöst. Laufen in beiden Werkzeugen nicht dieselben Tests (der Mutationslauf schließt scheiternde Tests
+  aus), kann das als Widerspruch erscheinen. Tests mit Status `flaky` in der Coverage zählen nicht als Widerspruch.
+- **Testauswahl im Orakel-Modus**: Statt aller Tests laufen nur die, die die Anweisung um den
+  Mutanten ausgeführt haben, eine sichere Obermenge der Tests, die ihn erreichen. Mutanten in
+  Deklarationen und Einheiten ohne passende Coverage (anderer Quelltext in der Datenbank) bekommen
+  weiter alle Tests.
+
+Zeilen: Ergebnisse tragen `unitLine`, die Dateizeile des Schlüsselworts der Einheit; die Zeile in
+`ALL_SOURCE` ist `line - unitLine + 1`.
 
 Unterschied zur Go-Fassung: `--sample` wählt mit einem eigenen Zufallsgenerator; gleiche Seeds
 ergeben in Go und TypeScript verschiedene Stichproben. Paritätsvergleiche laufen deshalb auf

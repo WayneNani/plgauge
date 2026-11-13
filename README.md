@@ -34,8 +34,24 @@ npm test                      # offline; mit PLCOV_DB=user/pw@host:port/service 
 npm run typecheck
 npx pltest coverage --config examples/order_pricing/plcov.json --out report
 npx pltest restore --config examples/order_pricing/plcov.json --list
-PLMUT_DB=oracle://user:pw@host:port/service npx pltest mutate run examples/shop_pricing
+export PLMUT_DB=oracle://user:pw@host:port/service
+npx pltest mutate run examples/shop_pricing --json run.json
+npx pltest coverage examples/shop_pricing --out cov          # Coverage eines Projekts, ohne plcov.json
+npx pltest report cov/coverage.json --mutation run.json      # gemeinsamer Bericht
+npx pltest crosscheck --coverage cov/plcov-coverage.json --mutation run.json
+npm run parity:finder && npm run parity:coverage             # Abgleich mit den alten Fassungen (Korpus nötig)
 ```
+
+Ein Projekt ist ein Verzeichnis mit `pltest.json` (früher `plmut.json`): Installationsskripte, die
+Dateien, deren Einheiten gemessen und mutiert werden, und die utPLSQL-Tests. Beide Werkzeuge lesen
+dieselbe Datei; `pltest coverage <projekt>` misst genau diese Einheiten.
+
+## Ein Parser für beide Werkzeuge
+
+`packages/core/src/parser.ts` liest Einheiten, Deklarationen, Anweisungen, eingebettetes SQL und
+Ausdrücke mit Oracles Rangfolge. Coverage setzt darauf ihre Sonden, Mutation ihre Mutanten. Was
+der Parser nicht versteht, wird als undurchsichtiger Bereich behandelt: Er kostet die Messstellen
+darin, erzeugt aber nie falsche. Abgleich mit den alten Fassungen: `baseline/plmut/PARITY.md`.
 
 ## Wiederherstellungs-Journal
 

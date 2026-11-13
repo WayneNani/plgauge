@@ -5,20 +5,24 @@
  * - schema (default): all mutants compiled into the code once; a recording run notes
  *   which test reaches which mutant; each mutant runs only against its covering
  *   tests, the fastest first, fail-fast.
- * - naive: every mutant compiled on its own, all tests each time. Slow but independent
- *   of the schema rewriter: the oracle.
+ * - naive: every mutant compiled on its own, all tests each time (or, with measured
+ *   coverage, the tests that ran the statement around it). Slow but independent of the
+ *   schema rewriter: the oracle.
  *
  * Several databases (workers) share the mutants; the first one decides schema,
  * baseline and coverage. Every code change goes through the core's restore journal.
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { join } from 'node:path';
 import oracledb from 'oracledb';
 import {
-  ensureJournal, loadObject, objectErrors, replaceSource, restoreAll, runScript, splitScript, type SourceObject,
+  ensureJournal, loadObject, objectErrors, replaceSource, restoreAll, runScript, sha256, splitScript, touches,
+  type ChangedLines, type SourceObject,
 } from '@pltest/core';
+import type { CoverageExport } from '@pltest/coverage';
+import { CoverageIndex, unitLineOf } from './link.js';
 import { expand, mutatedUnit, objectName, unitKey, withoutCreate, type Mutant, type Point, type SourceFile } from './mutant.js';
 import { findPoints } from './find.js';
 import { buildSchema, locate, switchable, type SchemaUnit } from './schema.js';
@@ -55,6 +59,10 @@ export interface Options {
   sample?: number;
   seed?: number;
   log?: (m: string) => void;
+  /** Measured coverage (plcov-coverage/1): the oracle mode runs only the tests around each mutant. */
+  coverage?: CoverageExport;
+  /** Diff mode: only mutants on these lines (core changedLines). */
+  diff?: ChangedLines;
 }
 
 export interface Result {
@@ -77,6 +85,10 @@ export interface Result {
   durationMs: number;
   /** A test committed while this mutant was active. */
   sideEffect?: boolean;
+  /** File line of the unit keyword: ALL_SOURCE line = line - unitLine + 1. */
+  unitLine: number;
+  /** Tests that reached the mutant (schema mode: recording run; oracle mode: selected by coverage). */
+  coveredBy?: string[];
   mutant: Mutant;
 }
 
@@ -92,8 +104,10 @@ export interface Report {
   elapsedMs: number;
 }
 
+/** The project file: pltest.json, or plmut.json from before the merge. */
 export function loadConfig(dir: string): Config {
-  const c = JSON.parse(readFileSync(join(dir, 'plmut.json'), 'utf8')) as Partial<Config>;
+  const file = existsSync(join(dir, 'pltest.json')) ? 'pltest.json' : 'plmut.json';
+  const c = JSON.parse(readFileSync(join(dir, file), 'utf8')) as Partial<Config>;
   return { install: c.install ?? [], mutate: c.mutate ?? [], tests: c.tests ?? [] };
 }
 
@@ -106,11 +120,15 @@ export function mutateFiles(cfg: Config, dir: string): string[] {
 }
 
 /** Finds and numbers the mutants of a project, applying ops and sample. */
-export function projectMutants(dir: string, opt: Pick<Options, 'ops' | 'sample' | 'seed'> = {}) {
+export function projectMutants(dir: string, opt: Pick<Options, 'ops' | 'sample' | 'seed' | 'diff'> = {}) {
   const cfg = loadConfig(dir);
   const files = findPoints(mutateFiles(cfg, dir));
   let ms = expand(files, opt.ops);
   const all = ms.length;
+  if (opt.diff) {
+    ms = ms.filter((m) => touches(opt.diff!, m.file, m.line, m.endLine));
+    ms.forEach((m, i) => (m.id = i + 1));
+  }
   if (opt.sample && opt.sample > 0 && opt.sample < ms.length) ms = sample(ms, opt.sample, opt.seed ?? 1);
   return { cfg, files, mutants: ms, all };
 }
@@ -196,7 +214,7 @@ class Worker {
   }
 
   /** The database object of a unit, loaded once (it goes into the restore journal). */
-  private async object(key: string, type: string, name: string): Promise<SourceObject> {
+  async object(key: string, type: string, name: string): Promise<SourceObject> {
     let o = this.objects.get(key);
     if (!o) {
       const owner = (await this.deploy.execute<[string]>(`select sys_context('USERENV','CURRENT_SCHEMA') from dual`)).rows![0][0];
@@ -268,8 +286,19 @@ class Worker {
         res.detail = errs.slice(0, 3).map((e) => `${e.line}:${e.position} ${e.text}`).join('; ');
         return res;
       }
+      let tests = this.testPaths();
+      const sel = await this.run.selection(this, m);
+      if (sel) {
+        // configured paths may be suites: select from the single tests of the baseline
+        tests = this.passing.filter((t) => sel.includes(t));
+        res.coveredBy = tests;
+        if (!tests.length) {
+          Object.assign(res, { status: 'NOT_COVERED', detail: 'laut Coverage von keinem Test ausgeführt' });
+          return res;
+        }
+      }
       await resetPackages(this.test);
-      this.classify(res, await this.runTests(this.testPaths()));
+      this.classify(res, await this.runTests(tests));
     } catch (e) {
       Object.assign(res, { status: 'ERROR', detail: firstLine(e as Error) });
     } finally {
@@ -281,6 +310,7 @@ class Worker {
   /** Schema mode: activate one mutant, run its covering tests (fastest alone, then the rest). */
   async schemaMutant(res: Result, covering: string[] | undefined): Promise<void> {
     const t0 = performance.now();
+    if (covering) res.coveredBy = covering;
     try {
       const tests = (covering ?? []).filter((t) => !this.flaky.has(t));
       if (!tests.length) {
@@ -349,7 +379,7 @@ function newResult(m: Mutant): Result {
   return {
     id: m.id, op: m.op, file: m.file, unit: m.unit, line: m.line, col: m.col, endLine: m.endLine, endCol: m.endCol,
     sub: m.sub, ctx: m.ctx, category: m.category, original: m.original, mutated: m.mutated,
-    status: 'ERROR', durationMs: 0, mutant: m,
+    status: 'ERROR', durationMs: 0, unitLine: unitLineOf(m), mutant: m,
   };
 }
 
@@ -365,6 +395,34 @@ class Run {
 
   get primary() {
     return this.workers[0];
+  }
+
+  private covIndex?: CoverageIndex;
+  private covUsable = new Map<string, boolean>();
+
+  /**
+   * Oracle mode with coverage: the test paths that executed the statement around the
+   * mutant, or null (run all) if the unit has no matching coverage. The unit in the
+   * database must be the one that was measured (same ALL_SOURCE hash).
+   */
+  async selection(w: Worker, m: Mutant): Promise<string[] | null> {
+    if (!this.opt.coverage) return null;
+    this.covIndex ??= new CoverageIndex(this.opt.coverage);
+    const obj = this.covIndex.object(m.unit);
+    if (!obj) return null;
+    const key = unitKey(m);
+    let ok = this.covUsable.get(key);
+    if (ok === undefined) {
+      const o = await w.object(key, m.unitRef.type, m.unitRef.name);
+      ok = !obj.rawSha256 || obj.rawSha256 === sha256(o.original);
+      if (!ok) this.logf(`WARNUNG: Coverage von ${m.unit} passt nicht zum Code in der Datenbank, alle Tests laufen`);
+      this.covUsable.set(key, ok);
+    }
+    if (!ok) return null;
+    const line = m.line - unitLineOf(m) + 1;
+    const sel = this.covIndex.testsAt(obj, line, line > 1 ? m.col : undefined);
+    // a flaky test may reach the mutant in this run although it did not when measured
+    return sel && [...sel, ...[...this.covIndex.flaky].filter((t) => !sel.includes(t))];
   }
 
   progress(w: Worker, r: Result) {
@@ -470,7 +528,11 @@ export async function runMutation(opt: Options): Promise<Report> {
     skipped += f.skipped;
     if (f.errors.length) run.logf(`übersprungen, nicht parsbar: ${f.path}: ${f.errors.join('; ')}`);
   }
-  run.logf(`${ms.length} Mutanten in ${files.length} Dateien, ${skipped} gleichwertige oder sinnlose Varianten ausgelassen`);
+  run.logf(`${ms.length} Mutanten in ${files.length} Dateien${opt.diff ? ' (nur geänderte Zeilen)' : ''}, ${skipped} gleichwertige oder sinnlose Varianten ausgelassen`);
+  if (!ms.length) {
+    run.logf('keine Mutanten: nichts zu tun');
+    return { mode: opt.mode ?? 'schema', baselineMs: 0, limitMs: 0, tests: 0, excludedTests: 0, flakyTests: [], skippedVariants: skipped, results: [], elapsedMs: performance.now() - t0 };
+  }
   if (!opt.dbUrls.length) throw new Error('keine Datenbank: --db oder PLMUT_DB setzen');
   opt.dbUrls.forEach((u, i) => run.workers.push(new Worker(u, opt.dbUrls.length > 1 ? ` w${i + 1}` : '', run)));
   let interrupted = false;

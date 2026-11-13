@@ -21,6 +21,9 @@ export interface StatementProbe {
   id: number;
   line: number;
   endLine: number;
+  /** Column of the first token and after the last one (the ";"): several statements share lines. */
+  col?: number;
+  endCol?: number;
   kind: string;
   /** Marked with PRAGMA COVERAGE('NOT_FEASIBLE'). */
   nf: boolean;
@@ -32,7 +35,7 @@ export interface Condition {
   span: Span;
 }
 
-export type DecisionKind = 'if' | 'elsif' | 'while' | 'exit-when' | 'continue-when' | 'case-when' | 'case-expr-when';
+export type DecisionKind = 'if' | 'elsif' | 'while' | 'exit-when' | 'continue-when' | 'case-when' | 'case-expr-when' | 'for-when' | 'for-while';
 
 export interface Decision {
   id: number;
@@ -59,7 +62,7 @@ export interface Branch {
   derived?: { decision: number; outcome: 'T' | 'notT' };
 }
 
-export type ConstructKind = 'if' | 'case' | 'case-expr' | 'handlers' | 'while' | 'exit-when' | 'continue-when';
+export type ConstructKind = 'if' | 'case' | 'case-expr' | 'handlers' | 'while' | 'exit-when' | 'continue-when' | 'for-when' | 'for-while';
 
 export interface Construct {
   id: number;
@@ -139,7 +142,7 @@ export interface TestInfo {
   suite: string;
   description: string;
   setup: boolean;
-  status: 'passed' | 'failed' | 'error' | 'skipped' | 'unknown';
+  status: 'passed' | 'failed' | 'error' | 'skipped' | 'unknown' | 'flaky';
   baselineStatus: 'passed' | 'failed' | 'error' | 'skipped' | 'unknown';
   ms: number;
 }

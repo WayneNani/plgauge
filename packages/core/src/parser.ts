@@ -21,7 +21,9 @@ export type NodeKind =
   | 'pragma' | 'label' | 'section' | 'trigger-when'
   // expressions and conditions
   | 'bin' | 'unary' | 'cmp' | 'logic' | 'not' | 'isnull' | 'pred' | 'paren' | 'list' | 'call' | 'arg' | 'name'
-  | 'lit' | 'case' | 'when' | 'query' | 'sql' | 'range' | 'opaque';
+  | 'lit' | 'case' | 'when' | 'query' | 'sql' | 'range' | 'opaque'
+  // understood syntax around expressions: (x AS type), CAST(x AS t), EXTRACT(y FROM d), JSON_VALUE(d, p RETURNING t)
+  | 'cast' | 'clause';
 
 export interface Node {
   k: NodeKind;
@@ -84,14 +86,21 @@ const NOT_OPERAND = new Set([
 /** Words that may be followed by "(" without being a function call. */
 const NOT_CALL = new Set([
   'IN', 'VALUES', 'USING', 'ON', 'AS', 'OF', 'AND', 'OR', 'NOT', 'THEN', 'ELSE', 'ELSIF', 'WHEN', 'LIKE', 'LIKEC', 'LIKE2',
-  'LIKE4', 'BETWEEN', 'FROM', 'WHERE', 'INTO', 'SET', 'RETURNING', 'RETURN', 'SELECT', 'BY', 'IS', 'WITH', 'UNION',
+  'LIKE4', 'BETWEEN', 'FROM', 'WHERE', 'INTO', 'RETURNING', 'RETURN', 'SELECT', 'BY', 'IS', 'WITH', 'UNION',
   'INTERSECT', 'MINUS', 'EXCEPT', 'HAVING', 'CONNECT', 'START', 'JOIN', 'MULTISET', 'ALL', 'ANY', 'SOME', 'DISTINCT',
   'UNIQUE', 'PRIOR', 'IF', 'WHILE', 'LOOP', 'END', 'EXCEPTION', 'BEGIN', 'DECLARE', 'ORDER', 'GROUP', 'MEMBER',
+  // SET(collection) is a function; UPDATE … SET is handled by the SQL scanner
   'SUBMULTISET', 'FOR', 'PIVOT', 'UNPIVOT', 'CONNECT_BY_ROOT', 'COLLATE',
 ]);
 
 /** Keywords after an expression in a function argument (CAST(x AS t), JSON_VALUE(x, p RETURNING t), ...). */
 const ARG_TAIL_FROM = new Set(['FROM']);
+const ARG_TAIL = new Set([
+  'AS', 'FROM', 'RETURNING', 'USING', 'DEFAULT', 'ON', 'FORMAT', 'PASSING', 'COLUMNS', 'ERROR', 'NULL', 'WITH', 'WITHOUT',
+  'KEEP', 'ORDER', 'SEPARATOR', 'EMPTY', 'TRUE', 'FALSE', 'IGNORE', 'RESPECT', 'TYPE', 'PRETTY', 'ASCII', 'TRUNCATE',
+  'ALLOW', 'DISALLOW', 'STRICT', 'LAX', 'ABSENT', 'NO', 'INDENT', 'VERSION', 'STANDALONE', 'EVALNAME', 'NAME', 'WRAPPER',
+  'ENCODING', 'IDENT', 'CHAR', 'BYTE',
+]);
 
 const SQL_CLAUSE_END = new Set([
   'FROM', 'WHERE', 'GROUP', 'HAVING', 'ORDER', 'INTO', 'BULK', 'UNION', 'INTERSECT', 'MINUS', 'EXCEPT', 'CONNECT',
@@ -707,27 +716,30 @@ class Parser {
         kind = 'cursor-for';
         const c = this.close(k);
         kids.push(this.query(k + 1, c));
-      } else if (this.isWord(k, 'VALUES', 'INDICES', 'PAIRS') && this.isWord(k + 1, 'OF')) {
-        kids.push(this.region(k + 2, lp));
       } else {
         for (const [s, e] of this.commas(k, lp)) {
-          const dots = this.find(s, new Set(['..']), e);
-          if (dots < 0) {
+          // 21c iteration controls: … [WHILE cond] [WHEN cond]
+          const f = this.find(s, new Set(['WHILE', 'WHEN']), e);
+          const ce = f >= 0 ? f : e;
+          const dots = this.find(s, new Set(['..']), ce);
+          if (this.isWord(s, 'VALUES', 'INDICES', 'PAIRS') && this.isWord(s + 1, 'OF')) {
+            kids.push(this.region(s + 2, ce));
+          } else if (dots < 0) {
             // cursor FOR loop over a declared cursor, or an iteration over an expression
             kind = 'cursor-for';
-            const w = this.find(s, new Set(['WHILE', 'WHEN']), e);
-            kids.push(this.region(s, w >= 0 ? w : e));
-            continue;
+            kids.push(this.region(s, ce));
+          } else {
+            const by = this.find(dots + 1, new Set(['BY']), ce);
+            const r = node('range', s, ce, [this.region(s, dots), this.region(dots + 1, by >= 0 ? by : ce)], { at: dots, name: by >= 0 ? 'by' : '' });
+            if (by >= 0) r.kids.push(this.region(by + 1, ce));
+            kids.push(r);
           }
-          const tail = this.find(dots + 1, new Set(['BY', 'WHILE', 'WHEN']), e);
-          const hiEnd = tail >= 0 ? tail : e;
-          const by = tail >= 0 && this.upAt(tail) === 'BY';
-          const r = node('range', s, e, [this.region(s, dots), this.region(dots + 1, hiEnd)], { at: dots, name: by ? 'by' : '' });
-          if (by) {
-            const t2 = this.find(tail + 1, new Set(['WHILE', 'WHEN']), e);
-            r.kids.push(this.region(tail + 1, t2 >= 0 ? t2 : e));
+          for (let w = f; w >= 0 && w < e;) {
+            const next = this.find(w + 1, new Set(['WHILE', 'WHEN']), e);
+            const we = next >= 0 ? next : e;
+            kids.push(node('branch', w, we, [this.region(w + 1, we)], { name: `for-${this.upAt(w).toLowerCase()}`, at: w }));
+            w = next;
           }
-          kids.push(r);
         }
       }
       this.i = lp;
@@ -1264,20 +1276,23 @@ class Parser {
   }
 
   private mult(): Node | null {
-    let l = this.power();
+    let l = this.unary();
     if (!l) return null;
     for (;;) {
       const x = this.t[this.i];
-      if (!x || this.i >= this.lim || x.kind !== 'op' || !['*', '/'].includes(x.text)) return l;
+      // PL/SQL also knows MOD as an operator: n MOD 2
+      const isMod = x && this.i < this.lim && x.kind === 'ident' && x.up === 'MOD' && !this.isOp(this.i + 1, '(');
+      if (!x || this.i >= this.lim || (!isMod && (x.kind !== 'op' || !['*', '/'].includes(x.text)))) return l;
       const op = this.i++;
-      const r = this.power();
+      const r = this.unary();
       if (!r) return null;
-      l = node('bin', l.a, r.b, [l, r], { op: x.text, at: op });
+      l = node('bin', l.a, r.b, [l, r], { op: isMod ? 'MOD' : x.text, at: op });
     }
   }
 
+  /** ** binds tighter than the sign: -2 ** 2 = -(2 ** 2); the exponent may carry a sign. */
   private power(): Node | null {
-    const l = this.unary();
+    const l = this.postfix();
     if (!l) return null;
     if (this.isOp(this.i, '**')) {
       const op = this.i++;
@@ -1297,7 +1312,7 @@ class Parser {
       if (!e) return null;
       return node('unary', a, e.b, [e], { op: x.up });
     }
-    return this.postfix();
+    return this.power();
   }
 
   private postfix(): Node | null {
@@ -1308,19 +1323,19 @@ class Parser {
         this.i += 3;
         const z = this.primary();
         if (!z) return null;
-        p = node('opaque', p.a, z.b, [p, z]);
+        p = node('clause', p.a, z.b, [p, z], { op: 'AT TIME ZONE' });
       } else if (this.isWord(this.i, 'AT') && this.isWord(this.i + 1, 'LOCAL')) {
         this.i += 2;
-        p = node('opaque', p.a, this.i, [p]);
+        p = node('clause', p.a, this.i, [p], { op: 'AT LOCAL' });
       } else if (this.isWord(this.i, 'COLLATE')) {
         this.i += 2;
-        p = node('opaque', p.a, this.i, [p]);
+        p = node('clause', p.a, this.i, [p], { op: 'COLLATE' });
       } else if (this.isWord(this.i, 'MULTISET') && this.isWord(this.i + 1, 'UNION', 'INTERSECT', 'EXCEPT')) {
         this.i += 2;
         if (this.isWord(this.i, 'ALL', 'DISTINCT')) this.i++;
         const r = this.primary();
         if (!r) return null;
-        p = node('opaque', p.a, r.b, [p, r]);
+        p = node('clause', p.a, r.b, [p, r], { op: 'MULTISET' });
       } else {
         return p;
       }
@@ -1337,7 +1352,8 @@ class Parser {
         if (m >= this.lim) return null;
         this.i = m + 1;
         if (['SELECT', 'WITH'].includes(this.upAt(a + 1))) return node('query', a, m + 1, this.sqlScan(a + 1, m));
-        const items = this.exprList(a + 1, m);
+        const asAt = this.find(a + 1, new Set(['AS']), m);
+        const items = asAt > a + 1 && this.isTypeName(asAt + 1, m) ? [node('cast', a + 1, m, [this.region(a + 1, asAt)], { op: 'AS' })] : this.exprList(a + 1, m);
         const p = node(items.length === 1 ? 'paren' : 'list', a, m + 1, items);
         // (self as t).method(...), (expr).attribute
         if (this.isOp(this.i, '.') && this.i + 1 < this.lim && ['ident', 'qident'].includes(this.t[this.i + 1].kind)) return this.nameChain(a, p);
@@ -1470,6 +1486,15 @@ class Parser {
     return node('call', a, this.i, args, { at2: call, name: simple ? first.up : undefined });
   }
 
+  /** Whether [k, e) is a type name: name(.name)* with an optional (precision). */
+  private isTypeName(k: number, e: number): boolean {
+    if (k >= e || !['ident', 'qident'].includes(this.t[k].kind)) return false;
+    k++;
+    while (k + 1 < e && this.isOp(k, '.')) k += 2;
+    if (k < e && this.isOp(k, '(')) k = this.match[k] + 1;
+    return k === e;
+  }
+
   /** Arguments in [a, b): each an "arg" node with its expression. */
   private args(a: number, b: number): Node[] {
     if (a >= b) return [];
@@ -1477,7 +1502,7 @@ class Parser {
     for (const [s, e] of this.commas(a, b)) {
       if (s >= e) continue;
       let k = s;
-      while (this.isWordIn(k, e, 'DISTINCT', 'UNIQUE', 'ALL') && k + 1 < e) k++;
+      while (this.isWordIn(k, e, 'DISTINCT', 'UNIQUE', 'ALL', 'LEADING', 'TRAILING', 'BOTH') && k + 1 < e) k++;
       if (this.isOp(k, '*') && k + 1 === e) {
         out.push(node('arg', s, e, [], { name: '*' }));
         continue;
@@ -1506,7 +1531,8 @@ class Parser {
       const from = this.find(rest, ARG_TAIL_FROM, e);
       if (from >= 0 && from + 1 < e) kids.push(this.region(from + 1, e));
       else kids.push(...this.rescue(rest, e));
-      out.push(node('arg', s, e, [node('opaque', k, e, kids)], { name: named }));
+      const known = rest > k && ARG_TAIL.has(this.t[rest].up);
+      out.push(node('arg', s, e, [node(known ? 'clause' : 'opaque', k, e, kids)], { name: named }));
     }
     return out;
   }

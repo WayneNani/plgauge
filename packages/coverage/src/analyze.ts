@@ -80,7 +80,7 @@ export interface ObjectResult {
   type: string;
   lines: string[];
   metrics: Record<'stmt' | 'branch' | 'cond' | 'mcdc' | 'loop', Metric>;
-  statements: { id: number; line: number; endLine: number; hits: number; nf: boolean; tests?: number[] }[];
+  statements: { id: number; line: number; endLine: number; col?: number; endCol?: number; hits: number; nf: boolean; tests?: number[] }[];
   branches: BranchResult[];
   decisions: DecisionResult[];
   loops: LoopResult[];
@@ -111,7 +111,7 @@ export function analyze(map: ObjectMap, hits: Hits, testIndex: Map<string, numbe
   const withTests = perTest.length > 0;
 
   const statements = map.statements.map((s) => ({
-    id: s.id, line: s.line, endLine: s.endLine, hits: g(hits.stmt, s.id), nf: s.nf,
+    id: s.id, line: s.line, endLine: s.endLine, col: s.col, endCol: s.endCol, hits: g(hits.stmt, s.id), nf: s.nf,
     tests: withTests ? testsWhere((th) => th.s.has(s.id)) : undefined,
   }));
 

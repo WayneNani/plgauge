@@ -25,6 +25,8 @@ create or replace package cov$ authid definer is
   function d(p_d pls_integer, p_v boolean) return boolean;
   procedure s(p_s pls_integer);
   procedure b(p_b pls_integer);
+  /* Branch probe inside an expression (simple CASE): counts like b and returns TRUE. */
+  function bt(p_b pls_integer) return boolean;
   procedure le(p_l pls_integer);
   procedure li(p_l pls_integer);
   procedure lx(p_l pls_integer);
@@ -180,6 +182,12 @@ create or replace package body cov$ is
     if g_b.exists(p_b) then g_b(p_b) := g_b(p_b) + 1; else g_b(p_b) := 1; end if;
     if g_pt and g_tid > 0 then g_pb(g_tid)(p_b) := 1; end if;
   exception when others then null;
+  end;
+
+  function bt(p_b pls_integer) return boolean is
+  begin
+    b(p_b);
+    return true;
   end;
 
   procedure close_loop(p_l pls_integer) is

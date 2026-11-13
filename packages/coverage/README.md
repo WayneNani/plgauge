@@ -43,17 +43,46 @@ npm run demo -- --out examples/order_pricing/report
 
 ## Befehle
 
+Seit der Zusammenführung heißt der Befehl `pltest` (`npx pltest …` oder `bin/pltest …`); `run` ist der alte Name von `coverage`.
+
 | Befehl | Zweck |
 |---|---|
-| `plcov run --config plcov.json [--out dir]` | Kompletter Lauf: Baseline, utPLSQL-Coverage, Instrumentieren, Testlauf, Wiederherstellen, Bericht |
-| `plcov instrument datei.sql [--no-sql]` | Zeigt offline, wie instrumentierter Code aussieht |
-| `plcov report coverage.json [--out dir]` | Bericht aus gespeicherten Rohdaten neu erzeugen |
-| `plcov export coverage.json [--out datei]` | Austauschformat `plcov-coverage/1` erzeugen (schreibt `run` automatisch mit) |
-| `plcov corpus verzeichnis… [--db plcov.json]` | Robustheitstest des Parsers auf einem Korpus, optional mit Kompilierprüfung |
-| `plcov deploy --config plcov.json dateien…` | SQL*Plus-artige Skripte einspielen (für die Demo) |
+| `pltest coverage --config plcov.json [--out dir]` | Kompletter Lauf: Baseline, utPLSQL-Coverage, Instrumentieren, Testlauf, Wiederherstellen, Bericht |
+| `pltest coverage <projekt> --db oracle://…` | Dasselbe für ein Projekt mit `pltest.json`: genau dessen Einheiten und Tests |
+| `pltest instrument datei.sql [--no-sql]` | Zeigt offline, wie instrumentierter Code aussieht |
+| `pltest report coverage.json [--mutation run.json] [--out dir]` | Bericht neu erzeugen; mit Mutationsergebnissen der gemeinsame Bericht |
+| `pltest export coverage.json --format json\|cobertura\|sonar\|lcov\|junit [--src dir]` | Austauschformat oder CI-Formate; `--src` ordnet Objekte den Quelldateien zu |
+| `pltest merge a.json b.json … --out merged.json` | Läufe zusammenführen (z. B. Unit- und Integrationstests) |
+| `pltest check datei --min-stmt N --min-branch N --min-cond N --min-mcdc N` | Schwellen für die CI, Exit-Code 3 bei Unterschreitung (auch direkt bei `coverage`) |
+| `--diff origin/main` (bei `coverage`, `check`) | Schwellen nur auf den seit der Merge-Basis geänderten Zeilen |
+| `pltest corpus verzeichnis… [--db plcov.json]` | Robustheitstest des Parsers auf einem Korpus, optional mit Kompilierprüfung |
+| `pltest deploy --config plcov.json dateien…` | SQL*Plus-artige Skripte einspielen (für die Demo) |
+| `pltest restore --config plcov.json [--list]` | Code zurücksetzen, den ein abgebrochener Lauf verändert hinterlassen hat |
 
 `plcov.json`: `user`, `password` (oder Umgebungsvariable `PLCOV_PASSWORD`), `connectString`, `schema`, `tests` (utPLSQL-Pfade),
-optional `include` / `exclude` (Regex auf Objektnamen), `sqlProbes` (`"auto"` = ab 23ai) und `perTest` (Standard `true`).
+optional `include` / `exclude` (Regex auf Objektnamen), `sqlProbes` (`"auto"` = ab 23ai), `perTest` (Standard `true`) und
+`baselineRuns` (Standard 2).
+
+## CI
+
+- **Formate:** Cobertura (GitLab, Jenkins, Azure DevOps), SonarQube Generic Coverage, LCOV und JUnit. Sie kennen nur Zeilen
+  und Branches: Anweisungszeilen werden Zeilen, die Zweige von IF, CASE, Schleifen und Handlern Branches. Abgeleitete Zweige
+  (THEN und das implizite ELSE) stehen an der Zeile ihrer Bedingung. Teilbedingungen und MC/DC bleiben im JSON und im Bericht.
+- **Pfade:** Gemessen wird auf Datenbankobjekten. `--src` sucht die Einheiten in den Quelldateien (mit dem Parser) und rechnet
+  ALL_SOURCE-Zeilen in Dateizeilen um. Ohne Zuordnung bekommen Objekte virtuelle Pfade wie `schema/package_body/name.sql`.
+- **Zusammenführen:** Objekte müssen denselben Quelltext haben (`rawSha256`); Treffer addieren sich, Testlisten werden
+  vereinigt. MC/DC nach dem Zusammenführen gilt als erfüllt, wenn ein Lauf es erfüllt hat (die Vektoren beider Läufe werden
+  nicht kombiniert).
+- **Diff-Modus:** Eine geänderte Zeile gehört zur innersten Anweisung um sie, nicht zum IF darum.
+- **Vorlagen:** `ci/templates/github-actions.yml` und `ci/templates/gitlab-ci.yml`; `ci/setup-db.sh` startet Oracle 23ai Free
+  mit utPLSQL 3.2.2 und einem Benutzer mit den nötigen Rechten.
+
+## Unzuverlässige Tests
+
+Vor dem Messen laufen die Tests zweimal ohne Coverage (`baselineRuns`), danach einmal mit utPLSQL-Coverage. Jeder Lauf startet
+mit frischem Paketzustand (`DBMS_SESSION.RESET_PACKAGE`), wie der Lauf auf dem frisch kompilierten instrumentierten Code. Ein Test,
+dessen Ergebnis zwischen diesen Läufen wechselt, gilt als unzuverlässig: Er steht im Export mit Status `flaky` und zählt nicht
+für die Prüfung „gleiches Verhalten mit und ohne Instrumentierung“. Abweichende Tests nennt der Lauf mit Namen.
 
 ## Coverage pro Test und Austauschformat
 
@@ -63,13 +92,16 @@ Setup-Eintrag `#owner.package`. Im Bericht zeigt die Trefferzahl einer Zeile per
 
 `plcov-coverage.json` (Format `plcov-coverage/1`) ist für andere Werkzeuge gedacht, z. B. das Mutation-Testing-Projekt plmut:
 - **Koordinaten:** wie in ALL_SOURCE, 1-basiert. Zeile 1 ist die Zeile mit dem Typ-Schlüsselwort (`package body …`), ohne `CREATE`.
-- **Tests:** Pfade klein geschrieben (`owner.package.procedure`). Mögliche Status: passed, failed, error, skipped, excluded (schon ohne Instrumentierung rot) und unknown.
+- **Tests:** Pfade klein geschrieben (`owner.package.procedure`). Mögliche Status: passed, failed, error, skipped, excluded (schon ohne Instrumentierung rot), flaky (Ergebnis wechselt ohne Instrumentierung) und unknown.
 - **Pro Objekt:**
   - `sourceSha256` (post-processed) und `rawSha256` (ALL_SOURCE roh)
   - `lines` (Treffer und Test-Indizes)
   - `branches` (mit Bereich der Bedingung)
   - `conditions` (Spaltenbereich, Tests getrennt nach WAHR, FALSCH und NULL)
   - `notMeasured`
+- **Ergänzt von pltest** (optional, ältere Leser ignorieren es): `statements` mit Zeilen- und Spaltenbereich und Tests (die
+  Mutation wählt damit Tests aus), bei `branches` die Konstrukt-ID und `nf`, bei `conditions` die Trefferzahlen und MC/DC,
+  pro Objekt `metrics` mit den gemessenen Quoten.
 
 ## Robustheit: Korpus
 
@@ -135,12 +167,16 @@ PLCOV_DB=demo/demo@localhost:1521/FREEPDB1 npm test        # zusätzlich Äquiva
 npm run typecheck
 ```
 
-## Grenzen des Prototyps
+## Grenzen
 
 - Objekte müssen im verbundenen Schema liegen (Laufzeit `cov$` wird dort installiert).
 - Treffer aus anderen Sessions (Scheduler-Jobs, parallele Abfragen) werden nicht eingesammelt.
-- Nicht gemessen: dynamisches SQL, mit `wrap` verschlüsselter Code, Compound-Trigger, einfache `CASE x WHEN …`-Ausdrücke,
-  `WHEN`-Filter in FOR-Iterationen (21c), Trigger-`WHEN`-Klauseln. Der Bericht listet solche Stellen unter „Nicht gemessen“.
-- Der Parser ist ein eigener, fehlertoleranter Struktur-Parser (kein vollständiges PL/SQL-Grammatikmodell). Kann er ein Objekt
-  nicht verstehen, wird es übersprungen und im Bericht markiert.
+- Nicht gemessen: dynamisches SQL (die Anweisung `EXECUTE IMMEDIATE` selbst zählt), mit `wrap` verschlüsselter Code und
+  Trigger-`WHEN`-Klauseln (Oracle erlaubt dort keine PL/SQL-Aufrufe; ob der Rumpf lief, zeigt seine erste Anweisung). Der
+  Bericht listet solche Stellen unter „Nicht gemessen“.
+- Gemessen seit pltest: Compound-Trigger (jeder Zeitpunkt wie ein Block), einfache `CASE x WHEN …`-Ausdrücke (eine
+  Zweigsonde vor jedem Ergebnis: `THEN CASE WHEN cov$.bt(id) THEN ergebnis END`; die Sonde liefert immer WAHR, Typ und
+  Auswertungsreihenfolge bleiben) und die `WHEN`/`WHILE`-Filter von FOR-Schleifen (21c) als Entscheidungen.
+- Der Parser (`@pltest/core`) liest Struktur, SQL und Ausdrücke; Unverstandenes wird als undurchsichtiger Bereich behandelt.
+  Kann er die Struktur eines Objekts nicht verstehen, wird es übersprungen und im Bericht markiert.
 - Rekursion innerhalb derselben Schleife zählt Iterationen ungenau. Schleifenmetriken sind eine Näherung.

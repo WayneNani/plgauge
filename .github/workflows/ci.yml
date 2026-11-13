@@ -1,0 +1,35 @@
+# CI of pltest itself: offline tests on every push, database tests (Oracle 23ai Free) after them.
+name: CI
+on:
+  push:
+  pull_request:
+
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  database:
+    needs: offline
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+      - run: npm ci
+      - name: Oracle 23ai Free and utPLSQL
+        run: |
+          url=$(PLTEST_USER=plmut ci/setup-db.sh | tail -1)
+          # PLCOV_DB in user/password@connect form, PLMUT_DB as URL
+          echo "PLMUT_DB=$url" >> "$GITHUB_ENV"
+          echo "PLCOV_DB=$(echo "$url" | sed -E 's#^oracle://([^:]+):([^@]+)@(.*)$#\1/\2@\3#')" >> "$GITHUB_ENV"
+      - run: npm test

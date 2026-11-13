@@ -352,7 +352,7 @@ class Finder {
    * || shares its level with + and -; a mixed chain gets no || mutants.
    */
   private aor(n: Node, parent: Node | null, env: Env) {
-    const level = (op?: string) => (op === '+' || op === '-' || op === '||' ? 1 : op === '*' || op === '/' ? 2 : 0);
+    const level = (op?: string) => (op === '+' || op === '-' || op === '||' ? 1 : op === '*' || op === '/' || op === 'MOD' ? 2 : 0);
     const lv = level(n.op);
     if (!lv) return;
     if (parent?.k === 'bin' && level(parent.op) === lv && parent.kids[0] === n) return; // not the root of the chain
@@ -378,9 +378,10 @@ class Finder {
         this.pointSpan('AOR', 'value', a, last, span, env, env.ctx, '', [left]);
         continue;
       }
+      // n MOD m becomes n * m, as for the function MOD(n, m)
       const swapped = op.text === '+' ? '-' : op.text === '-' ? '+' : op.text === '*' ? '/' : '*';
       const o = op.start - this.t[a].start;
-      this.pointSpan('AOR', 'value', a, last, span, env, env.ctx, '', [span.slice(0, o) + swapped + span.slice(o + 1)]);
+      this.pointSpan('AOR', 'value', a, last, span, env, env.ctx, '', [span.slice(0, o) + swapped + span.slice(o + op.text.length)]);
     }
   }
 

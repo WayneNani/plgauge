@@ -4,7 +4,10 @@
  * The tree gives the control-flow structure (blocks, IF, CASE, loops, EXIT/CONTINUE
  * WHEN, exception handlers, nested subprograms), the boolean structure of conditions
  * (AND / OR / NOT, parentheses; BETWEEN ... AND stays one condition) and the searched
- * CASE expressions inside statements and SQL.
+ * CASE expressions inside statements and SQL. Simple CASE expressions (CASE x WHEN 1 …) get a
+ * branch probe in front of every result: THEN CASE WHEN cov$.bt(id) THEN result END; the probe
+ * is always TRUE, so value, type and evaluation order stay. Compound triggers and the
+ * WHEN/WHILE filters of FOR loops (21c) are measured as well.
  *
  * Instrumentation is purely additive and never inserts line breaks, so line numbers in
  * error stacks and reports stay identical to the original source. Probe ids are given
@@ -124,6 +127,7 @@ class Instrumenter {
         for (const k of u.kids.slice(begin)) {
           if (k.k === 'decls') this.decls(k);
           else if (k.k === 'body') this.body(k);
+          else if (k.k === 'section') this.body(k.kids[0]); // timing point of a compound trigger
         }
         break;
       }
@@ -137,11 +141,6 @@ class Instrumenter {
     while (['CREATE', 'OR', 'REPLACE', 'EDITIONABLE', 'NONEDITIONABLE', 'EDITIONING'].includes(toks[k]?.up)) k++;
     const kind = toks[k]?.up;
     if (kind === 'PACKAGE' && toks[k + 1]?.up !== 'BODY') throw new ParseError('Package-Spezifikationen werden nicht instrumentiert', toks[k].line);
-    if (kind === 'TRIGGER') {
-      for (let j = k; j < toks.length && !['DECLARE', 'BEGIN'].includes(toks[j].up); j++) {
-        if (toks[j].up === 'COMPOUND') throw new ParseError('Compound-Trigger werden im Prototyp nicht unterstützt', toks[j].line);
-      }
-    }
     if (!['PACKAGE', 'PROCEDURE', 'FUNCTION', 'TYPE', 'TRIGGER'].includes(kind ?? '')) {
       throw new ParseError(`Nicht unterstützter Objekttyp "${toks[k]?.text ?? ''}"`, toks[k]?.line ?? 1);
     }
@@ -280,7 +279,10 @@ class Instrumenter {
     } finally {
       if (nf) this.nfNest--;
     }
-    stmt.endLine = this.endOf(this.t[s.b - 1]).line;
+    const end = this.endOf(this.t[s.b - 1]);
+    stmt.endLine = end.line;
+    stmt.col = first.col;
+    stmt.endCol = end.col;
     return nf;
   }
 
@@ -401,10 +403,20 @@ class Instrumenter {
     } else if (first.up === 'FOR') {
       for (let k = s.a + 1; k < loopIdx; k++) {
         if (this.t[k].up === 'SELECT' || this.t[k].up === 'WITH') loop.kind = 'cursor-for';
-        if (this.t[k].up === 'WHEN') this.gap(this.t[k].line, 'WHEN-Filter in FOR-Iterationen (21c) wird nicht gemessen');
       }
-      if (loop.kind === 'cursor-for') this.scanRegion(s.a + 1, loopIdx, 'sql', 'start', s.kids.filter((k) => k.k !== 'seq'));
+      if (loop.kind === 'cursor-for') this.scanRegion(s.a + 1, loopIdx, 'sql', 'start', s.kids.filter((k) => k.k !== 'seq' && k.k !== 'branch'));
       else loop.kind = 'for';
+      // 21c: FOR i IN … WHEN cond (skips the iteration) / WHILE cond (ends the loop)
+      for (const f of s.kids.filter((k) => k.k === 'branch')) {
+        const kw = this.t[f.a];
+        const when = f.name === 'for-when';
+        const c = this.newConstruct(when ? 'for-when' : 'for-while', 'plsql', kw);
+        const d = this.decision(when ? 'for-when' : 'for-while', f.kids[0], 'plsql')!;
+        c.branches.push(
+          { label: when ? 'WHEN WAHR → Durchlauf' : 'WHILE WAHR → weiter', line: kw.line, col: kw.col, nf: false, derived: { decision: d.id, outcome: 'T' } },
+          { label: when ? 'WHEN nicht WAHR → übersprungen' : 'WHILE nicht WAHR → Ende', line: kw.line, col: kw.col, nf: false, derived: { decision: d.id, outcome: 'notT' } },
+        );
+      }
     }
     this.ins(insertPos, `${this.rt}.le(${loop.id});`);
     this.ins(this.t[loopIdx].end, ` ${this.rt}.li(${loop.id});`);
@@ -633,16 +645,13 @@ class Instrumenter {
         this.gap(tk.line, 'CASE in Abfrage mit GROUP BY nicht gemessen (Ausdrücke müssen identisch bleiben)');
         continue;
       }
-      if (!searched) {
-        this.gap(tk.line, 'Einfacher CASE-Ausdruck (CASE x WHEN …) wird im Prototyp nicht gemessen');
-        continue;
-      }
       const c = cases.get(k);
       if (!c) {
         this.gap(tk.line, 'CASE-Ausdruck nicht verstanden, nicht gemessen');
         continue;
       }
-      this.caseExpr(c, ctx, cl);
+      if (searched) this.caseExpr(c, ctx, cl);
+      else this.simpleCaseExpr(c, ctx, cl);
       k = c.b - 1;
     }
   }
@@ -670,6 +679,47 @@ class Instrumenter {
     }
     const endTok = this.t[n.b - 1];
     c.branches.push({ label: 'ELSE (implizit → NULL)', line: endTok.line, col: endTok.col, nf: false, derived: { decision: last!.id, outcome: 'notT' } });
+  }
+
+  /** CASE x WHEN v THEN r …: a branch probe in front of every result, also for the implicit ELSE. */
+  private simpleCaseExpr(n: Node, ctx: 'plsql' | 'sql', clause: string) {
+    const c = this.newConstruct('case-expr', ctx, this.t[n.a]);
+    const rt = this.rt;
+    // A CASE whose results are all NULL does not compile (PLS-00617): a probe around a NULL
+    // result, and the probe of the implicit ELSE, get a dead ELSE with the shortest real
+    // result of this CASE for the type. It never runs, the probe is always TRUE. Tokens only:
+    // no comments, no line breaks.
+    const isNull = (r: Node) => r.b - r.a === 1 && this.t[r.a].up === 'NULL';
+    const real = n.kids.flatMap((k) => (k.k === 'when' ? [k.kids[1]] : k.k === 'else' ? [k.kids[0]] : [])).filter((r) => !isNull(r));
+    const typed = real.sort((x, y) => x.b - x.a - (y.b - y.a))[0];
+    const copy = typed ? this.t.slice(typed.a, typed.b).map((t) => t.text.replace(/[\r\n]+/g, ' ')).join(' ') : 'null';
+    const probe = (res: Node) => {
+      const id = this.ids.branch++;
+      this.ins(this.t[res.a].start, `case when ${rt}.bt(${id}) then `);
+      this.scanRegion(res.a, res.b, ctx, clause, [res]);
+      this.ins(this.t[res.b - 1].end, isNull(res) ? ` else ${copy} end` : ' end');
+      return id;
+    };
+    for (const k of n.kids) {
+      if (k.k === 'when') {
+        const [val, res] = k.kids;
+        this.scanRegion(val.a, val.b, ctx, clause, [val]);
+        const whenTok = this.t[k.a];
+        const id = probe(res);
+        c.branches.push({ label: `WHEN ${this.text(val.a, val.b - 1).replace(/\s+/g, ' ')}`, line: whenTok.line, col: whenTok.col, nf: false, probe: id });
+      } else if (k.k === 'else') {
+        const elseTok = this.t[k.a];
+        const id = probe(k.kids[0]);
+        c.branches.push({ label: 'ELSE', line: elseTok.line, col: elseTok.col, nf: false, probe: id });
+        return;
+      } else {
+        this.scanRegion(k.a, k.b, ctx, clause, [k]); // the operand
+      }
+    }
+    const endTok = this.t[n.b - 1];
+    const id = this.ids.branch++;
+    this.ins(endTok.start, `else case when ${rt}.bt(${id}) then null else ${copy} end `);
+    c.branches.push({ label: 'ELSE (implizit → NULL)', line: endTok.line, col: endTok.col, nf: false, probe: id });
   }
 
   // ------------------------------------------------------------------ edits

@@ -1,12 +1,14 @@
 /**
  * Orchestrates a coverage run against a database:
  *
- *  1. baseline test run without coverage (timing)
- *  2. baseline test run with utPLSQL's own coverage (line coverage for comparison)
+ *  1. baseline test runs without coverage (timing; twice by default)
+ *  2. baseline test run with utPLSQL's own coverage (line coverage for comparison);
+ *     a test whose result changes across 1 and 2 is flaky
  *  3. instrument + compile all code objects of the schema
  *  4. test run on instrumented code, flush probes
  *  5. restore original code (always, also on failure)
- *  6. compare test results of 1 and 4 (instrumentation must not change behaviour)
+ *  6. compare test results of 1 and 4 (instrumentation must not change behaviour;
+ *     flaky tests left aside)
  */
 import oracledb from 'oracledb';
 import { randomUUID } from 'node:crypto';
@@ -34,6 +36,8 @@ export interface RunConfig {
   sqlProbes?: 'auto' | boolean;
   /** Record which test reaches which probe (default true). */
   perTest?: boolean;
+  /** Test runs without coverage before measuring (default 2); a test whose result changes is flaky. */
+  baselineRuns?: number;
 }
 
 export type { TestCase, TestRun } from '@pltest/core';
@@ -48,10 +52,17 @@ export interface RunReport {
   /** Test run with utPLSQL's own coverage (DBMS_PROFILER + DBMS_PLSQL_CODE_COVERAGE). */
   utplsqlRun: TestRun;
   instrumentedRun: TestRun;
+  /** Same results with and without instrumentation, flaky tests left aside. */
   equivalent: boolean;
+  /** Tests ("suite::name") whose result changed between runs without our instrumentation. */
+  flakyTests?: string[];
+  /** Stable tests whose result differs with instrumentation: "suite::name: before → after". */
+  differingTests?: string[];
   /** Tests of the run; per-test coverage refers to indices into this list. */
   tests: TestInfo[];
   perTest: boolean;
+  /** Runs without coverage before measuring. */
+  baselineRuns?: number;
   objects: ObjectResult[];
   log: string[];
 }
@@ -75,8 +86,20 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
 
     await runTests(conn, cfg.tests, null); // warm-up: utPLSQL builds its annotation cache on the first run
     say('1/4 Testlauf ohne Coverage …');
-    const baseline = await runTests(conn, cfg.tests, null);
+    const repeat = Math.max(1, cfg.baselineRuns ?? 2);
+    // Every run starts with fresh package state, like the instrumented run after compiling:
+    // tests that depend on state left by earlier tests then behave the same in all runs.
+    const fresh = () => conn.execute('begin dbms_session.reset_package; end;');
+    await fresh();
+    let baseline = await runTests(conn, cfg.tests, null);
+    const observed: TestCase[][] = [baseline.run.tests];
+    for (let k = 1; k < repeat; k++) {
+      await fresh();
+      baseline = await runTests(conn, cfg.tests, null);
+      observed.push(baseline.run.tests);
+    }
     say('2/4 Testlauf mit utPLSQL-Coverage (DBMS_PROFILER) …');
+    await fresh();
     const utCov = await runTests(conn, cfg.tests, schema);
 
     say('3/4 Instrumentieren und kompilieren …');
@@ -114,6 +137,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     say('4/4 Testlauf auf instrumentiertem Code …');
     const runId = randomUUID();
     const perTest = cfg.perTest !== false;
+    await fresh();
     await conn.execute(`begin cov$.reset; cov$.per_test(:p = 1); end;`, { p: perTest ? 1 : 0 });
     const instrumentedRun = await runTests(conn, cfg.tests, null);
     await conn.execute(`begin cov$.flush(:r); end;`, { r: runId });
@@ -124,10 +148,24 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     await restoreAll(conn, restore, say);
     restore.length = 0;
 
-    const equivalent = sameResults(baseline.run.tests, instrumentedRun.run.tests);
+    // Flaky: the result changed although our instrumentation was not involved (baseline runs and
+    // the run with utPLSQL's own coverage). They are left out of the equivalence check.
+    observed.push(utCov.run.tests);
+    const key = (t: TestCase) => `${t.suite}::${t.name}`;
+    const seen = new Map<string, Set<string>>();
+    for (const run of observed) for (const t of run) seen.set(key(t), (seen.get(key(t)) ?? new Set()).add(t.status));
+    const flaky = new Set([...seen].filter(([, st]) => st.size > 1).map(([k]) => k));
+    const before = new Map(baseline.run.tests.map((t) => [key(t), t.status]));
+    const differing = instrumentedRun.run.tests
+      .filter((t) => !flaky.has(key(t)) && before.get(key(t)) !== t.status)
+      .map((t) => `${key(t)}: ${before.get(key(t)) ?? 'fehlt'} → ${t.status}`);
+    const equivalent = differing.length === 0 && baseline.run.tests.filter((t) => !flaky.has(key(t))).every((t) => instrumentedRun.run.tests.some((u) => key(u) === key(t)));
+    for (const f of flaky) say(`  unzuverlässig (Ergebnis wechselt ohne Instrumentierung): ${f}`);
+    for (const d of differing) say(`  abweichend mit Instrumentierung: ${d}`);
     const tests = await loadTestCatalog(conn, schema, cfg.tests, baseline.run.tests, instrumentedRun.run.tests, hits);
     const testIndex = new Map(tests.map((t, k) => [t.path, k]));
-    say(equivalent ? 'Testergebnisse mit und ohne Instrumentierung identisch ✓' : 'ACHTUNG: Testergebnisse weichen ab!');
+    for (const t of tests) if (!t.setup && flaky.has(`${t.suite}::${t.description}`)) t.status = 'flaky';
+    say(equivalent ? `Testergebnisse mit und ohne Instrumentierung identisch ✓${flaky.size ? ` (${flaky.size} unzuverlässige Tests ausgenommen)` : ''}` : 'ACHTUNG: Testergebnisse weichen ab!');
 
     const objectsOut: ObjectResult[] = maps.map((m) => {
       if ('error' in m) {
@@ -159,6 +197,9 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       utplsqlRun: utCov.run,
       instrumentedRun: instrumentedRun.run,
       equivalent,
+      flakyTests: [...flaky].sort(),
+      baselineRuns: repeat,
+      differingTests: differing,
       tests,
       perTest,
       objects: objectsOut,
@@ -246,11 +287,13 @@ async function loadTestCatalog(
   for (const owner of owners) {
     for (const { owner: o, object: obj, item, description: desc, path } of await suiteTests(conn, owner)) {
       const full = `${o}.${obj}.${item}`.toLowerCase();
+      // utPLSQL paths: "schema", "schema.package[.procedure]", "package[.procedure]" in the current schema, ":suitepath"
       const inScope = paths.some((p) => {
         const q = p.toLowerCase();
-        return q === o.toLowerCase() || full === q || full.startsWith(q + '.') || (q.startsWith(':') && path.toLowerCase().startsWith(q.slice(1)));
+        if (q.startsWith(':')) return path.toLowerCase().startsWith(q.slice(1));
+        return [q, `${schema.toLowerCase()}.${q}`].some((x) => x === o.toLowerCase() || full === x || full.startsWith(x + '.'));
       });
-      if (!inScope) continue;
+      if (!inScope || tests.some((t) => t.path === full)) continue;
       const suite = path.toLowerCase().split('.').slice(0, -1).join('.');
       const description = desc || item.toLowerCase();
       const status = statusOf(instrumented, suite, description);

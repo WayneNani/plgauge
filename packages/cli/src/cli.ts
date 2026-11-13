@@ -3,24 +3,37 @@
  * pltest – coverage and mutation testing for PL/SQL
  *
  *   pltest coverage --config plcov.json [--out report]  measure coverage, write report ("run" is the old name)
+ *   pltest coverage [dir] --db oracle://…               same for a project with pltest.json/plmut.json (its units, its tests)
  *   pltest instrument <file.sql> [--no-sql]             print instrumented source (offline)
  *   pltest deploy <file.sql ...> --config plcov.json    run SQL*Plus-style scripts (demo setup)
- *   pltest report <coverage.json> [--out report]        re-render HTML from saved JSON
- *   pltest export <coverage.json> [--out file]          write the exchange format plcov-coverage/1
+ *   pltest report <coverage.json> [--mutation run.json] re-render HTML from saved JSON; with mutation results: joint report
+ *   pltest export <coverage.json> [--format F] [--src dir] [--out file]
+ *                                                       exchange format plcov-coverage/1 (json) or for CI:
+ *                                                       cobertura, sonar, lcov, junit; --src maps objects to files
+ *   pltest merge a.json b.json … --out merged.json      merge runs (plcov-coverage/1)
+ *   pltest check <coverage.json|run.json> --min-stmt N --min-branch N --min-cond N --min-mcdc N --min-score N
+ *                                                       CI thresholds; exit code 3 if one is missed
  *   pltest corpus <dir ...> [--db plcov.json]           robustness check on a corpus of PL/SQL files
  *   pltest restore --config plcov.json [--list]         put back code left changed by a killed run (journal)
- *   pltest mutate run [dir] [--mode schema|naive] …     mutation testing of a project with plmut.json
+ *   pltest mutate run [dir] [--mode schema|naive] …     mutation testing of a project with pltest.json
+ *        --diff origin/main                             only mutants on lines changed since the merge base (also coverage, check)
  *   pltest mutate points|schema [dir]                   list mutants / print the schema rewrite (offline)
  *   pltest mutate compare a.json b.json                 compare two runs (also against the Go plmut)
+ *   pltest crosscheck --coverage c.json --mutation m.json  recording run of the mutation against measured coverage
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-import { connect, ensureJournal, journalEntries, preprocess, restoreAll, splitScript } from '@pltest/core';
-import { instrument, newIds, runCoverage, toCoverageExport, runCorpus, type RunConfig, type RunReport } from '@pltest/coverage';
+import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { join, relative, resolve } from 'node:path';
+import { changedLines, connect, ensureJournal, journalEntries, preprocess, restoreAll, splitScript } from '@pltest/core';
+import {
+  checkQuotas, instrument, mergeExports, newIds, quotas, restrictToChanged, runCoverage, runCorpus, sourceMap, toCobertura,
+  toCoverageExport, toJunit,
+  toLcov, toSonar, type CoverageExport, type QuotaKey, type RunConfig, type RunReport,
+} from '@pltest/coverage';
 import { renderHtml } from '@pltest/report';
 import {
-  buildSchema, compare, htmlReport, jsonReport, mutationTestingReport, projectMutants, runMutation, switchable, textReport,
-  type Point,
+  buildSchema, compare, CoverageIndex, crossCheck, crossCheckText, htmlReport, jsonReport, mutationTestingReport, parseDbUrl,
+  loadConfig as loadProject, mutateFiles, projectCoverageConfig, projectMutants, runMutation, score, switchable, textReport,
+  type LinkedResult, type Point,
 } from '@pltest/mutation';
 
 const args = process.argv.slice(2);
@@ -33,11 +46,47 @@ const opt = (name: string) => {
   return v;
 };
 const flag = (name: string) => {
-  const k = args.indexOf(`--${name}`);
+  let k = args.indexOf(`--${name}`);
+  if (k < 0 && name.length === 1) k = args.indexOf(`-${name}`);
   if (k < 0) return false;
   args.splice(k, 1);
   return true;
 };
+
+/** A coverage JSON of either kind as exchange format. */
+function loadExport(file: string): CoverageExport {
+  const j = JSON.parse(readFileSync(file, 'utf8'));
+  return j.format === 'plcov-coverage/1' ? (j as CoverageExport) : toCoverageExport(j as RunReport);
+}
+
+const SQL_EXT = /\.(sql|pks|pkb|pkg|tps|tpb|typ|prc|fnc|trg|bdy|spc|plb|pls)$/i;
+function sqlFiles(dir: string, out: string[] = []): string[] {
+  for (const e of readdirSync(dir)) {
+    if (e === '.git' || e === 'node_modules') continue;
+    const p = join(dir, e);
+    if (statSync(p).isDirectory()) sqlFiles(p, out);
+    else if (SQL_EXT.test(e)) out.push(p);
+  }
+  return out;
+}
+
+/** --min-stmt/--min-branch/--min-cond/--min-mcdc (coverage) and --min-score (mutation). */
+function thresholds() {
+  const num = (n: string) => {
+    const v = opt(n);
+    return v === undefined ? undefined : Number(v);
+  };
+  return {
+    cov: { stmt: num('min-stmt'), branch: num('min-branch'), cond: num('min-cond'), mcdc: num('min-mcdc') } as Partial<Record<QuotaKey, number>>,
+    score: num('min-score'),
+  };
+}
+
+function enforce(violations: string[]) {
+  if (!violations.length) return;
+  for (const v of violations) console.error(`Schwelle verfehlt: ${v}`);
+  process.exitCode = 3;
+}
 
 function loadConfig(path: string | undefined): RunConfig {
   if (!path) throw new Error('--config fehlt');
@@ -50,32 +99,100 @@ async function main() {
   switch (cmd) {
     case 'coverage':
     case 'run': {
-      const cfg = loadConfig(opt('config'));
+      const configFile = opt('config');
+      const db = opt('db') ?? process.env.PLMUT_DB?.split(',')[0];
+      const skipInstall = flag('skip-install');
+      const th = thresholds();
+      const diffRef = opt('diff');
+      const src = opt('src');
       const out = resolve(opt('out') ?? 'plcov-report');
+      const project = configFile || !db ? undefined : args.shift() ?? '.';
+      const cfg = project === undefined ? loadConfig(configFile) : await projectCoverageConfig(project, db!, !skipInstall, (m) => console.error(m));
       const report = await runCoverage(cfg);
       mkdirSync(out, { recursive: true });
       writeFileSync(join(out, 'coverage.json'), JSON.stringify(report, null, 1));
       writeFileSync(join(out, 'plcov-coverage.json'), JSON.stringify(toCoverageExport(report), null, 1));
       writeFileSync(join(out, 'index.html'), renderHtml(report));
       console.error(`Bericht: ${join(out, 'index.html')}`);
+      if (!report.equivalent) {
+        console.error('Testergebnisse mit Instrumentierung weichen ab');
+        process.exitCode = 4;
+      }
+      let exp = toCoverageExport(report);
+      if (diffRef) {
+        const files = project !== undefined ? mutateFiles(loadProject(project), project) : src ? sqlFiles(src) : [];
+        if (!files.length) throw new Error('--diff braucht ein Projekt oder --src mit den Quelldateien');
+        exp = restrictToChanged(exp, sourceMap(files), changedLines(diffRef));
+        const q = quotas(exp);
+        console.error(`Geänderter Code (seit ${diffRef}): Anweisungen ${q.stmt.covered}/${q.stmt.total} · Branches ${q.branch.covered}/${q.branch.total} · Bedingungen ${q.cond.covered}/${q.cond.total}`);
+      }
+      enforce(checkQuotas(exp, th.cov));
       break;
     }
     case 'report': {
       const file = args.shift();
       if (!file) throw new Error('coverage.json fehlt');
       const out = resolve(opt('out') ?? 'plcov-report');
+      const mutation = opt('mutation');
       const report = JSON.parse(readFileSync(file, 'utf8')) as RunReport;
       mkdirSync(out, { recursive: true });
-      writeFileSync(join(out, 'index.html'), renderHtml(report));
+      writeFileSync(join(out, 'index.html'), renderHtml(report, mutation ? { mutation: JSON.parse(readFileSync(mutation, 'utf8')) } : {}));
       console.error(`Bericht: ${join(out, 'index.html')}`);
       break;
     }
     case 'export': {
       const file = args.shift();
       if (!file) throw new Error('coverage.json fehlt');
+      const format = opt('format') ?? 'json';
+      const src = opt('src');
+      const exp = loadExport(file);
+      const map = src ? sourceMap(sqlFiles(src), (p) => relative(process.cwd(), p)) : undefined;
+      const ext: Record<string, string> = { json: 'plcov-coverage.json', cobertura: 'cobertura.xml', sonar: 'sonar-coverage.xml', lcov: 'lcov.info', junit: 'junit.xml' };
+      if (!ext[format]) throw new Error(`unbekanntes Format ${format}: ${Object.keys(ext).join(', ')}`);
+      const out = resolve(opt('out') ?? ext[format]);
+      const text = format === 'json' ? JSON.stringify(exp, null, 1) : format === 'cobertura' ? toCobertura(exp, map)
+        : format === 'sonar' ? toSonar(exp, map) : format === 'lcov' ? toLcov(exp, map) : toJunit(exp);
+      writeFileSync(out, text);
+      if (map) {
+        const missing = exp.objects.filter((o) => !map.has(`${o.type} ${o.name}`.toUpperCase())).map((o) => o.name);
+        if (missing.length) console.error(`ohne Quelldatei (virtueller Pfad): ${missing.join(', ')}`);
+      }
+      console.error(`Export (${format}): ${out}`);
+      break;
+    }
+    case 'merge': {
       const out = resolve(opt('out') ?? 'plcov-coverage.json');
-      writeFileSync(out, JSON.stringify(toCoverageExport(JSON.parse(readFileSync(file, 'utf8')) as RunReport), null, 1));
-      console.error(`Export: ${out}`);
+      if (args.length < 2) throw new Error('merge braucht mindestens zwei Dateien');
+      const m = mergeExports(args.splice(0).map(loadExport));
+      writeFileSync(out, JSON.stringify(m, null, 1));
+      const q = quotas(m);
+      console.error(`${m.objects.length} Objekte, ${m.tests.length} Tests · Anweisungen ${q.stmt.covered}/${q.stmt.total} · Branches ${q.branch.covered}/${q.branch.total}`);
+      console.error(`Zusammengeführt: ${out}`);
+      break;
+    }
+    case 'check': {
+      const file = args.shift();
+      if (!file) throw new Error('Datei fehlt');
+      const th = thresholds();
+      const diffRef = opt('diff');
+      const src = opt('src');
+      const j = JSON.parse(readFileSync(file, 'utf8'));
+      if (Array.isArray(j.results)) {
+        const valid = j.results.filter((r: { status: string }) => ['KILLED', 'TIMEOUT', 'MEMORY', 'SURVIVED', 'NOT_COVERED'].includes(r.status));
+        const det = valid.filter((r: { status: string }) => ['KILLED', 'TIMEOUT', 'MEMORY'].includes(r.status)).length;
+        const score = valid.length ? (100 * det) / valid.length : 100;
+        console.error(`Mutation Score ${score.toFixed(1)} % (${det}/${valid.length})`);
+        if (th.score !== undefined && score + 1e-9 < th.score) enforce([`Mutation Score: ${score.toFixed(1)} % < ${th.score} %`]);
+      } else {
+        let exp = loadExport(file);
+        if (diffRef) {
+          if (!src) throw new Error('--diff braucht --src mit den Quelldateien');
+          exp = restrictToChanged(exp, sourceMap(sqlFiles(src)), changedLines(diffRef));
+        }
+        const q = quotas(exp);
+        console.error((Object.keys(q) as QuotaKey[]).map((k) => `${k} ${q[k].total ? ((100 * q[k].covered) / q[k].total).toFixed(1) : '–'} %`).join(' · '));
+        enforce(checkQuotas(exp, th.cov));
+      }
       break;
     }
     case 'corpus': {
@@ -87,6 +204,7 @@ async function main() {
       console.log(`Dateien ${r.files} · Bodies ${r.units.body} · Spezifikationen ${r.units.spec} · Latin-1-Dateien ${r.latin1Files.length}`);
       console.log(`Geparst und instrumentiert: ${r.parsed}/${r.units.body} (${pct(r.parsed, r.units.body)}) in ${r.ms.toFixed(0)} ms`);
       console.log(`Anweisungen ${r.statements} · Entscheidungen ${r.decisions} · Teilbedingungen ${r.conditions} · nicht gemessen ${r.gaps}`);
+      console.log(`Parser: ${r.opaque.regions} Ausdrucksbereiche nicht vollständig gelesen, ${pct(r.opaque.tokens, r.opaque.totalTokens)} der Tokens`);
       for (const f of r.failures) console.log(`  ✗ ${f.unit}: ${f.error}`);
       if (r.db) {
         console.log(`DB: Original kompiliert ${r.db.originalOk} · instrumentiert kompiliert ${r.db.instrumentedOk}/${r.db.originalOk} (${pct(r.db.instrumentedOk, r.db.originalOk)})`);
@@ -140,6 +258,9 @@ async function main() {
       const jsonOut = opt('json');
       const reportOut = opt('report');
       const resetCmd = opt('reset-cmd');
+      const coverageFile = opt('coverage');
+      const minScore = thresholds().score;
+      const diffRef = opt('diff');
       const skipInstall = flag('skip-install');
       const quiet = flag('q');
       if (sub === 'compare') {
@@ -149,8 +270,9 @@ async function main() {
         break;
       }
       const dir = args.shift() ?? '.';
+      const diff = diffRef ? changedLines(diffRef, dir) : undefined;
       if (sub === 'points') {
-        const { files, mutants } = projectMutants(dir, { ops: opSet });
+        const { files, mutants } = projectMutants(dir, { ops: opSet, diff });
         for (const f of files) for (const e of f.errors) console.log(`${f.path}: Syntaxfehler ${e}`);
         const one = (s: string) => s.split(/\s+/).filter(Boolean).join(' ');
         for (const m of mutants) console.log(`${String(m.id).padStart(4)} ${m.file}:${m.line}:${m.col} ${m.op} ${m.sub} ${one(m.original)} → ${one(m.mutated)}`);
@@ -164,16 +286,32 @@ async function main() {
       }
       if (sub !== 'run') throw new Error('Verwendung: pltest mutate run|points|schema|compare …');
       const rep = await runMutation({
-        dir, dbUrls: db.split(',').filter(Boolean), ops: opSet, timeoutFactor: factor, mode, skipInstall,
+        dir, dbUrls: db.split(',').filter(Boolean), ops: opSet, timeoutFactor: factor, mode, skipInstall, diff,
         resetCmd, sample: sampleN, seed, log: quiet ? undefined : (m) => console.error(m),
+        coverage: coverageFile ? (JSON.parse(readFileSync(coverageFile, 'utf8')) as CoverageExport) : undefined,
       });
       process.stdout.write(textReport(rep));
       if (jsonOut) writeFileSync(jsonOut, jsonReport(rep));
       if (reportOut) writeFileSync(reportOut, reportOut.endsWith('.html') ? htmlReport(rep, dir) : mutationTestingReport(rep, dir));
+      if (minScore !== undefined && score(rep) + 1e-9 < minScore) enforce([`Mutation Score: ${score(rep).toFixed(1)} % < ${minScore} %`]);
+      break;
+    }
+    case 'crosscheck': {
+      const cov = opt('coverage');
+      const mut = opt('mutation');
+      if (!cov || !mut) throw new Error('Verwendung: pltest crosscheck --coverage plcov-coverage.json --mutation run.json');
+      const idx = new CoverageIndex(JSON.parse(readFileSync(cov, 'utf8')) as CoverageExport);
+      const res = (JSON.parse(readFileSync(mut, 'utf8')).results ?? []) as LinkedResult[];
+      if (!res.some((r) => r.coveredBy)) throw new Error('Mutationslauf ohne aufgezeichnete Tests (Schema-Modus von pltest nötig)');
+      const c = crossCheck(res, idx);
+      process.stdout.write(crossCheckText(c));
+      if (c.contradictions.length) process.exitCode = 1;
       break;
     }
     case 'restore': {
-      const cfg = loadConfig(opt('config'));
+      const configFile = opt('config');
+      const db = opt('db') ?? process.env.PLMUT_DB?.split(',')[0];
+      const cfg = configFile || !db ? loadConfig(configFile) : parseDbUrl(db);
       const listOnly = flag('list');
       const conn = await connect(cfg);
       try {
@@ -191,7 +329,7 @@ async function main() {
       break;
     }
     default:
-      console.error('Verwendung: pltest coverage|mutate|report|export|instrument|deploy|corpus|restore …  (siehe README.md)');
+      console.error('Verwendung: pltest coverage|mutate|report|export|merge|check|crosscheck|instrument|deploy|corpus|restore …  (siehe README.md)');
       process.exitCode = 2;
   }
 }

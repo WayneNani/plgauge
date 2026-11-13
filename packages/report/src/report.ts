@@ -1,5 +1,8 @@
 /**
  * Self-contained HTML report (no external scripts; fonts from Google Fonts with fallbacks).
+ * With the results of a mutation run on the same code it becomes the joint report: per
+ * line the mutants and their verdicts beside the coverage, and as a finding every
+ * surviving mutant on an executed line (the tests run the code but do not check it).
  */
 import { tokenize } from '@pltest/core';
 import type { CondResult, Metric, ObjectResult } from '@pltest/coverage';
@@ -36,8 +39,53 @@ function bar(m: Metric, cls = ''): string {
   return `<div class="bar ${cls} t-${tone(v)}" role="img" aria-label="${fmtPct(v)}"><span style="width:${v ?? 0}%"></span></div>`;
 }
 
-export function renderHtml(r: RunReport): string {
+/** The parts of a mutation result (pltest mutate run --json) the joint report reads. */
+export interface MutationResultLite {
+  unit: string;
+  line: number;
+  /** File line of the unit keyword; ALL_SOURCE line = line - unitLine + 1. */
+  unitLine?: number;
+  op: string;
+  original: string;
+  mutated: string;
+  status: string;
+  killedBy?: string;
+  detail?: string;
+}
+
+const DETECTED = new Set(['KILLED', 'TIMEOUT', 'MEMORY']);
+const VALID = new Set(['KILLED', 'TIMEOUT', 'MEMORY', 'SURVIVED', 'NOT_COVERED']);
+const mutScore = (rs: MutationResultLite[]): Metric => ({
+  covered: rs.filter((x) => DETECTED.has(x.status)).length,
+  total: rs.filter((x) => VALID.has(x.status)).length,
+});
+const STATUS_DE: Record<string, string> = {
+  KILLED: 'getötet', TIMEOUT: 'Zeitgrenze', MEMORY: 'Speicher', SURVIVED: 'überlebt', NOT_COVERED: 'nicht erreicht',
+  COMPILE_ERROR: 'kompiliert nicht', ERROR: 'Fehler',
+};
+
+/** Mutation results per object key ("PACKAGE BODY NAME") and ALL_SOURCE line. */
+function mutationIndex(results: MutationResultLite[]): Map<string, Map<number, MutationResultLite[]>> {
+  const out = new Map<string, Map<number, MutationResultLite[]>>();
+  for (const m of results) {
+    const u = /^(PACKAGE BODY|TYPE BODY|PROCEDURE|FUNCTION|TRIGGER) (.+)$/.exec(m.unit);
+    if (!u) continue;
+    let name = u[2].slice(u[2].lastIndexOf('.') + 1);
+    name = name.startsWith('"') ? name.replace(/"/g, '') : name.toUpperCase();
+    const key = `${u[1]} ${name}`;
+    const line = m.line - (m.unitLine ?? 1) + 1;
+    let byLine = out.get(key);
+    if (!byLine) out.set(key, (byLine = new Map()));
+    byLine.set(line, [...(byLine.get(line) ?? []), m]);
+  }
+  return out;
+}
+
+export function renderHtml(r: RunReport, opts: { mutation?: { results: MutationResultLite[] } } = {}): string {
   const objs = r.objects;
+  const muts = opts.mutation ? mutationIndex(opts.mutation.results) : undefined;
+  const mutOf = (o: ObjectResult) => muts?.get(`${o.type} ${o.name}`);
+  const mutAll = muts ? objs.flatMap((o) => [...(mutOf(o)?.values() ?? [])].flat()) : [];
   const ut = objs.reduce((a, o) => ({ covered: a.covered + (o.utplsql?.covered ?? 0), total: a.total + (o.utplsql?.total ?? 0) }), { covered: 0, total: 0 });
   const totals = Object.fromEntries(METRICS.map((m) => [m.key, sum(objs, m.key)])) as Record<MetricKey, Metric>;
   const tips: string[] = [];
@@ -68,6 +116,14 @@ export function renderHtml(r: RunReport): string {
         <div class="cmp-val"><b>${fmtPct(pctNum(v))}</b><small>${v.covered}/${v.total}</small></div>
       </div>`;
     }),
+    ...(muts ? [(() => {
+      const v = mutScore(mutAll);
+      return `<div class="cmp-row">
+        <div class="cmp-label"><strong>Mutation Score</strong><span>Anteil der künstlich eingebauten Fehler, die ein Test bemerkt. Zeigt, ob ausgeführter Code auch geprüft wird.</span></div>
+        ${bar(v)}
+        <div class="cmp-val"><b>${fmtPct(pctNum(v))}</b><small>${v.covered}/${v.total}</small></div>
+      </div>`;
+    })()] : []),
   ].join('');
 
   // ---------------------------------------------------------------- run facts
@@ -83,7 +139,7 @@ export function renderHtml(r: RunReport): string {
       <div class="fact ${r.equivalent ? 'f-ok' : 'f-bad'}">
         <span class="fact-k">Verhalten unverändert</span>
         <span class="fact-v">${r.equivalent ? `${nTests}/${nTests} Tests identisch` : 'Ergebnisse weichen ab'}</span>
-        <span class="fact-d">Jeder Test liefert mit und ohne Instrumentierung dasselbe Ergebnis (${passed} bestanden).</span>
+        <span class="fact-d">${r.equivalent ? `Jeder Test liefert mit und ohne Instrumentierung dasselbe Ergebnis (${passed} bestanden).` : `Abweichend: ${(r.differingTests ?? []).map(esc).join('; ') || 'siehe Protokoll'}.`}${r.flakyTests?.length ? ` ${r.flakyTests.length} unzuverlässige Test${r.flakyTests.length === 1 ? '' : 's'} ausgenommen (Ergebnis wechselt schon ohne Instrumentierung): ${r.flakyTests.map((t) => esc(t.split('::').pop()!)).join(', ')}.` : ''}</span>
       </div>
       <div class="fact">
         <span class="fact-k">Instrumentieren (TypeScript)</span>
@@ -113,13 +169,17 @@ export function renderHtml(r: RunReport): string {
       <th scope="row"><a href="#o${idx}">${esc(o.name.toLowerCase())}</a><span class="otype">${esc(o.type.toLowerCase())}</span></th>
       <td><div class="cell">${bar(utm, 'mini ref')}<span class="num">${fmtPct(pctNum(utm))}</span></div></td>
       ${o.instrumentError ? `<td colspan="${METRICS.length}" class="err">${esc(o.instrumentError)}</td>` : cells}
-      <td class="num find">${o.findings.length}</td>
+      ${muts ? (() => {
+        const v = mutScore([...(mutOf(o)?.values() ?? [])].flat());
+        return `<td><div class="cell">${bar(v, 'mini')}<span class="num">${fmtPct(pctNum(v))}</span></div></td>`;
+      })() : ''}
+      <td class="num find">${o.findings.length + (muts ? unchecked(o, mutOf(o)).length : 0)}</td>
     </tr>`;
   }).join('');
 
   // ---------------------------------------------------------------- objects
   const testNames = (r.tests ?? []).map((t) => (t.setup ? t.description : `${t.description} <span style="opacity:.7">(${t.path.split('.').slice(1).join('.')})</span>`));
-  const sections = objs.map((o, idx) => renderObject(o, idx, tip, testNames)).join('');
+  const sections = objs.map((o, idx) => renderObject(o, idx, tip, testNames, muts ? mutOf(o) ?? new Map() : undefined)).join('');
 
   return `<title>plcov ${esc(r.schema)}</title>
 <meta name="claude:viewport-fit-sides" content="cover">
@@ -273,6 +333,8 @@ aside.findings { background: var(--surface); border: 1px solid var(--line); bord
 .kind.mcdc, .kind.cond { color: var(--null); }
 .kind.branch, .kind.stmt { color: var(--bad); }
 .kind.loop { color: var(--warn); }
+.kind.mut { color: var(--accent); }
+.br.mut { font-family: var(--font-code); }
 .findings .none { padding: 12px 16px; color: var(--ok); font-size: 14px; border-top: 1px solid var(--line); }
 .gaps li { padding: 8px 16px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 8px; }
 
@@ -311,7 +373,7 @@ aside.findings { background: var(--surface); border: 1px solid var(--line); bord
   <section aria-labelledby="h-obj">
     <header><div class="eyebrow">Objekte</div><h2 id="h-obj">Abdeckung je Programmeinheit</h2></header>
     <div class="tbl"><table>
-      <thead><tr><th>Objekt</th><th>Zeilen (utPLSQL)</th>${METRICS.map((m) => `<th>${m.label}</th>`).join('')}<th class="find">Lücken</th></tr></thead>
+      <thead><tr><th>Objekt</th><th>Zeilen (utPLSQL)</th>${METRICS.map((m) => `<th>${m.label}</th>`).join('')}${muts ? '<th>Mutation Score</th>' : ''}<th class="find">Lücken</th></tr></thead>
       <tbody>${tableRows}</tbody>
     </table></div>
   </section>
@@ -372,13 +434,37 @@ function testList(idx: number[] | undefined, names: string[], max = 10): string 
   return items + (idx.length > max ? `<div style="opacity:.75">… und ${idx.length - max} weitere</div>` : '');
 }
 
-function renderObject(o: ObjectResult, idx: number, tip: (html: string) => string, names: string[]): string {
+/** Surviving mutants on executed lines: the tests run this code but would not notice a fault in it. */
+function unchecked(o: ObjectResult, byLine: Map<number, MutationResultLite[]> | undefined): { line: number; m: MutationResultLite }[] {
+  if (!byLine) return [];
+  const out: { line: number; m: MutationResultLite }[] = [];
+  for (const [line, rs] of byLine) {
+    for (const m of rs) {
+      if (m.status !== 'SURVIVED') continue;
+      // the statement around the mutant ran: the line itself or the nearest statement start above
+      const st = o.statements.filter((s) => s.line <= line && s.endLine >= line).sort((a, b) => b.line - a.line)[0];
+      if (st && st.hits > 0) out.push({ line, m });
+    }
+  }
+  return out.sort((a, b) => a.line - b.line);
+}
+
+const one = (s: string, max = 48) => {
+  const t = s.split(/\s+/).filter(Boolean).join(' ');
+  return [...t].length > max ? [...t].slice(0, max - 1).join('') + '…' : t;
+};
+
+function renderObject(o: ObjectResult, idx: number, tip: (html: string) => string, names: string[], muts?: Map<number, MutationResultLite[]>): string {
   const chips = [
     o.utplsql ? `<span class="chip ref">Zeilen (utPLSQL) <b>${fmtPct(pctNum(o.utplsql))}</b></span>` : '',
     ...METRICS.map((m) => {
       const v = pctNum(o.metrics[m.key]);
       return `<span class="chip t-${tone(v)}">${m.label} <b>${fmtPct(v)}</b></span>`;
     }),
+    muts ? (() => {
+      const v = pctNum(mutScore([...muts.values()].flat()));
+      return `<span class="chip t-${tone(v)}">Mutation Score <b>${fmtPct(v)}</b></span>`;
+    })() : '',
   ].join('');
 
   const head = `<div class="obj-head"><div><div class="eyebrow">${esc(o.type.toLowerCase())}</div><h3>${esc(o.owner.toLowerCase())}.${esc(o.name.toLowerCase())}</h3></div><div class="chips">${chips}</div></div>`;
@@ -469,13 +555,25 @@ function renderObject(o: ObjectResult, idx: number, tip: (html: string) => strin
       const id = tip(`<b>Schleife (${lp.kind})</b><hr>${lp.kind === 'loop' ? '' : `<div class="row"><span>0 Durchläufe</span><span>${lp.zero}×</span></div>`}<div class="row"><span>genau 1 Durchlauf</span><span>${lp.one}×</span></div><div class="row"><span>mehrere Durchläufe</span><span>${lp.many}×</span></div>`);
       badge += `<span class="br t-${tone((cov / goals) * 100)}" data-tip="${id}" tabindex="0">↻ ${cov}/${goals}</span>`;
     }
+    const ms = muts?.get(line);
+    if (ms?.length) {
+      const v = mutScore(ms);
+      const det = v.covered;
+      const id = tip(`<b>Mutanten in Zeile ${line}</b><hr>${ms.map((m) => `<div class="row"><span><code>${esc(one(m.original))}</code> → <code>${esc(one(m.mutated))}</code> <span style="opacity:.7">${esc(m.op)}</span></span><span>${STATUS_DE[m.status] ?? esc(m.status)}</span></div>${m.status === 'KILLED' && m.killedBy ? `<div style="opacity:.75">von ${esc(m.killedBy)}</div>` : ''}`).join('')}`);
+      badge += `<span class="br mut t-${tone(pctNum(v))}" data-tip="${id}" tabindex="0">✱ ${det}/${v.total} Mutanten</span>`;
+    }
     return `<tr id="o${idx}-L${line}" class="${st ? `s-${st}` : ''}"><td class="ln">${line}</td><td class="ut">${utMark}</td><td class="hits">${hits === undefined ? '' : o.lineTests?.[line]?.length || hits === 0
       ? `<span data-tip="${tip(`<b>Zeile ${line}: ${hits.toLocaleString('de-DE')}× ausgeführt</b><hr>${testList(o.lineTests?.[line], names)}`)}" tabindex="0">${hits.toLocaleString('de-DE')}×</span>`
       : `${hits.toLocaleString('de-DE')}×`}</td><td class="src">${htmlLines[k] ?? ''}${badge}</td></tr>`;
   }).join('');
 
-  const findings = o.findings.length
-    ? `<ol>${o.findings.map((f) => `<li><a href="#o${idx}-L${f.line}"><span class="fl">Z. ${f.line}</span><span class="ft"><span class="kind ${f.kind}">${KIND[f.kind]}</span>${md(f.title)}${f.detail ? `<small>${md(f.detail)}</small>` : ''}</span></a></li>`).join('')}</ol>`
+  const mutFindings = unchecked(o, muts).map(({ line, m }) => ({
+    line, kind: 'mut', title: `Ausgeführt, aber ungeprüft: \`${one(m.original, 40)}\` → \`${one(m.mutated, 40)}\` bleibt unbemerkt`,
+    detail: `${m.op}: Die Tests führen die Zeile aus, keiner scheitert an der Änderung.`,
+  }));
+  const all = [...o.findings, ...mutFindings].sort((a, b) => a.line - b.line);
+  const findings = all.length
+    ? `<ol>${all.map((f) => `<li><a href="#o${idx}-L${f.line}"><span class="fl">Z. ${f.line}</span><span class="ft"><span class="kind ${f.kind}">${KIND[f.kind]}</span>${md(f.title)}${f.detail ? `<small>${md(f.detail)}</small>` : ''}</span></a></li>`).join('')}</ol>`
     : `<div class="none">Keine Lücken gefunden.</div>`;
   const gaps = o.gaps.length
     ? `<h4>Nicht gemessen</h4><ol class="gaps">${o.gaps.map((g) => `<li><span class="fl">Z. ${g.line}</span><span>${esc(g.reason)}</span></li>`).join('')}</ol>`
@@ -485,12 +583,12 @@ function renderObject(o: ObjectResult, idx: number, tip: (html: string) => strin
     ${head}
     <div class="obj-body">
       <div class="code"><table>${rows}</table></div>
-      <aside class="findings"><h4>Lücken (${o.findings.length})</h4>${findings}${gaps}</aside>
+      <aside class="findings"><h4>Lücken (${all.length})</h4>${findings}${gaps}</aside>
     </div>
   </section>`;
 }
 
-const KIND: Record<string, string> = { stmt: 'Anweisung', branch: 'Branch', cond: 'Bedingung', mcdc: 'MC/DC', loop: 'Schleife' };
+const KIND: Record<string, string> = { stmt: 'Anweisung', branch: 'Branch', cond: 'Bedingung', mcdc: 'MC/DC', loop: 'Schleife', mut: 'Mutant' };
 
 function condTip(c: CondResult, d: ObjectResult['decisions'][number]): string {
   const lines = [

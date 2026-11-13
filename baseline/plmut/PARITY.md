@@ -40,3 +40,26 @@ Coverage auf demselben Parser: Für alle 295 Bodies des Korpus sind instrumentie
 Sondenkarte identisch mit dem Token-Parser von plcov (`baseline/plcov/corpus-instrumented.tsv`,
 `npm run parity:coverage`); die Korpuszahlen bleiben 280/280, 25 496 Anweisungen, 2 891
 Entscheidungen, 3 383 Teilbedingungen.
+
+## Phase 5: Coverage und Mutation zusammen
+
+| Prüfung | Beispielprojekt | pljson |
+| --- | --- | --- |
+| Gegenprobe Aufzeichnungslauf gegen Coverage | 51 von 51 geprüften Mutanten stimmig (23 ohne Anweisung drumherum) | 1 632 von 1 636 stimmig; die 4 übrigen: Initialisierung pro Session, ausgelöst von einem anderen ersten Test, weil der Mutationslauf zwei scheiternde Tests ausschließt |
+| Orakel-Modus mit Testauswahl aus der Coverage | 75/75 Urteile wie Go und `expected.tsv`; im Mittel 5,6 statt 14 Tests pro Mutant | Stichprobe 150: 149 Urteile wie im Schema-Modus, 1 in beiden erkannt (Timeout gegen getötet) |
+
+Die Gegenprobe fand zwei echte Fehler, beide behoben: Der Testkatalog der Coverage erkannte utPLSQL-Pfade ohne
+Schema nicht (keine Zuordnung pro Test), und die Zuordnung nur über Zeilen griff daneben, wenn eine Bedingung und die
+Anweisungen ihres Zweigs auf einer Zeile stehen (`when buf = '{' then …`). Anweisungen haben deshalb jetzt auch Spalten.
+Die Coverage startet jeden Testlauf mit frischem Paketzustand; ein pljson-Test, der sonst nur auf frisch kompiliertem
+Code bestand, wich deshalb vorher scheinbar durch die Instrumentierung ab.
+
+## Bewusste Änderungen seit dem Gleichstand
+
+`baseline/plcov/corpus-instrumented.tsv` hielt bis Phase 5 die Ergebnisse des alten Token-Parsers fest (295 von 295
+gleich). Seitdem verfolgt es den zuletzt geprüften Stand (`npm run parity:coverage -- --accept`):
+
+| Änderung | Betroffene Bodies | Prüfung |
+| --- | --- | --- |
+| A6: einfache CASE-Ausdrücke gemessen (Sonde vor jedem Ergebnis) | 13 | Korpus-Kompiliertest: 330 von 332 Bodies, die im Original kompilieren, kompilieren instrumentiert; die 2 übrigen sind Namenskonflikte zwischen Beispielskripten (ORA-00955) |
+| Anweisungen mit Spalten in der Sondenkarte | alle (beim Vergleich ausgeblendet) | – |
