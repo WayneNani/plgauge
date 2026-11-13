@@ -119,4 +119,27 @@ export interface Hits {
   vec: Map<string, number>;
   /** key `${loop}:${0|1|n}` */
   loop: Map<string, number>;
+  /** Per test (utPLSQL path, lower case; "#owner.package" = suite setup outside a test): which probes were reached. */
+  perTest: Map<string, TestHits>;
+}
+
+export interface TestHits {
+  s: Set<number>;
+  b: Set<number>;
+  /** `${decision}:${cond}:${T|F|N}` */
+  c: Set<string>;
+  /** `${decision}:${T|F|N}` */
+  d: Set<string>;
+}
+
+/** A utPLSQL test (or a suite setup bucket) of a coverage run. */
+export interface TestInfo {
+  /** utPLSQL path owner.package.procedure in lower case; "#owner.package" for suite setup. */
+  path: string;
+  suite: string;
+  description: string;
+  setup: boolean;
+  status: 'passed' | 'failed' | 'error' | 'skipped' | 'unknown';
+  baselineStatus: 'passed' | 'failed' | 'error' | 'skipped' | 'unknown';
+  ms: number;
 }

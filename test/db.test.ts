@@ -33,7 +33,7 @@ test('instrumented code behaves exactly like the original', { skip: !m && 'PLCOV
     await conn.execute(`create or replace ${r.instrumented}`);
     const errs = await conn.execute(`select line, text from user_errors where name = 'PLCOV_TORTURE'`);
     assert.deepEqual(errs.rows, [], 'instrumented package compiles');
-    await conn.execute(`begin cov$.reset; end;`);
+    await conn.execute(`begin cov$.reset; cov$.per_test(true); end;`);
     const actual = await check();
     assert.equal(actual, expected);
     // golden value produced by the original (uninstrumented) package
@@ -43,6 +43,9 @@ test('instrumented code behaves exactly like the original', { skip: !m && 'PLCOV
     await conn.execute(`begin cov$.flush('torture'); end;`);
     const v = await conn.execute<[string]>(`select k from plcov_hits where run_id = 'torture' and kind = 'V' and k like '1|%'`);
     assert.ok(v.rows!.length >= 3, 'condition vectors recorded');
+    // per-test mode outside utPLSQL: everything lands in the "#" setup bucket
+    const pt = await conn.execute<[string, number]>(`select test, count(*) from plcov_hits where run_id = 'torture' and kind = 's' group by test`);
+    assert.deepEqual(pt.rows!.map((r) => r[0]), ['#']);
     await conn.execute(`delete from plcov_hits where run_id = 'torture'`);
     await conn.commit();
   } finally {

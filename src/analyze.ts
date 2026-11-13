@@ -1,7 +1,7 @@
 /**
  * Turns probe map + raw hits into metrics, per-line status and findings.
  */
-import type { CondNode, Hits, ObjectMap, Outcome, Span } from './model.js';
+import type { CondNode, Hits, ObjectMap, Outcome, Span, TestHits } from './model.js';
 
 export interface Metric {
   covered: number;
@@ -19,6 +19,8 @@ export interface CondResult {
   mcdc: 'yes' | 'no' | 'na';
   /** Human readable proposal for the missing test vector. */
   suggestion?: string;
+  /** Indices of tests in which the condition was TRUE / FALSE / NULL. */
+  tests?: { T: number[]; F: number[]; N: number[] };
 }
 
 export interface DecisionResult {
@@ -44,6 +46,11 @@ export interface BranchResult {
   nf: boolean;
   /** Explanation for derived branches, e.g. which outcome is missing. */
   reason?: string;
+  col: number;
+  /** Source range of the deciding condition (derived branches only). */
+  condition?: Span;
+  /** Indices of tests taking the branch. */
+  tests?: number[];
 }
 
 export interface LoopResult {
@@ -73,12 +80,16 @@ export interface ObjectResult {
   type: string;
   lines: string[];
   metrics: Record<'stmt' | 'branch' | 'cond' | 'mcdc' | 'loop', Metric>;
-  statements: { id: number; line: number; endLine: number; hits: number; nf: boolean }[];
+  statements: { id: number; line: number; endLine: number; hits: number; nf: boolean; tests?: number[] }[];
   branches: BranchResult[];
   decisions: DecisionResult[];
   loops: LoopResult[];
   lineStatus: Record<number, LineStatus>;
   lineHits: Record<number, number>;
+  /** Indices of tests that executed a statement starting on the line. */
+  lineTests: Record<number, number[]>;
+  sourceSha256?: string;
+  rawSha256?: string;
   gaps: { line: number; reason: string }[];
   findings: Finding[];
   /** Line coverage as reported by utPLSQL (DBMS_PROFILER) for the same tests. */
@@ -88,11 +99,21 @@ export interface ObjectResult {
 
 const WORD: Record<string, string> = { T: 'WAHR', F: 'FALSCH', N: 'NULL', '-': 'nicht ausgewertet' };
 
-export function analyze(map: ObjectMap, hits: Hits): ObjectResult {
+export function analyze(map: ObjectMap, hits: Hits, testIndex: Map<string, number> = new Map()): ObjectResult {
   const g = <K>(m: Map<K, number>, k: K) => m.get(k) ?? 0;
   const lines = map.source.replace(/\n$/, '').split('\n');
+  const perTest: [number, TestHits][] = [];
+  for (const [name, th] of hits.perTest ?? []) {
+    const idx = testIndex.get(name);
+    if (idx !== undefined) perTest.push([idx, th]);
+  }
+  const testsWhere = (pred: (th: TestHits) => boolean) => perTest.filter(([, th]) => pred(th)).map(([k]) => k).sort((a, b) => a - b);
+  const withTests = perTest.length > 0;
 
-  const statements = map.statements.map((s) => ({ id: s.id, line: s.line, endLine: s.endLine, hits: g(hits.stmt, s.id), nf: s.nf }));
+  const statements = map.statements.map((s) => ({
+    id: s.id, line: s.line, endLine: s.endLine, hits: g(hits.stmt, s.id), nf: s.nf,
+    tests: withTests ? testsWhere((th) => th.s.has(s.id)) : undefined,
+  }));
 
   const decisions: DecisionResult[] = map.decisions.map((d) => {
     const n = d.conds.length;
@@ -105,6 +126,11 @@ export function analyze(map: ObjectMap, hits: Hits): ObjectResult {
       i: c.i, text: c.text, span: c.span,
       t: g(hits.cond, `${d.id}:${c.i}:T`), f: g(hits.cond, `${d.id}:${c.i}:F`), n: g(hits.cond, `${d.id}:${c.i}:N`),
       mcdc: d.vectors ? 'no' : 'na',
+      tests: withTests ? {
+        T: testsWhere((th) => th.c.has(`${d.id}:${c.i}:T`)),
+        F: testsWhere((th) => th.c.has(`${d.id}:${c.i}:F`)),
+        N: testsWhere((th) => th.c.has(`${d.id}:${c.i}:N`)),
+      } : undefined,
     }));
     if (d.vectors) computeMcdc(d.tree, conds, vectors);
     return {
@@ -119,9 +145,18 @@ export function analyze(map: ObjectMap, hits: Hits): ObjectResult {
     for (const b of c.branches) {
       let h = 0;
       let reason: string | undefined;
-      if (b.probe !== undefined) h = g(hits.branch, b.probe);
-      else if (b.derived) {
+      let tests: number[] | undefined;
+      let condition: Span | undefined;
+      if (b.probe !== undefined) {
+        h = g(hits.branch, b.probe);
+        if (withTests) tests = testsWhere((th) => th.b.has(b.probe!));
+      } else if (b.derived) {
         const d = decById.get(b.derived.decision)!;
+        const dk = b.derived;
+        condition = d.span;
+        if (withTests) {
+          tests = testsWhere((th) => dk.outcome === 'T' ? th.d.has(`${dk.decision}:T`) : th.d.has(`${dk.decision}:F`) || th.d.has(`${dk.decision}:N`));
+        }
         h = b.derived.outcome === 'T' ? d.outcomes.T : d.outcomes.F + d.outcomes.N;
         if (h === 0) {
           reason = b.derived.outcome === 'T'
@@ -130,7 +165,10 @@ export function analyze(map: ObjectMap, hits: Hits): ObjectResult {
           if (d.outcomes.T + d.outcomes.F + d.outcomes.N === 0) reason = `Bedingung \`${short(d.text)}\` wurde nie ausgewertet`;
         }
       }
-      branches.push({ construct: c.id, constructKind: c.kind, ctx: c.ctx, label: b.label, line: b.line, hits: h, nf: b.nf || (b.derived ? decById.get(b.derived.decision)!.nf : false), reason });
+      branches.push({
+        construct: c.id, constructKind: c.kind, ctx: c.ctx, label: b.label, line: b.line, col: b.col, hits: h,
+        nf: b.nf || (b.derived ? decById.get(b.derived.decision)!.nf : false), reason, tests, condition,
+      });
     }
   }
 
@@ -162,6 +200,11 @@ export function analyze(map: ObjectMap, hits: Hits): ObjectResult {
   // ---- per-line status
   const lineStatus: Record<number, LineStatus> = {};
   const lineHits: Record<number, number> = {};
+  const lineTests: Record<number, number[]> = {};
+  for (const s of statements) {
+    if (!s.tests?.length) continue;
+    lineTests[s.line] = [...new Set([...(lineTests[s.line] ?? []), ...s.tests])].sort((a, b) => a - b);
+  }
   const byLine = new Map<number, { hit: number; miss: number; nf: number }>();
   for (const s of statements) {
     const e = byLine.get(s.line) ?? { hit: 0, miss: 0, nf: 0 };
@@ -222,7 +265,7 @@ export function analyze(map: ObjectMap, hits: Hits): ObjectResult {
   return {
     key: `${map.type} ${map.owner}.${map.name}`.toLowerCase(),
     owner: map.owner, name: map.name, type: map.type, lines,
-    metrics, statements, branches, decisions, loops, lineStatus, lineHits, gaps: map.gaps, findings,
+    metrics, statements, branches, decisions, loops, lineStatus, lineHits, lineTests, gaps: map.gaps, findings,
   };
 }
 

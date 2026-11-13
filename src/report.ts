@@ -118,7 +118,8 @@ export function renderHtml(r: RunReport): string {
   }).join('');
 
   // ---------------------------------------------------------------- objects
-  const sections = objs.map((o, idx) => renderObject(o, idx, tip)).join('');
+  const testNames = (r.tests ?? []).map((t) => (t.setup ? t.description : `${t.description} <span style="opacity:.7">(${t.path.split('.').slice(1).join('.')})</span>`));
+  const sections = objs.map((o, idx) => renderObject(o, idx, tip, testNames)).join('');
 
   return `<title>plcov ${esc(r.schema)}</title>
 <meta name="claude:viewport-fit-sides" content="cover">
@@ -236,6 +237,7 @@ td.err { color: var(--bad); white-space: normal; }
 .ut i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; border: 1.5px solid var(--muted); }
 .ut i.y { background: var(--muted); }
 .hits { color: var(--muted); text-align: right; padding: 0 8px !important; font-size: 11.5px; user-select: none; min-width: 52px; }
+.hits span { cursor: help; border-bottom: 1px dotted var(--line); }
 .src { padding: 0 16px 0 10px !important; border-left: 3px solid transparent; }
 tr.s-covered .src { border-left-color: var(--ok); }
 tr.s-partial .src { border-left-color: var(--warn); background: var(--warn-tint); }
@@ -364,7 +366,13 @@ aside.findings { background: var(--surface); border: 1px solid var(--line); bord
 
 // -------------------------------------------------------------------- object
 
-function renderObject(o: ObjectResult, idx: number, tip: (html: string) => string): string {
+function testList(idx: number[] | undefined, names: string[], max = 10): string {
+  if (!idx?.length) return '<div style="opacity:.75">von keinem Test erreicht</div>';
+  const items = idx.slice(0, max).map((k) => `<div>• ${names[k] ?? esc(String(k))}</div>`).join('');
+  return items + (idx.length > max ? `<div style="opacity:.75">… und ${idx.length - max} weitere</div>` : '');
+}
+
+function renderObject(o: ObjectResult, idx: number, tip: (html: string) => string, names: string[]): string {
   const chips = [
     o.utplsql ? `<span class="chip ref">Zeilen (utPLSQL) <b>${fmtPct(pctNum(o.utplsql))}</b></span>` : '',
     ...METRICS.map((m) => {
@@ -451,7 +459,7 @@ function renderObject(o: ObjectResult, idx: number, tip: (html: string) => strin
     if (brs?.length) {
       const cov = brs.filter((b) => b.hits > 0).length;
       const v = (cov / brs.length) * 100;
-      const id = tip(`<b>Zweige in Zeile ${line}</b><hr>${brs.map((b) => `<div class="row"><span>${md(b.label)}</span><span>${b.hits}×</span></div>${b.hits === 0 && b.reason ? `<div style="opacity:.75">${md(b.reason)}</div>` : ''}`).join('')}`);
+      const id = tip(`<b>Zweige in Zeile ${line}</b><hr>${brs.map((b) => `<div class="row"><span>${md(b.label)}</span><span>${b.hits}×${b.tests ? ` · ${b.tests.length} Test${b.tests.length === 1 ? '' : 's'}` : ''}</span></div>${b.hits === 0 && b.reason ? `<div style="opacity:.75">${md(b.reason)}</div>` : ''}`).join('')}`);
       badge += `<span class="br t-${tone(v)}" data-tip="${id}" tabindex="0">◆ ${cov}/${brs.length} Zweige</span>`;
     }
     const lp = loopByLine.get(line);
@@ -461,7 +469,9 @@ function renderObject(o: ObjectResult, idx: number, tip: (html: string) => strin
       const id = tip(`<b>Schleife (${lp.kind})</b><hr>${lp.kind === 'loop' ? '' : `<div class="row"><span>0 Durchläufe</span><span>${lp.zero}×</span></div>`}<div class="row"><span>genau 1 Durchlauf</span><span>${lp.one}×</span></div><div class="row"><span>mehrere Durchläufe</span><span>${lp.many}×</span></div>`);
       badge += `<span class="br t-${tone((cov / goals) * 100)}" data-tip="${id}" tabindex="0">↻ ${cov}/${goals}</span>`;
     }
-    return `<tr id="o${idx}-L${line}" class="${st ? `s-${st}` : ''}"><td class="ln">${line}</td><td class="ut">${utMark}</td><td class="hits">${hits !== undefined ? `${hits.toLocaleString('de-DE')}×` : ''}</td><td class="src">${htmlLines[k] ?? ''}${badge}</td></tr>`;
+    return `<tr id="o${idx}-L${line}" class="${st ? `s-${st}` : ''}"><td class="ln">${line}</td><td class="ut">${utMark}</td><td class="hits">${hits === undefined ? '' : o.lineTests?.[line]?.length || hits === 0
+      ? `<span data-tip="${tip(`<b>Zeile ${line}: ${hits.toLocaleString('de-DE')}× ausgeführt</b><hr>${testList(o.lineTests?.[line], names)}`)}" tabindex="0">${hits.toLocaleString('de-DE')}×</span>`
+      : `${hits.toLocaleString('de-DE')}×`}</td><td class="src">${htmlLines[k] ?? ''}${badge}</td></tr>`;
   }).join('');
 
   const findings = o.findings.length

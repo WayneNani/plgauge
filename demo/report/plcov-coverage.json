@@ -1,0 +1,775 @@
+{
+ "format": "plcov-coverage/1",
+ "generated": "2026-11-13T19:18:19.287Z",
+ "database": "Oracle AI Database 26ai Free Release 23.26.3.0.0 - Develop, Learn, and Run for Free",
+ "schema": "DEMO",
+ "coordinates": "all_source",
+ "tests": [
+  {
+   "path": "demo.test_order_pricing.archive_in_batches",
+   "setup": false,
+   "status": "passed",
+   "ms": 1.372,
+   "baselineRuns": 1
+  },
+  {
+   "path": "demo.test_order_pricing.bulk_discount",
+   "setup": false,
+   "status": "passed",
+   "ms": 4.094,
+   "baselineRuns": 1
+  },
+  {
+   "path": "demo.test_order_pricing.coupon_discount",
+   "setup": false,
+   "status": "passed",
+   "ms": 0.85,
+   "baselineRuns": 1
+  },
+  {
+   "path": "demo.test_order_pricing.no_discount",
+   "setup": false,
+   "status": "passed",
+   "ms": 0.813,
+   "baselineRuns": 1
+  },
+  {
+   "path": "demo.test_order_pricing.pricing_load",
+   "setup": false,
+   "status": "passed",
+   "ms": 103.291,
+   "baselineRuns": 1
+  },
+  {
+   "path": "demo.test_order_pricing.risk_high",
+   "setup": false,
+   "status": "passed",
+   "ms": 6.134,
+   "baselineRuns": 1
+  },
+  {
+   "path": "demo.test_order_pricing.risk_unknown",
+   "setup": false,
+   "status": "passed",
+   "ms": 0.852,
+   "baselineRuns": 1
+  },
+  {
+   "path": "demo.test_order_pricing.shipping_de",
+   "setup": false,
+   "status": "passed",
+   "ms": 0.723,
+   "baselineRuns": 1
+  },
+  {
+   "path": "demo.test_order_pricing.shipping_unknown_country",
+   "setup": false,
+   "status": "passed",
+   "ms": 0.935,
+   "baselineRuns": 1
+  },
+  {
+   "path": "demo.test_order_pricing.vip_large_order",
+   "setup": false,
+   "status": "passed",
+   "ms": 0.987,
+   "baselineRuns": 1
+  },
+  {
+   "path": "#demo.test_order_pricing",
+   "setup": true,
+   "status": "unknown",
+   "ms": 0,
+   "baselineRuns": 1
+  }
+ ],
+ "objects": [
+  {
+   "owner": "DEMO",
+   "name": "ARCHIVE_ORDERS",
+   "type": "PROCEDURE",
+   "sourceSha256": "3714d23326d6f4e5835fc2935c7b7be8bd6c991be0a656a192fc22a6afd3d06a",
+   "rawSha256": "3714d23326d6f4e5835fc2935c7b7be8bd6c991be0a656a192fc22a6afd3d06a",
+   "instrumented": true,
+   "lines": {
+    "5": {
+     "hits": 2,
+     "tests": [
+      0
+     ]
+    },
+    "8": {
+     "hits": 1,
+     "tests": [
+      0
+     ]
+    },
+    "9": {
+     "hits": 2,
+     "tests": [
+      0
+     ]
+    },
+    "10": {
+     "hits": 2,
+     "tests": [
+      0
+     ]
+    },
+    "11": {
+     "hits": 2,
+     "tests": [
+      0
+     ]
+    },
+    "12": {
+     "hits": 2,
+     "tests": [
+      0
+     ]
+    },
+    "17": {
+     "hits": 0,
+     "tests": []
+    },
+    "18": {
+     "hits": 0,
+     "tests": []
+    }
+   },
+   "branches": [
+    {
+     "line": 12,
+     "col": 5,
+     "label": "WAHR → Schleife verlassen",
+     "kind": "exit-when",
+     "hits": 1,
+     "tests": [
+      0
+     ],
+     "condition": {
+      "line": 12,
+      "col": 15,
+      "endLine": 12,
+      "endCol": 31
+     }
+    },
+    {
+     "line": 12,
+     "col": 5,
+     "label": "nicht WAHR → weiter",
+     "kind": "exit-when",
+     "hits": 1,
+     "tests": [
+      0
+     ],
+     "condition": {
+      "line": 12,
+      "col": 15,
+      "endLine": 12,
+      "endCol": 31
+     }
+    },
+    {
+     "line": 15,
+     "col": 3,
+     "label": "WHEN others",
+     "kind": "handlers",
+     "hits": 0,
+     "tests": []
+    }
+   ],
+   "conditions": [
+    {
+     "decision": 1,
+     "index": 1,
+     "text": "l_rows < p_batch",
+     "context": "plsql",
+     "range": {
+      "line": 12,
+      "col": 15,
+      "endLine": 12,
+      "endCol": 31
+     },
+     "tests": {
+      "T": [
+       0
+      ],
+      "F": [
+       0
+      ],
+      "N": []
+     }
+    }
+   ],
+   "notMeasured": []
+  },
+  {
+   "owner": "DEMO",
+   "name": "ORDER_PRICING",
+   "type": "PACKAGE BODY",
+   "sourceSha256": "b749485e485bac62a4944f4e59263931a8abf6a7b1d7c6d96057e650a740cf51",
+   "rawSha256": "b749485e485bac62a4944f4e59263931a8abf6a7b1d7c6d96057e650a740cf51",
+   "instrumented": true,
+   "lines": {
+    "6": {
+     "hits": 20003,
+     "tests": [
+      2,
+      3,
+      4,
+      9
+     ]
+    },
+    "7": {
+     "hits": 20001,
+     "tests": [
+      4,
+      9
+     ]
+    },
+    "9": {
+     "hits": 1,
+     "tests": [
+      2
+     ]
+    },
+    "11": {
+     "hits": 20003,
+     "tests": [
+      2,
+      3,
+      4,
+      9
+     ]
+    },
+    "17": {
+     "hits": 3,
+     "tests": [
+      7,
+      8,
+      10
+     ]
+    },
+    "18": {
+     "hits": 2,
+     "tests": [
+      7,
+      10
+     ]
+    },
+    "19": {
+     "hits": 0,
+     "tests": []
+    },
+    "20": {
+     "hits": 0,
+     "tests": []
+    },
+    "22": {
+     "hits": 2,
+     "tests": [
+      7,
+      10
+     ]
+    },
+    "23": {
+     "hits": 2,
+     "tests": [
+      7,
+      10
+     ]
+    },
+    "26": {
+     "hits": 1,
+     "tests": [
+      8
+     ]
+    },
+    "32": {
+     "hits": 2,
+     "tests": [
+      5,
+      6
+     ]
+    },
+    "40": {
+     "hits": 1,
+     "tests": [
+      5
+     ]
+    },
+    "43": {
+     "hits": 1,
+     "tests": [
+      6
+     ]
+    },
+    "49": {
+     "hits": 1,
+     "tests": [
+      1
+     ]
+    },
+    "50": {
+     "hits": 2,
+     "tests": [
+      1
+     ]
+    },
+    "51": {
+     "hits": 2,
+     "tests": [
+      1
+     ]
+    },
+    "53": {
+     "hits": 1,
+     "tests": [
+      1
+     ]
+    }
+   },
+   "branches": [
+    {
+     "line": 6,
+     "col": 5,
+     "label": "THEN",
+     "kind": "if",
+     "hits": 20001,
+     "tests": [
+      4,
+      9
+     ],
+     "condition": {
+      "line": 6,
+      "col": 8,
+      "endLine": 6,
+      "endCol": 33
+     }
+    },
+    {
+     "line": 8,
+     "col": 5,
+     "label": "ELSIF … THEN",
+     "kind": "if",
+     "hits": 1,
+     "tests": [
+      2
+     ],
+     "condition": {
+      "line": 8,
+      "col": 11,
+      "endLine": 8,
+      "endCol": 64
+     }
+    },
+    {
+     "line": 10,
+     "col": 5,
+     "label": "ELSE (implizit)",
+     "kind": "if",
+     "hits": 1,
+     "tests": [
+      3
+     ],
+     "condition": {
+      "line": 8,
+      "col": 11,
+      "endLine": 8,
+      "endCol": 64
+     }
+    },
+    {
+     "line": 18,
+     "col": 7,
+     "label": "WHEN 'DE'",
+     "kind": "case",
+     "hits": 2,
+     "tests": [
+      7,
+      10
+     ]
+    },
+    {
+     "line": 19,
+     "col": 7,
+     "label": "WHEN 'AT'",
+     "kind": "case",
+     "hits": 0,
+     "tests": []
+    },
+    {
+     "line": 20,
+     "col": 7,
+     "label": "WHEN 'CH'",
+     "kind": "case",
+     "hits": 0,
+     "tests": []
+    },
+    {
+     "line": 21,
+     "col": 5,
+     "label": "ELSE (implizit → CASE_NOT_FOUND)",
+     "kind": "case",
+     "hits": 1,
+     "tests": [
+      8
+     ]
+    },
+    {
+     "line": 22,
+     "col": 5,
+     "label": "THEN",
+     "kind": "if",
+     "hits": 0,
+     "tests": [],
+     "condition": {
+      "line": 22,
+      "col": 8,
+      "endLine": 22,
+      "endCol": 24
+     }
+    },
+    {
+     "line": 22,
+     "col": 50,
+     "label": "ELSE (implizit)",
+     "kind": "if",
+     "hits": 2,
+     "tests": [
+      7,
+      10
+     ],
+     "condition": {
+      "line": 22,
+      "col": 8,
+      "endLine": 22,
+      "endCol": 24
+     }
+    },
+    {
+     "line": 25,
+     "col": 5,
+     "label": "WHEN case_not_found",
+     "kind": "handlers",
+     "hits": 1,
+     "tests": [
+      8
+     ]
+    },
+    {
+     "line": 33,
+     "col": 14,
+     "label": "WHEN c.open_invoices > 3 or c.days_overdue > 60",
+     "kind": "case-expr",
+     "hits": 1,
+     "tests": [
+      5
+     ],
+     "condition": {
+      "line": 33,
+      "col": 19,
+      "endLine": 33,
+      "endCol": 61
+     }
+    },
+    {
+     "line": 34,
+     "col": 14,
+     "label": "WHEN c.open_invoices > 0",
+     "kind": "case-expr",
+     "hits": 0,
+     "tests": [],
+     "condition": {
+      "line": 34,
+      "col": 19,
+      "endLine": 34,
+      "endCol": 38
+     }
+    },
+    {
+     "line": 35,
+     "col": 14,
+     "label": "ELSE",
+     "kind": "case-expr",
+     "hits": 0,
+     "tests": [],
+     "condition": {
+      "line": 34,
+      "col": 19,
+      "endLine": 34,
+      "endCol": 38
+     }
+    },
+    {
+     "line": 42,
+     "col": 5,
+     "label": "WHEN no_data_found",
+     "kind": "handlers",
+     "hits": 1,
+     "tests": [
+      6
+     ]
+    },
+    {
+     "line": 51,
+     "col": 7,
+     "label": "WAHR → Schleife verlassen",
+     "kind": "exit-when",
+     "hits": 0,
+     "tests": [],
+     "condition": {
+      "line": 51,
+      "col": 17,
+      "endLine": 51,
+      "endCol": 32
+     }
+    },
+    {
+     "line": 51,
+     "col": 7,
+     "label": "nicht WAHR → weiter",
+     "kind": "exit-when",
+     "hits": 2,
+     "tests": [
+      1
+     ],
+     "condition": {
+      "line": 51,
+      "col": 17,
+      "endLine": 51,
+      "endCol": 32
+     }
+    },
+    {
+     "line": 54,
+     "col": 28,
+     "label": "WHEN l_total >= 5000",
+     "kind": "case-expr",
+     "hits": 1,
+     "tests": [
+      1
+     ],
+     "condition": {
+      "line": 54,
+      "col": 33,
+      "endLine": 54,
+      "endCol": 48
+     }
+    },
+    {
+     "line": 54,
+     "col": 59,
+     "label": "ELSE",
+     "kind": "case-expr",
+     "hits": 0,
+     "tests": [],
+     "condition": {
+      "line": 54,
+      "col": 33,
+      "endLine": 54,
+      "endCol": 48
+     }
+    }
+   ],
+   "conditions": [
+    {
+     "decision": 2,
+     "index": 1,
+     "text": "p_vip",
+     "context": "plsql",
+     "range": {
+      "line": 6,
+      "col": 8,
+      "endLine": 6,
+      "endCol": 13
+     },
+     "tests": {
+      "T": [
+       4,
+       9
+      ],
+      "F": [
+       2,
+       3
+      ],
+      "N": []
+     }
+    },
+    {
+     "decision": 2,
+     "index": 2,
+     "text": "p_amount > 1000",
+     "context": "plsql",
+     "range": {
+      "line": 6,
+      "col": 18,
+      "endLine": 6,
+      "endCol": 33
+     },
+     "tests": {
+      "T": [
+       4,
+       9
+      ],
+      "F": [],
+      "N": []
+     }
+    },
+    {
+     "decision": 3,
+     "index": 1,
+     "text": "p_coupon is not null",
+     "context": "plsql",
+     "range": {
+      "line": 8,
+      "col": 11,
+      "endLine": 8,
+      "endCol": 31
+     },
+     "tests": {
+      "T": [
+       2
+      ],
+      "F": [
+       3
+      ],
+      "N": []
+     }
+    },
+    {
+     "decision": 3,
+     "index": 2,
+     "text": "p_amount between 500 and 1000",
+     "context": "plsql",
+     "range": {
+      "line": 8,
+      "col": 35,
+      "endLine": 8,
+      "endCol": 64
+     },
+     "tests": {
+      "T": [],
+      "F": [
+       3
+      ],
+      "N": []
+     }
+    },
+    {
+     "decision": 4,
+     "index": 1,
+     "text": "p_weight_kg > 20",
+     "context": "plsql",
+     "range": {
+      "line": 22,
+      "col": 8,
+      "endLine": 22,
+      "endCol": 24
+     },
+     "tests": {
+      "T": [],
+      "F": [
+       7,
+       10
+      ],
+      "N": []
+     }
+    },
+    {
+     "decision": 5,
+     "index": 1,
+     "text": "c.open_invoices > 3",
+     "context": "sql",
+     "range": {
+      "line": 33,
+      "col": 19,
+      "endLine": 33,
+      "endCol": 38
+     },
+     "tests": {
+      "T": [
+       5
+      ],
+      "F": [],
+      "N": []
+     }
+    },
+    {
+     "decision": 5,
+     "index": 2,
+     "text": "c.days_overdue > 60",
+     "context": "sql",
+     "range": {
+      "line": 33,
+      "col": 42,
+      "endLine": 33,
+      "endCol": 61
+     },
+     "tests": {
+      "T": [],
+      "F": [],
+      "N": []
+     }
+    },
+    {
+     "decision": 6,
+     "index": 1,
+     "text": "c.open_invoices > 0",
+     "context": "sql",
+     "range": {
+      "line": 34,
+      "col": 19,
+      "endLine": 34,
+      "endCol": 38
+     },
+     "tests": {
+      "T": [],
+      "F": [],
+      "N": []
+     }
+    },
+    {
+     "decision": 7,
+     "index": 1,
+     "text": "l_total > 10000",
+     "context": "plsql",
+     "range": {
+      "line": 51,
+      "col": 17,
+      "endLine": 51,
+      "endCol": 32
+     },
+     "tests": {
+      "T": [],
+      "F": [
+       1
+      ],
+      "N": []
+     }
+    },
+    {
+     "decision": 8,
+     "index": 1,
+     "text": "l_total >= 5000",
+     "context": "sql",
+     "range": {
+      "line": 54,
+      "col": 33,
+      "endLine": 54,
+      "endCol": 48
+     },
+     "tests": {
+      "T": [
+       1
+      ],
+      "F": [],
+      "N": []
+     }
+    }
+   ],
+   "notMeasured": []
+  }
+ ]
+}

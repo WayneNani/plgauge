@@ -9,10 +9,10 @@
  *  6. compare test results of 1 and 4 (instrumentation must not change behaviour)
  */
 import oracledb from 'oracledb';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { instrument } from './instrument.js';
 import { analyze, type ObjectResult } from './analyze.js';
-import { newIds, type Hits, type ObjectMap } from './model.js';
+import { newIds, type Hits, type ObjectMap, type TestHits, type TestInfo } from './model.js';
 import { HITS_TABLE, RUNTIME_BODY, RUNTIME_SPEC } from './runtime.js';
 
 export interface RunConfig {
@@ -28,6 +28,8 @@ export interface RunConfig {
   exclude?: string;
   /** "auto" enables SQL probes on 23ai and later. */
   sqlProbes?: 'auto' | boolean;
+  /** Record which test reaches which probe (default true). */
+  perTest?: boolean;
 }
 
 export interface TestCase {
@@ -53,6 +55,9 @@ export interface RunReport {
   utplsqlRun: TestRun;
   instrumentedRun: TestRun;
   equivalent: boolean;
+  /** Tests of the run; per-test coverage refers to indices into this list. */
+  tests: TestInfo[];
+  perTest: boolean;
   objects: ObjectResult[];
   log: string[];
 }
@@ -123,7 +128,8 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
 
     say('4/4 Testlauf auf instrumentiertem Code …');
     const runId = randomUUID();
-    await conn.execute(`begin cov$.reset; end;`);
+    const perTest = cfg.perTest !== false;
+    await conn.execute(`begin cov$.reset; cov$.per_test(:p = 1); end;`, { p: perTest ? 1 : 0 });
     const instrumentedRun = await runTests(conn, cfg.tests, null);
     await conn.execute(`begin cov$.flush(:r); end;`, { r: runId });
     const hits = await loadHits(conn, runId);
@@ -134,6 +140,8 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     restore.length = 0;
 
     const equivalent = sameResults(baseline.run.tests, instrumentedRun.run.tests);
+    const tests = await loadTestCatalog(conn, schema, cfg.tests, baseline.run.tests, instrumentedRun.run.tests, hits);
+    const testIndex = new Map(tests.map((t, k) => [t.path, k]));
     say(equivalent ? 'Testergebnisse mit und ohne Instrumentierung identisch ✓' : 'ACHTUNG: Testergebnisse weichen ab!');
 
     const objectsOut: ObjectResult[] = maps.map((m) => {
@@ -143,11 +151,14 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
         return {
           key: `${m.obj.type} ${schema}.${m.obj.name}`.toLowerCase(), owner: schema, name: m.obj.name, type: m.obj.type, lines,
           metrics: { stmt: empty, branch: empty, cond: empty, mcdc: empty, loop: empty },
-          statements: [], branches: [], decisions: [], loops: [], lineStatus: {}, lineHits: {}, gaps: [], findings: [],
-          instrumentError: m.error,
+          statements: [], branches: [], decisions: [], loops: [], lineStatus: {}, lineHits: {}, lineTests: {}, gaps: [], findings: [],
+          instrumentError: m.error, sourceSha256: sha256(m.obj.processed), rawSha256: sha256(m.obj.original),
         };
       }
-      const r = analyze(m, hits);
+      const obj = objects.find((o) => o.name === m.name && o.type === m.type)!;
+      const r = analyze(m, hits, testIndex);
+      r.sourceSha256 = sha256(obj.processed);
+      r.rawSha256 = sha256(obj.original);
       const ut = utCov.sonar.get(r.key);
       if (ut) r.utplsql = ut;
       return r;
@@ -163,6 +174,8 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       utplsqlRun: utCov.run,
       instrumentedRun: instrumentedRun.run,
       equivalent,
+      tests,
+      perTest,
       objects: objectsOut,
       log: messages,
     };
@@ -182,6 +195,11 @@ export async function installRuntime(conn: oracledb.Connection) {
     await conn.execute(HITS_TABLE);
   } catch (e) {
     if (!(e as Error).message.includes('ORA-00955')) throw e;
+    try {
+      await conn.execute(`alter table plcov_hits add (test varchar2(400))`); // table from an older plcov version
+    } catch (e2) {
+      if (!(e2 as Error).message.includes('ORA-01430')) throw e2;
+    }
   }
   await conn.execute(RUNTIME_SPEC);
   await conn.execute(RUNTIME_BODY);
@@ -347,16 +365,27 @@ export function parseSonar(xml: string): Map<string, { covered: number; total: n
 }
 
 async function loadHits(conn: oracledb.Connection, runId: string): Promise<Hits> {
-  const res = await conn.execute<[string, string, number]>(
-    `select kind, k, sum(hits) from plcov_hits where run_id = :r group by kind, k`, { r: runId },
+  const res = await conn.execute<[string, string, number, string | null]>(
+    `select kind, k, sum(hits), test from plcov_hits where run_id = :r group by kind, k, test`, { r: runId },
   );
-  const hits: Hits = { stmt: new Map(), branch: new Map(), cond: new Map(), dec: new Map(), vec: new Map(), loop: new Map() };
-  for (const [kind, k, n] of res.rows ?? []) {
+  const hits: Hits = { stmt: new Map(), branch: new Map(), cond: new Map(), dec: new Map(), vec: new Map(), loop: new Map(), perTest: new Map() };
+  const forTest = (name: string): TestHits => {
+    const key = name.toLowerCase();
+    let th = hits.perTest.get(key);
+    if (!th) hits.perTest.set(key, (th = { s: new Set(), b: new Set(), c: new Set(), d: new Set() }));
+    return th;
+  };
+  for (const [kind, k, n, test] of res.rows ?? []) {
     switch (kind) {
       case 'S': hits.stmt.set(Number(k), n); break;
       case 'B': hits.branch.set(Number(k), n); break;
       case 'C': hits.cond.set(k, n); break;
       case 'D': hits.dec.set(k, n); break;
+      case 'L': hits.loop.set(k, n); break;
+      case 's': forTest(test!).s.add(Number(k)); break;
+      case 'b': forTest(test!).b.add(Number(k)); break;
+      case 'c': forTest(test!).c.add(k); break;
+      case 'd': forTest(test!).d.add(k); break;
       case 'V': {
         // d|evaluated|true|null|outcome (bit masks) -> d|vector|T/F/N
         const [d, e, t, nl, o] = k.split('|').map(Number);
@@ -369,10 +398,55 @@ async function loadHits(conn: oracledb.Connection, runId: string): Promise<Hits>
         hits.vec.set(key, (hits.vec.get(key) ?? 0) + n);
         break;
       }
-      case 'L': hits.loop.set(k, n); break;
     }
   }
   return hits;
+}
+
+function sha256(s: string): string {
+  return createHash('sha256').update(s, 'utf8').digest('hex');
+}
+
+/**
+ * Builds the test list: every utPLSQL test below the configured paths (path from
+ * ut_runner.get_suites_info, status from the JUnit results) plus one setup bucket per
+ * suite for probes reached outside a test (beforeall / afterall).
+ */
+async function loadTestCatalog(
+  conn: oracledb.Connection, schema: string, paths: string[], baseline: TestCase[], instrumented: TestCase[], hits: Hits,
+): Promise<TestInfo[]> {
+  const owners = new Set([schema, ...paths.filter((p) => !p.startsWith(':')).map((p) => p.split('.')[0].toUpperCase())]);
+  const tests: TestInfo[] = [];
+  const statusOf = (list: TestCase[], suite: string, desc: string) =>
+    list.find((t) => t.suite.toLowerCase() === suite && t.name === desc)?.status ?? 'unknown';
+  const timeOf = (suite: string, desc: string) => instrumented.find((t) => t.suite.toLowerCase() === suite && t.name === desc)?.time ?? 0;
+  for (const owner of owners) {
+    const res = await conn.execute<[string, string, string, string, string]>(
+      `select object_owner, object_name, item_name, item_description, path
+         from table(ut_runner.get_suites_info(:o)) where item_type = 'UT_TEST' order by path`, { o: owner },
+    );
+    for (const [o, obj, item, desc, path] of res.rows ?? []) {
+      const full = `${o}.${obj}.${item}`.toLowerCase();
+      const inScope = paths.some((p) => {
+        const q = p.toLowerCase();
+        return q === o.toLowerCase() || full === q || full.startsWith(q + '.') || (q.startsWith(':') && path.toLowerCase().startsWith(q.slice(1)));
+      });
+      if (!inScope) continue;
+      const suite = path.toLowerCase().split('.').slice(0, -1).join('.');
+      const description = desc || item.toLowerCase();
+      const status = statusOf(instrumented, suite, description);
+      if (status === 'unknown' && !hits.perTest.has(full)) continue; // not part of this run
+      tests.push({
+        path: full, suite, description, setup: false, status, baselineStatus: statusOf(baseline, suite, description), ms: timeOf(suite, description) * 1000,
+      });
+    }
+  }
+  for (const name of hits.perTest.keys()) {
+    if (name.startsWith('#') && !tests.some((t) => t.path === name)) {
+      tests.push({ path: name, suite: name.slice(1), description: `Setup außerhalb eines Tests (${name.slice(1) || 'ohne utPLSQL'})`, setup: true, status: 'unknown', baselineStatus: 'unknown', ms: 0 });
+    }
+  }
+  return tests;
 }
 
 function sameResults(a: TestCase[], b: TestCase[]): boolean {

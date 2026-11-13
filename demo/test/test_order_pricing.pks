@@ -1,6 +1,9 @@
 create or replace package test_order_pricing is
   --%suite(Order pricing)
 
+  --%beforeall
+  procedure warm_up_rates;
+
   --%test(VIP with large order gets 10 percent)
   procedure vip_large_order;
   --%test(Coupon gives 5 percent)

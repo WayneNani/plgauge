@@ -11,6 +11,7 @@ create table plcov_hits (
   kind    varchar2(1)   not null,
   k       varchar2(200) not null,
   hits    number        not null,
+  test    varchar2(400),
   sid     number        default sys_context('userenv', 'sid'),
   created timestamp     default systimestamp
 )`;
@@ -27,6 +28,8 @@ create or replace package cov$ authid definer is
   procedure le(p_l pls_integer);
   procedure li(p_l pls_integer);
   procedure lx(p_l pls_integer);
+  /* Record which utPLSQL test reaches which probe (via SYS_CONTEXT('UT3_INFO', 'TEST_NAME')). */
+  procedure per_test(p_on boolean);
   procedure reset;
   procedure flush(p_run varchar2);
 end cov$;`;
@@ -42,7 +45,8 @@ const PROBE_BODY = `if p_v then l_v := 0; elsif not p_v then l_v := 1; else l_v 
         g_fe(g_top) := g_fe(g_top) + b;
         if l_v = 0 then g_ft(g_top) := g_ft(g_top) + b; elsif l_v = 2 then g_fn(g_top) := g_fn(g_top) + b; end if;
       end if;
-    end if;`;
+    end if;
+    if g_pt and g_tid > 0 then g_pc(g_tid)(k) := 1; end if;`;
 
 export const RUNTIME_BODY = `
 create or replace package body cov$ is
@@ -55,6 +59,8 @@ create or replace package body cov$ is
   */
   type t_num is table of pls_integer index by pls_integer;
   type t_str is table of pls_integer index by varchar2(200);
+  type t_set is table of t_num index by pls_integer;
+  type t_names is table of varchar2(400) index by pls_integer;
 
   g_s  t_num;   -- statement hits
   g_b  t_num;   -- explicit branch hits
@@ -69,6 +75,34 @@ create or replace package body cov$ is
   g_fn t_num;   -- frame stack: null mask
   g_pow t_num;
   g_top pls_integer := 0;
+
+  -- per-test attribution: the current test is looked up once per statement probe
+  g_pt    boolean := false;
+  g_tid   pls_integer := 0;
+  g_tname varchar2(400);
+  g_tids  t_str;     -- test name -> id
+  g_names t_names;   -- id -> test name ('#owner.package' = suite setup outside a test)
+  g_ps t_set; g_pb t_set; g_pc t_set; g_pd t_set;
+
+  procedure set_test is
+    l_name varchar2(400) := sys_context('UT3_INFO', 'TEST_NAME');
+    l_empty t_num;
+  begin
+    if l_name is null then
+      l_name := '#' || sys_context('UT3_INFO', 'SUITE_PACKAGE');
+    end if;
+    if g_tid > 0 and l_name = g_tname then
+      return;
+    end if;
+    g_tname := l_name;
+    if not g_tids.exists(l_name) then
+      g_tid := g_names.count + 1;
+      g_tids(l_name) := g_tid;
+      g_names(g_tid) := l_name;
+      g_ps(g_tid) := l_empty; g_pb(g_tid) := l_empty; g_pc(g_tid) := l_empty; g_pd(g_tid) := l_empty;
+    end if;
+    g_tid := g_tids(l_name);
+  end;
 
   function o(p_d pls_integer) return boolean is
     pragma udf;
@@ -117,6 +151,7 @@ create or replace package body cov$ is
     if p_v then l_v := 0; elsif not p_v then l_v := 1; else l_v := 2; end if;
     k := p_d * 4 + l_v;
     if g_d.exists(k) then g_d(k) := g_d(k) + 1; else g_d(k) := 1; end if;
+    if g_pt and g_tid > 0 then g_pd(g_tid)(k) := 1; end if;
     k := g_top;
     while k > 0 and g_fd(k) != p_d loop
       k := k - 1;
@@ -133,12 +168,17 @@ create or replace package body cov$ is
   procedure s(p_s pls_integer) is
   begin
     if g_s.exists(p_s) then g_s(p_s) := g_s(p_s) + 1; else g_s(p_s) := 1; end if;
+    if g_pt then
+      set_test;
+      g_ps(g_tid)(p_s) := 1;
+    end if;
   exception when others then null;
   end;
 
   procedure b(p_b pls_integer) is
   begin
     if g_b.exists(p_b) then g_b(p_b) := g_b(p_b) + 1; else g_b(p_b) := 1; end if;
+    if g_pt and g_tid > 0 then g_pb(g_tid)(p_b) := 1; end if;
   exception when others then null;
   end;
 
@@ -171,19 +211,26 @@ create or replace package body cov$ is
   exception when others then null;
   end;
 
+  procedure per_test(p_on boolean) is
+  begin
+    g_pt := nvl(p_on, false);
+  end;
+
   procedure reset is
   begin
     g_s.delete; g_b.delete; g_c.delete; g_d.delete; g_v.delete; g_l.delete; g_li.delete;
     g_fd.delete; g_fe.delete; g_ft.delete; g_fn.delete; g_top := 0;
+    g_ps.delete; g_pb.delete; g_pc.delete; g_pd.delete; g_tids.delete; g_names.delete;
+    g_tid := 0; g_tname := null;
   end;
 
   procedure flush(p_run varchar2) is
     pragma autonomous_transaction;
     k  pls_integer;
     ks varchar2(200);
-    procedure put(p_kind varchar2, p_k varchar2, p_hits pls_integer) is
+    procedure put(p_kind varchar2, p_k varchar2, p_hits pls_integer, p_test varchar2 := null) is
     begin
-      insert into plcov_hits (run_id, kind, k, hits) values (p_run, p_kind, p_k, p_hits);
+      insert into plcov_hits (run_id, kind, k, hits, test) values (p_run, p_kind, p_k, p_hits, p_test);
     end;
     function tfn(p pls_integer) return varchar2 is
     begin
@@ -209,6 +256,21 @@ create or replace package body cov$ is
     end loop;
     ks := g_v.first; while ks is not null loop put('V', ks, g_v(ks)); ks := g_v.next(ks); end loop;
     ks := g_l.first; while ks is not null loop put('L', ks, g_l(ks)); ks := g_l.next(ks); end loop;
+    -- per test: lower-case kinds, hits = 1 ("reached")
+    for t in 1 .. g_names.count loop
+      k := g_ps(t).first; while k is not null loop put('s', k, 1, g_names(t)); k := g_ps(t).next(k); end loop;
+      k := g_pb(t).first; while k is not null loop put('b', k, 1, g_names(t)); k := g_pb(t).next(k); end loop;
+      k := g_pc(t).first;
+      while k is not null loop
+        put('c', trunc(k / 256) || ':' || trunc(mod(k, 256) / 4) || ':' || tfn(mod(k, 4)), 1, g_names(t));
+        k := g_pc(t).next(k);
+      end loop;
+      k := g_pd(t).first;
+      while k is not null loop
+        put('d', trunc(k / 4) || ':' || tfn(mod(k, 4)), 1, g_names(t));
+        k := g_pd(t).next(k);
+      end loop;
+    end loop;
     commit;
     reset;
   end;

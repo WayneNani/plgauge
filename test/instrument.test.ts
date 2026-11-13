@@ -136,7 +136,7 @@ test('SQL probes can be switched off for databases before 23ai', () => {
 
 test('MC/DC: detects independence pairs and proposes the missing vector', () => {
   const r = run(proc('  if a > 1 and b > 1 then null; end if;'));
-  const hits: Hits = { stmt: new Map(), branch: new Map(), cond: new Map(), dec: new Map(), vec: new Map(), loop: new Map() };
+  const hits: Hits = { stmt: new Map(), branch: new Map(), cond: new Map(), dec: new Map(), vec: new Map(), loop: new Map(), perTest: new Map() };
   // observed: (T,T)->T and (F,-)->F
   hits.vec.set(`1|TT|T`, 3);
   hits.vec.set(`1|F-|F`, 2);
@@ -150,4 +150,22 @@ test('MC/DC: detects independence pairs and proposes the missing vector', () => 
   assert.match(c2.suggestion!, /`a > 1` = WAHR, `b > 1` = FALSCH → Ergebnis FALSCH/);
   assert.deepEqual(res.metrics.mcdc, { covered: 1, total: 2 });
   assert.deepEqual(res.metrics.branch, { covered: 2, total: 2 });
+});
+
+// Constructs that IslandSQL 0.26 nests wrongly (reported by plmut); plcov must split them correctly.
+test('regression corpus: tricky boolean structures', () => {
+  const cases: [string, string[]][] = [
+    ['x between a and b and y', ['x between a and b', 'y']],
+    ['x is not null and y is of (t)', ['x is not null', 'y is of (t)']],
+    ['x and y is null', ['x', 'y is null']],
+    ['c%found and c%rowcount > 1', ['c%found', 'c%rowcount > 1']],
+    ['a - b + c > 0 and a / b * c < 1', ['a - b + c > 0', 'a / b * c < 1']],
+    ["a || b = 'x' or a + 1 || b = c", ["a || b = 'x'", 'a + 1 || b = c']],
+    ['not x between 1 and 2 or y not between 3 and 4', ['x between 1 and 2', 'y not between 3 and 4']],
+    ["x in ('and', 'or') and y like '%and%'", ["x in ('and', 'or')", "y like '%and%'"]],
+  ];
+  for (const [cond, expected] of cases) {
+    const r = run(proc(`  if ${cond} then null; end if;`));
+    assert.deepEqual(r.map.decisions[0].conds.map((c) => c.text), expected, cond);
+  }
 });

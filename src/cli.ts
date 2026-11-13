@@ -6,6 +6,7 @@
  *   plcov instrument <file.sql> [--no-sql]           print instrumented source (offline)
  *   plcov deploy <file.sql ...> --config plcov.json  run SQL*Plus-style scripts (demo setup)
  *   plcov report <coverage.json> [--out report]      re-render HTML from saved JSON
+ *   plcov export <coverage.json> [--out file]         write the exchange format plcov-coverage/1
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -14,6 +15,7 @@ import { instrument } from './instrument.js';
 import { newIds } from './model.js';
 import { runCoverage, type RunConfig, type RunReport } from './run.js';
 import { renderHtml } from './report.js';
+import { toCoverageExport } from './export.js';
 
 const args = process.argv.slice(2);
 const cmd = args.shift();
@@ -70,6 +72,7 @@ async function main() {
       const report = await runCoverage(cfg);
       mkdirSync(out, { recursive: true });
       writeFileSync(join(out, 'coverage.json'), JSON.stringify(report, null, 1));
+      writeFileSync(join(out, 'plcov-coverage.json'), JSON.stringify(toCoverageExport(report), null, 1));
       writeFileSync(join(out, 'index.html'), renderHtml(report));
       console.error(`Bericht: ${join(out, 'index.html')}`);
       break;
@@ -82,6 +85,14 @@ async function main() {
       mkdirSync(out, { recursive: true });
       writeFileSync(join(out, 'index.html'), renderHtml(report));
       console.error(`Bericht: ${join(out, 'index.html')}`);
+      break;
+    }
+    case 'export': {
+      const file = args.shift();
+      if (!file) throw new Error('coverage.json fehlt');
+      const out = resolve(opt('out') ?? 'plcov-coverage.json');
+      writeFileSync(out, JSON.stringify(toCoverageExport(JSON.parse(readFileSync(file, 'utf8')) as RunReport), null, 1));
+      console.error(`Export: ${out}`);
       break;
     }
     case 'instrument': {
@@ -118,7 +129,7 @@ async function main() {
       break;
     }
     default:
-      console.error('Verwendung: plcov run|report|instrument|deploy …  (siehe README.md)');
+      console.error('Verwendung: plcov run|report|export|instrument|deploy …  (siehe README.md)');
       process.exitCode = 2;
   }
 }
