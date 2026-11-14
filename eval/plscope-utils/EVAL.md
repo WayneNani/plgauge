@@ -107,7 +107,7 @@ danach jeder Mutant einzeln und alle zusammen als Schema übersetzt, mit Zuordnu
 
 | Korpus | Einheiten | SQL-Mutanten | einzeln kompiliert | Schema: geschaltet / verworfen / ohne Zuordnung |
 | --- | --- | --- | --- | --- |
-| utPLSQL 3.2.2 (`source`, in eigenem Schema installiert), beide Stufen | 19 | 1 193 | 1 190 | 1 142 / 3 / 0 |
+| utPLSQL 3.2.2 (`source`, in eigenem Schema installiert), beide Stufen | 19 | 1 193 | 1 190 | 1 142 / 3 / 0, mit Cursorn und Schleifen (Nachtrag 2) 1 175 / 3 / 0 |
 | übriger Korpus (nur Stufe 2, nur Einheiten ohne fehlende Objekte) | 18 | 111 | 111 | 72 / 0 / 0 |
 | Views von plscope-utils ohne `plscope_col_usage`, beide Stufen | 6 | 1 007 | 1 007 | 748 / 0 / 0 |
 
@@ -201,8 +201,92 @@ Grenzen bei Views:
 
 - **Zweig-Grenze:** Views mit vielen Bedingungen über Dictionary-Views laufen großteils einzeln, die Laufzeit steigt.
 - **Views, die ihr eigener Code liest,** laufen ganz einzeln und mit allen Tests (hier 420 Mutanten).
-- **Kein Planvergleich:** Wie stark die Kopien eine View in einem fremden Projekt bremsen, misst das Werkzeug nicht.
-  Die Zeitgrenze aus der Baseline fängt nur grobe Fälle ab.
+- **Planvergleich** (seit Nachtrag 2): Ändern die Kopien den Plan einer View, laufen ihre Mutanten einzeln. Bei
+  plscope-utils trifft das alle Views mit Zweigen; der Gewinn der Zweige bleibt dort aus.
+
+## Nachtrag 2: Cursor, dynamisches SQL, Gegenprobe, Planvergleich
+
+Vier Erweiterungen, geprüft an plscope-utils (Packages und Views wie oben):
+
+1. **Cursor schaltbar.** Die Abfrage einer Cursor-Deklaration ohne `ORDER BY`, `FOR UPDATE` und `WITH` wird wie ein
+   View-Block mit `UNION ALL`-Zweigen geschaltet. Eine Cursor-FOR-Schleife über eine Abfrage wird samt Rumpf pro
+   Variante verdoppelt. Im Korpus fallen die SQL-Mutanten in Packages, die nicht geschaltet werden konnten, von 1 610
+   auf 298, vor allem sortierte Cursor. In plscope-utils sind es 76 statt 194.
+2. **Dynamisches SQL.** Literale, die `EXECUTE IMMEDIATE`, `OPEN … FOR` oder `DBMS_SQL.PARSE` erreichen, werden als
+   SQL mutiert. In plscope-utils ist das ein Literal in `etl.load_from_dyn_sql` mit 12 Mutanten. 9 werden erkannt; die 3 überlebenden betreffen die Datumsgrenze `hiredate > date '1980-01-01'`, vor der kein Testdatensatz liegt (dieselbe Lücke wie bei den statischen Varianten).
+   Im Korpus sind es 56 Literale mit 1 493 Mutanten, fast alle in Testpaketen.
+3. **Gegenprobe.** Erkannte Mutanten laufen mit dem erkennenden Test allein noch einmal. Nach Mutanten, unter denen
+   committende Tests liefen, schreiben diese Tests ihre Daten auf dem Original neu.
+4. **Planvergleich** für Views mit `EXPLAIN PLAN` vor und nach dem Schalten.
+
+| | Lauf 11 (vorher) | Lauf 16 (nachher) |
+| --- | --- | --- |
+| Mutanten | 1 634 | 1 646 (12 aus dynamischem SQL) |
+| Baseline mit Schema | 1,5 s | 1,8 s |
+| Laufzeit, drei Worker | 611 s | 1 035 s (Views laufen einzeln, siehe Planvergleich) |
+| Packages, PL/SQL: erkannt / überlebt / nicht erreicht / Zeit | 187 / 64 / 22 / 1 | 179 / 72 / 22 / 1 |
+| Packages, SQL: erkannt / überlebt / Zeit | 116 / 104 / 10 | 126 / 107 / 9 |
+| Urteile mit Vermerk der Gegenprobe | – | 7 |
+
+**Gegencheck der Cursor-Schaltung:** Die Packages liefen zusätzlich vollständig einzeln (Orakel-Modus). 509 von 516
+Urteilen stimmen überein. Die 7 Abweichungen: 2 Mutanten in `example`, die nur der PL/Scope-Modelltest erreicht (im
+Orakel-Lauf bestand er die Baseline, im Schema-Lauf nicht); 3 Zeitüberschreitungen, die im anderen Lauf als
+Fehlschlag endeten; 1 Verbindungsabbruch; 1 ROR in `lineage_util` (Zeile 283), dessen Ergebnis schwankt.
+
+**Was die Gegenprobe fand:**
+
+- Die drei Urteile, die zwischen Lauf 10 und 11 kippten, haben verschiedene Ursachen. `etl` Zeile 140 (`RETURN;` vor
+  dem Laden) überlebt nur, wenn `deptsal` noch korrekte Daten eines früheren Tests enthält. Die Tests committen, also
+  hing das Urteil vom vorigen Mutanten ab. Mit dem Zurückschreiben der Daten überlebt der Mutant jetzt immer. Das ist
+  eine echte Lücke: Der Test prüft Daten, die er nicht selbst erzeugt haben muss. `dd_util` Zeile 19
+  (`o.owner <= s.table_owner`) holt die erste Zeile eines Cursors ohne `ORDER BY`. Welche das ist, hängt von Plan und
+  Datenbank ab. Dasselbe gilt für die anderen Mutanten, die die Join-Bedingung dieses Cursors abschwächen: Sie kippen
+von Lauf zu Lauf, je nach Worker. Im Schema-Modus markiert die Gegenprobe ihre Erkennungen jedes Mal als nicht
+wiederholbar, weil sie auf einem anderen Worker prüft; im Orakel-Modus prüft sie auf demselben und kann das nicht. Der dritte Fall (`LCR` in
+  `plscope_identifiers`) ist eine knappe Zeitüberschreitung; mit doppelter Zeit endet sie als Fehlschlag.
+- `plscope_context.set_attr` (2 Mutanten): `test_set_attr` erkennt sie im Verbund, allein nicht. Der Test liest einen
+  Kontextwert, den ein vorheriger Test gesetzt hat.
+- **Eine verdorbene Worker-Datenbank.** In einem Lauf waren 489 Erkennungen nicht wiederholbar, alle auf Worker 3
+  entstanden. Dort hatte ein Messskript (nicht das Werkzeug) Packages ohne ihre PL/Scope-Einstellungen neu
+  kompiliert. Damit fehlte die Anweisung in `USER_STATEMENTS`, die `test_get_dep_cols_from_insert` liest. Ohne
+  Gegenprobe wären das 489 falsche Erkennungen gewesen (Score 52 % statt 24 %).
+
+Das Zurückschreiben kostet zunächst viel: Alle Tests erneut nach jedem Mutanten, unter dem committet wurde, waren
+1 468 zusätzliche Testläufe. Die Baseline ermittelt deshalb, welche Tests selbst committen (hier 17, die meisten über
+DDL). Nur diese laufen erneut, im Orakel-Modus nur bei ausgewählten Tests. Das sind noch 271 Läufe. Die Gegenprobe
+über einen anderen Worker kostete im Orakel-Modus mehr als der Lauf selbst, weil jeder Mutant dort neu kompiliert
+werden muss. Sie geschieht dort jetzt gleich nach dem Urteil auf demselben Worker.
+
+**Was der Planvergleich fand:** Alle fünf Views, die das Schema mit Zweigen versah, hatten danach einen anderen Plan
+als das Original:
+
+| View | Abweichung mit Zweigen | nur mit Aufzeichnungs-Wrapper |
+| --- | --- | --- |
+| `plscope_tab_usage` | 104 Lesezugriffe auf materialisierte Temp-Tabellen | anderer Join (Merge statt Hash) |
+| `plscope_col_usage` | 125 zusätzliche `WINDOW SORT` | anderer Join |
+| `plscope_statements` | 16 zusätzliche `WINDOW SORT` | ein `WINDOW SORT` mehr |
+| `plscope_naming` | andere Joins, 7 weitere Scans | gleich |
+| `plscope_ins_lineage` | `WITH` materialisiert | gleich |
+
+Der Grund ist meist, dass Oracle den Filter eines Zweigs nicht als Startfilter vor den Zweig setzt, sondern auf die
+Zeilen einer View über analytischen Funktionen. Dann rechnet die Abfrage jeden toten Zweig mit. Das erklärt die
+frühere Messung, nach der eine View mit 20 Zweigen 131 s statt 9 s brauchte. Die Annahme „ein Filter auf eine
+Konstante schneidet tote Zweige ab“ gilt also nicht allgemein. Der Planvergleich fängt das ab. Die Mutanten dieser
+Views laufen einzeln, `plscope_naming` und `plscope_ins_lineage` behalten den Aufzeichnungs-Wrapper (ihre 497
+Mutanten bleiben „nicht erreicht“), die anderen drei laufen im Original. Ihre 213 Mutanten fragt kein Test ab, sie
+erscheinen aber als überlebt, weil ohne Aufzeichnung alle Tests laufen.
+
+Zwei weitere Fehler zeigten sich erst in den Läufen. Erstens: Mit 20 Zweigen sprengte schon das `EXPLAIN PLAN` von
+`plscope_col_usage` den Cursor-Heap des Servers (ORA-00600 `KGL-heap-size-exceeded`). Der Prozess starb und mit ihm
+die Verbindung, über die der Lauf seinen Code verwaltet. `EXPLAIN PLAN` hat jetzt eine eigene Verbindung. Zweitens
+blieben nach diesem Absturz geschaltete Packages zurück. Der nächste Lauf las sie als Original und spielte am Ende
+genau diesen Code zurück; die richtigen Originale im Journal löschte er dabei. Jetzt stellt jeder Lauf beim Start
+zuerst wieder her, was ein abgebrochener Lauf im Journal hinterlassen hat.
+
+Die Cursor-Zweige in Packages prüft kein Planvergleich: Ihre Abfragen enthalten PL/SQL-Variablen, `EXPLAIN PLAN`
+kann sie so nicht erklären. Gemessen wurde die Laufzeit. Das erste Ausführen parst alle Kopien (`dd_util`: 3,6 s
+statt 0,3 s), danach laufen die Tests so schnell wie im Original. Ohne Aufwärmlauf ging das in die Baseline ein, und
+die Zeitgrenze stieg von 9 auf 53 s.
 
 ## Wiederholen
 

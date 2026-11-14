@@ -9,7 +9,9 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { CoverageIndex, crossCheck, projectCoverageConfig, runMutation, type Result } from '@pltest/mutation';
+import oracledb from 'oracledb';
+import { journalEntries, loadObject, replaceSource } from '@pltest/core';
+import { CoverageIndex, crossCheck, parseDbUrl, projectCoverageConfig, runMutation, type Result } from '@pltest/mutation';
 import { runCoverage, toCoverageExport } from '@pltest/coverage';
 
 const db = process.env.PLMUT_DB?.split(',')[0];
@@ -116,4 +118,99 @@ END;
   assert.deepEqual(verdict(schema.results), verdict(naive.results));
   // the boundary n > 100 → n >= 100 is not tested: survives; everything else is killed
   assert.deepEqual(schema.results.filter((r) => r.status === 'SURVIVED').map((r) => r.mutated.trim()), ['n >= 100']);
+});
+
+// Cursor declarations (UNION ALL), cursor FOR loops (duplicated) and dynamic SQL (literal switched in place)
+test('cursors, cursor FOR loops and dynamic SQL: everything switched, same verdicts in both modes', { skip: !db && 'PLMUT_DB nicht gesetzt', timeout: 900_000 }, async () => {
+  const p = mkdtempSync(join(tmpdir(), 'pltest-qsql-'));
+  mkdirSync(join(p, 'src'));
+  writeFileSync(join(p, 'src', 'q.sql'), `CREATE TABLE IF NOT EXISTS pltest_q_t (id NUMBER, v NUMBER)
+/
+CREATE OR REPLACE PACKAGE pltest_qsql AS
+  FUNCTION total(p_min NUMBER) RETURN NUMBER;
+  FUNCTION cnt(p_min NUMBER) RETURN NUMBER;
+  FUNCTION dyn(p_max NUMBER) RETURN NUMBER;
+END;
+/
+CREATE OR REPLACE PACKAGE BODY pltest_qsql AS
+  FUNCTION total(p_min NUMBER) RETURN NUMBER IS
+    CURSOR c IS SELECT v * 2 AS w FROM pltest_q_t WHERE v > p_min;
+    s NUMBER := 0;
+  BEGIN
+    FOR r IN c LOOP
+      s := s + r.w;
+    END LOOP;
+    RETURN s;
+  END;
+  FUNCTION cnt(p_min NUMBER) RETURN NUMBER IS
+    n NUMBER := 0;
+  BEGIN
+    FOR r IN (SELECT id FROM pltest_q_t WHERE v >= p_min) LOOP
+      n := n + 1;
+    END LOOP;
+    RETURN n;
+  END;
+  FUNCTION dyn(p_max NUMBER) RETURN NUMBER IS
+    l_sql VARCHAR2(200) := 'select count(*) from pltest_q_t where v < :m';
+    n NUMBER;
+  BEGIN
+    EXECUTE IMMEDIATE l_sql INTO n USING p_max;
+    RETURN n;
+  END;
+END;
+/
+`);
+  writeFileSync(join(p, 'src', 'test.sql'), `CREATE OR REPLACE PACKAGE pltest_qsql_test AS
+  --%suite
+
+  --%beforeeach
+  PROCEDURE rows;
+  --%test
+  PROCEDURE total;
+  --%test
+  PROCEDURE cnt;
+  --%test
+  PROCEDURE dyn;
+END;
+/
+CREATE OR REPLACE PACKAGE BODY pltest_qsql_test AS
+  PROCEDURE rows IS
+  BEGIN
+    DELETE FROM pltest_q_t;
+    INSERT INTO pltest_q_t VALUES (1, 10);
+    INSERT INTO pltest_q_t VALUES (2, 20);
+    INSERT INTO pltest_q_t VALUES (3, 30);
+  END;
+  PROCEDURE total IS BEGIN ut.expect(pltest_qsql.total(15)).to_equal(100); END;
+  PROCEDURE cnt IS BEGIN ut.expect(pltest_qsql.cnt(20)).to_equal(2); END;
+  PROCEDURE dyn IS BEGIN ut.expect(pltest_qsql.dyn(20)).to_equal(1); END;
+END;
+/
+`);
+  writeFileSync(join(p, 'pltest.json'), JSON.stringify({ install: ['src/q.sql', 'src/test.sql'], mutate: ['src/q.sql'], tests: ['pltest_qsql_test'] }));
+  const verdict = (rs: Result[]) => rs.map((r) => `${r.line} ${r.op} ${r.original.trim()} → ${r.mutated.trim()}: ${r.status === 'NOT_COVERED' ? 'SURVIVED' : r.status}`).sort();
+  const log: string[] = [];
+  const schema = await runMutation({ dir: p, dbUrls: [db!], mode: 'schema', log: (m) => log.push(m) });
+  const naive = await runMutation({ dir: p, dbUrls: [db!], mode: 'naive', skipInstall: true });
+  assert.ok(log.some((l) => /0 Mutanten verworfen, 0 Stellen ohne Schema/.test(l)), log.join('\n'));
+  assert.ok(schema.results.some((r) => r.mutant.point.dyn) && schema.results.some((r) => r.mutant.point.union), 'dynamic SQL and cursor points');
+  assert.deepEqual(verdict(schema.results), verdict(naive.results));
+  // the boundaries v > 15, v >= 20 and v < 20 are tested by the data: their ROR variants are killed
+  assert.ok(schema.results.filter((r) => r.op === 'ROR' && r.status === 'KILLED').length >= 6);
+});
+
+test('a run first puts back what a crashed run left in the journal', { skip: !db && 'PLMUT_DB nicht gesetzt', timeout: 600_000 }, async () => {
+  const conn = await oracledb.getConnection(parseDbUrl(db!));
+  try {
+    const owner = (await conn.execute<[string]>(`select user from dual`)).rows![0][0];
+    const before = await loadObject(conn, owner, 'SHOP_PRICING', 'PACKAGE BODY');
+    // as a crashed run leaves it: changed code, the original in the journal
+    await replaceSource(conn, before, `${before.original.trimEnd()}\n-- left by a crashed run\n`, 'mutation');
+    await runMutation({ dir, dbUrls: [db!], mode: 'schema', skipInstall: true, sample: 2, seed: 3 });
+    const after = await loadObject(conn, owner, 'SHOP_PRICING', 'PACKAGE BODY');
+    assert.equal(after.original, before.original);
+    assert.deepEqual((await journalEntries(conn)).filter((e) => e.name === 'SHOP_PRICING'), []);
+  } finally {
+    await conn.close();
+  }
 });

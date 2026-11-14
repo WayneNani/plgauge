@@ -263,6 +263,7 @@ async function main() {
       const diffRef = opt('diff');
       const skipInstall = flag('skip-install');
       const quiet = flag('q');
+      const noConfirm = flag('no-confirm');
       if (sub === 'compare') {
         const [a, b] = args;
         if (!a || !b) throw new Error('compare braucht zwei JSON-Dateien');
@@ -287,7 +288,7 @@ async function main() {
       if (sub !== 'run') throw new Error('Verwendung: pltest mutate run|points|schema|compare …');
       const rep = await runMutation({
         dir, dbUrls: db.split(',').filter(Boolean), ops: opSet, timeoutFactor: factor, mode, skipInstall, diff,
-        resetCmd, sample: sampleN, seed, log: quiet ? undefined : (m) => console.error(m),
+        resetCmd, sample: sampleN, seed, log: quiet ? undefined : (m) => console.error(m), confirm: !noConfirm,
         coverage: coverageFile ? (JSON.parse(readFileSync(coverageFile, 'utf8')) as CoverageExport) : undefined,
       });
       process.stdout.write(textReport(rep));

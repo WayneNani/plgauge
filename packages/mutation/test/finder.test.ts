@@ -181,9 +181,9 @@ END s;
     'WHR: x NOT IN (SELECT DISTINCT y FROM u ORDER BY y) → TRUE',
     'WHR: x.k = 1 → TRUE',
   ]);
-  // clause points in PL/SQL statements carry the statement, cursors and loops do not
+  // clause points carry their statement (cursor FOR loop: the loop); the ordered cursor gets no block
   const ps = points(src)[0].points.filter((p) => p.kind === 'clause');
-  assert.deepEqual([...new Set(ps.map((p) => `${p.op}${p.scope ? '*' : ''}`))].sort(), ['COL*', 'JOI*', 'ORD', 'ORD*', 'SEL', 'UNI']);
+  assert.deepEqual([...new Set(ps.map((p) => `${p.op}${p.scope ? '*' : ''}`))].sort(), ['COL*', 'JOI*', 'ORD', 'ORD*', 'SEL', 'SEL*', 'UNI*']);
 });
 
 test('finder: a JOIN stays a LEFT JOIN candidate when WHERE lets the NULL rows through', () => {
@@ -289,4 +289,83 @@ test('finder: ordered queries of a view get no wrapper (their order must hold)',
   const scopes = [...new Set(f.points.map((p) => p.scope && t.slice(p.scope[0], p.scope[1])))];
   // b > 0 belongs to the main block (the ordered inline view is none), which buildSchema leaves unwrapped
   assert.deepEqual(scopes, ['select a from (select a, b from t where b > 0 order by b desc) where rownum <= 3 and a > 1 order by a']);
+});
+
+test('finder: unordered cursor declarations are UNION ALL blocks; cursor FOR loops over a query are duplicated whole', () => {
+  const src = `CREATE OR REPLACE PACKAGE BODY k AS
+  PROCEDURE p(n NUMBER) IS
+    CURSOR c1(x NUMBER := n + 1) IS SELECT a + 1 AS b FROM t WHERE a > x;
+    CURSOR c2 IS SELECT a FROM t WHERE a > 2 ORDER BY a;
+    CURSOR c3 IS SELECT a FROM t WHERE a > 3 FOR UPDATE;
+    CURSOR c4 IS WITH w AS (SELECT a FROM t) SELECT a FROM w WHERE a > 4;
+  BEGIN
+    <<l>> FOR r IN (SELECT a FROM t WHERE a > 5) LOOP
+      UPDATE t SET a = 0 WHERE a = r.a;
+    END LOOP l;
+  END;
+END k;
+/
+`;
+  const f = points(src)[0];
+  const text = f.src.toString();
+  const pt = (orig: string) => f.points.find((p) => p.orig === orig && p.op === 'ROR')!;
+  const span = (r?: [number, number]) => (r ? text.slice(r[0], r[1]) : '-');
+  assert.equal(span(pt('a > x').scope), 'SELECT a + 1 AS b FROM t WHERE a > x');
+  assert.ok(pt('a > x').union);
+  const aor = f.points.filter((p) => p.op === 'AOR');
+  // the select list switches in place; the parameter default is PL/SQL outside the block
+  assert.deepEqual(aor.map((p) => `${p.orig} ${p.ctx} ${p.inline ? 'inline' : ''} ${span(p.scope)}`), [
+    'n + 1 plsql  -',
+    'a + 1 sql inline SELECT a + 1 AS b FROM t WHERE a > x',
+  ]);
+  for (const o of ['a > 2', 'a > 3', 'a > 4']) assert.equal(pt(o).scope, undefined, o);
+  const loop = pt('a > 5');
+  assert.match(span(loop.scope), /^(<<l>> )?FOR r IN \(SELECT a FROM t WHERE a > 5\) LOOP[\s\S]*END LOOP l;$/);
+  assert.ok(!loop.union);
+  // statements in the body have their own scope
+  assert.equal(span(pt('a = r.a').scope), 'UPDATE t SET a = 0 WHERE a = r.a;');
+});
+
+test('finder: dynamic SQL in literals that reach EXECUTE IMMEDIATE, OPEN FOR or DBMS_SQL.PARSE is mutated', () => {
+  const src = `CREATE OR REPLACE PACKAGE BODY d AS
+  PROCEDURE p IS
+    l_sql CLOB := q'[
+      delete from t where a > 1]';
+    l_log VARCHAR2(100) := 'select x from y where z > 1';
+    c SYS_REFCURSOR;
+    h INTEGER;
+  BEGIN
+    EXECUTE IMMEDIATE l_sql;
+    EXECUTE IMMEDIATE 'update t set b = ''x'' where c = ''it''''s'' and d < 2';
+    OPEN c FOR 'select a from t where e >= 3';
+    DBMS_SQL.PARSE(h, 'insert into t (a, b) select a, b from u where f = 4', DBMS_SQL.NATIVE);
+    EXECUTE IMMEDIATE 'select a from t where g = ' || 5;
+    DBMS_OUTPUT.PUT_LINE(l_log);
+  END;
+END d;
+/
+`;
+  const f = points(src)[0];
+  assert.deepEqual(f.errors, []);
+  const text = f.src.toString();
+  const dyn = expand([f]).filter((m) => m.point.dyn);
+  const got = dyn.map((m) => `${m.op} ${m.original} → ${m.mutated}`);
+  const has = (s: string) => assert.ok(got.includes(s), `${s}\n${got.join('\n')}`);
+  has('ROR a > 1 → a >= 1');
+  has('WHR a > 1 → TRUE');
+  // quotes stay doubled, in the original and in the mutant
+  has("ROR c = ''it''''s'' → FALSE");
+  has("LCR c = ''it''''s'' and d < 2 → c = ''it''''s''");
+  has('ROR d < 2 → d <= 2');
+  has('ROR e >= 3 → e > 3');
+  has('WHR f = 4 → TRUE');
+  has('ROR f = 4 → FALSE');
+  // a literal for something else, or one concatenated with more, is not dynamic SQL
+  assert.ok(!got.some((g) => g.includes('z > 1') || g.includes('g =')), got.join('\n'));
+  for (const m of dyn) {
+    // the mutant replaces the change inside its literal
+    const [a, b] = m.point.dyn!;
+    assert.ok(a < m.point.start && m.point.end < b);
+    assert.equal(text.slice(m.point.start, m.point.end), m.original);
+  }
 });

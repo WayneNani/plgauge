@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { buildSchema, expand, findPoints, locate, mutatedUnit, positionOf, type SourceFile } from '@pltest/mutation';
+import { buildSchema, expand, findPoints, livePlan, locate, mutatedUnit, planDiff, positionOf, type PlanRow, type SourceFile } from '@pltest/mutation';
 
 function testFile(): SourceFile {
   const src =
@@ -194,4 +194,86 @@ test('schema: a duplicated PL/SQL statement charges an error in its scaffold to 
 test('positionOf: offset to line and column in code points', () => {
   assert.deepEqual(positionOf('ab\ncä€d', 6), { line: 2, col: 4 });
   assert.deepEqual(positionOf('abc', 0), { line: 1, col: 1 });
+});
+
+test('schema: cursor declarations get UNION ALL branches, cursor FOR loops are duplicated, dynamic SQL literals switch in place', () => {
+  const path = join(mkdtempSync(join(tmpdir(), 'pltest-')), 'k.pkb');
+  writeFileSync(path, `CREATE OR REPLACE PACKAGE BODY k AS
+  PROCEDURE p IS
+    CURSOR c IS SELECT a + 1 AS b FROM t WHERE a > 2;
+    l_sql VARCHAR2(100) := 'delete from t where x = ''y''';
+  BEGIN
+    FOR r IN (SELECT a FROM t WHERE a < 5) LOOP
+      NULL;
+    END LOOP;
+    EXECUTE IMMEDIATE l_sql;
+  END;
+END k;
+/
+`);
+  const ms = expand(findPoints([path]));
+  assert.deepEqual(ms.map((m) => `${m.id} ${m.op} ${m.mutated.trim()}`), [
+    '1 AOR a - 1', '2 ROR a >= 2', '3 ROR a <> 2', '4 ROR FALSE', '5 WHR TRUE', "6 ROR TRUE", "7 ROR FALSE",
+    '8 RET RETURN;', "9 RET RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');", '10 ROR a <= 5', '11 ROR a <> 5', '12 ROR FALSE', '13 WHR TRUE',
+  ]);
+  const su = buildSchema(ms, new Set(), new Set(), 'DEMO')[0];
+  const t = su.text.replaceAll("SYS_CONTEXT('PLMUT_CTX_4FF006CA6B88', 'ACTIVE')", 'V');
+  assert.ok(t.includes("CURSOR c IS SELECT * FROM (SELECT (CASE V WHEN '1' THEN (a - 1) ELSE (a + 1) END) AS b FROM t WHERE a > 2)" +
+    " WHERE NVL(V, '0') NOT IN ('2', '3', '4', '5') AND (NVL(V, '0') <> '-1' OR (SELECT plmut_ctl.hit(1, 5) FROM dual) = 0)" +
+    " UNION ALL SELECT * FROM (SELECT a + 1 AS b FROM t WHERE a >= 2) WHERE V = '2'"), t);
+  assert.ok(t.includes("UNION ALL SELECT * FROM (SELECT a + 1 AS b FROM t WHERE TRUE) WHERE V = '5';"), t);
+  assert.ok(t.includes("l_sql VARCHAR2(100) := (CASE CASE plmut$a WHEN -1 THEN plmut_ctl.hit(6, 2) ELSE plmut$a END" +
+    " WHEN 6 THEN 'delete from t where TRUE' WHEN 7 THEN 'delete from t where FALSE' ELSE 'delete from t where x = ''y''' END);"), t);
+  assert.match(t, /IF plmut\$a = -1 THEN plmut_ctl\.reach\(10, 3\); plmut_ctl\.reach\(13, 1\); END IF; IF plmut\$a = 10 THEN FOR r IN \(SELECT a FROM t WHERE a <= 5\) LOOP\s+NULL;\s+END LOOP; ELSIF/);
+  // the original loop keeps its guard, the copies run only under their mutant
+  assert.match(t, /ELSE FOR r IN \(SELECT a FROM t WHERE a < 5\) LOOP IF plmut\$a <> 0 THEN plmut_ctl\.tick\(1\); END IF;\s+NULL;\s+END LOOP; END IF;/);
+  // the oracle rewriter changes only the inside of the literal
+  assert.ok(mutatedUnit(ms[5]).includes("l_sql VARCHAR2(100) := 'delete from t where TRUE';"));
+  // a failing cursor wrapper takes its block out (oracle rewriter), the rest stays switched
+  const wrapper = su.regions.find((r) => r.block)!;
+  const again = buildSchema(ms, new Set(), new Set(wrapper.points), 'DEMO', new Set([wrapper.block!]))[0];
+  assert.ok(again.text.includes('CURSOR c IS SELECT a + 1 AS b FROM t WHERE a > 2;') && again.text.includes('WHEN 6 THEN'), again.text);
+});
+
+test('livePlan: dead branches and the schema scaffold drop out; a changed plan shows', () => {
+  // EXPLAIN PLAN of a view wrapped with two branches (23ai expands the recording OR into a second copy)
+  const r = (id: number, parent: number | null, op: string, filter: string | null = null): PlanRow => ({ id, parent, op, filter });
+  const V = "SYS_CONTEXT('PLMUT_CTX_X','ACTIVE')";
+  const join = (base: number, parent: number, x = '"A"."X">3') => [
+    r(base, parent, 'HASH JOIN'), r(base + 1, base, 'TABLE ACCESS FULL PT_B'), r(base + 2, base, 'TABLE ACCESS FULL PT_A', x),
+  ];
+  const orig = livePlan([r(0, null, 'SELECT STATEMENT'), ...join(1, 0)]);
+  const switched = [
+    r(0, null, 'SELECT STATEMENT'), r(1, 0, 'VIEW PT_V'), r(2, 1, 'UNION-ALL'), r(3, 2, 'VIEW VW_ORE_A8A72A4B'), r(4, 3, 'UNION-ALL'),
+    r(5, 4, 'FILTER', `NVL(${V},'0')<>'-1' AND NVL(${V},'0')<>'3' AND NVL(${V},'0')<>'2'`), ...join(6, 5),
+    r(10, 4, 'FILTER', `NVL(${V},'0')<>'3' AND NVL(${V},'0')<>'2' AND LNNVL(NVL(${V},'0')<>'-1') AND  (SELECT 0 FROM "SYS"."DUAL" "DUAL")=0`), ...join(11, 10), r(14, 10, 'FAST DUAL'),
+    r(15, 2, 'FILTER', `${V}='2'`), ...join(16, 15, '"A"."X">=3'),
+    r(19, 2, 'FILTER', `${V}='3'`), r(20, 19, 'NESTED LOOPS'), r(21, 20, 'TABLE ACCESS FULL PT_A'), r(22, 20, 'TABLE ACCESS FULL PT_B'),
+  ];
+  assert.deepEqual(livePlan(switched), orig);
+  assert.equal(planDiff(orig, livePlan(switched)), undefined);
+  // without OR expansion the recording subquery hangs under the original branch's filter
+  const plain = [r(0, null, 'SELECT STATEMENT'), r(1, 0, 'UNION-ALL'),
+    r(2, 1, 'FILTER', `NVL(${V},'0')<>'2' AND (NVL(${V},'0')<>'-1' OR  (SELECT 0 FROM "SYS"."DUAL" "DUAL")=0)`), ...join(3, 2), r(6, 2, 'FAST DUAL'),
+    r(7, 1, 'FILTER', `${V}='2'`), ...join(8, 7)];
+  assert.deepEqual(livePlan(plain), orig);
+  // a WITH clause materialized for the copies, a branch filter pushed into a scan: different
+  const worse = [r(0, null, 'SELECT STATEMENT'), r(1, 0, 'TEMP TABLE TRANSFORMATION'), r(2, 1, 'LOAD AS SELECT SYS_TEMP_0FD9D6604_2B3C'), ...join(3, 1),
+    r(6, 1, 'TABLE ACCESS FULL PT_C', `${V}='4' AND "C"."Y">1`)];
+  assert.equal(planDiff(orig, livePlan(worse)), '+1 LOAD AS SELECT SYS_TEMP, +1 TABLE ACCESS FULL PT_C, +1 TEMP TABLE TRANSFORMATION');
+});
+
+test('schema: a view whose points all run one by one keeps a recording wrapper; a plain view goes in as written', () => {
+  const path = join(mkdtempSync(join(tmpdir(), 'pltest-')), 'w.sql');
+  writeFileSync(path, 'create or replace view w as\n  with x as (select a from t where a > 0)\n  select a from x where a < 3;\n');
+  const ms = expand(findPoints([path]));
+  const all = new Set(ms.map((m) => m.point));
+  const su = buildSchema(ms, new Set(), all, 'DEMO')[0];
+  assert.deepEqual(su.mutants, []);
+  assert.deepEqual(su.recorded, ms.map((m) => m.id));
+  assert.equal((su.text.match(/UNION ALL/g) ?? []).length, 0);
+  assert.ok(su.text.includes(`(SELECT plmut_ctl.hit(1, ${ms.length}) FROM dual) = 0`), su.text);
+  const plain = buildSchema(ms, new Set(), all, 'DEMO', new Set(), new Set([su.key]))[0];
+  assert.equal(plain.text, plain.original);
+  assert.deepEqual(plain.recorded, []);
 });

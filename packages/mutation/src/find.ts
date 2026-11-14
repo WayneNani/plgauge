@@ -123,8 +123,18 @@ interface Env {
   forall?: string;
   /** Inside a view's query. */
   view?: boolean;
+  /** Inside a query block the schema switches with UNION ALL branches (views, cursor declarations). */
+  union?: boolean;
   /** In a select list (of the innermost query): a switch there cannot change the plan. */
   proj?: boolean;
+}
+
+/** A place where a string becomes SQL: a literal, or a variable holding one (see Finder.dynamicSql). */
+interface Sink {
+  tok: number;
+  sub: string;
+  /** Token range of the enclosing subprogram (or unit), where a variable's literal is searched. */
+  range: [number, number];
 }
 
 /** Statements the schema rewriter may duplicate to switch a clause point. */
@@ -143,6 +153,10 @@ class Finder {
   private loops: Loop[] = [];
   private skipped = 0;
   private unit = -1;
+  /** Dynamic SQL of the current unit: EXECUTE IMMEDIATE, OPEN … FOR, DBMS_SQL.PARSE with a literal or variable. */
+  private sinks: Sink[] = [];
+  /** Token range of the innermost subprogram being walked. */
+  private range: [number, number] = [0, 0];
 
   constructor(private path: string, text: string) {
     const r = prepare(text);
@@ -178,15 +192,19 @@ class Finder {
         decl: u.op === 'PACKAGE BODY' && u.at! >= 0 ? this.eb(u.at!) : -1,
       });
       const env: Env = { sub: '', ctx: 'plsql', guard: false };
+      this.sinks = [];
+      this.range = [u.a, u.b];
       // a view's query is its own scope: the schema switches it with one UNION ALL branch per variant
       if (u.op === 'VIEW') {
         env.view = true;
+        env.union = true;
         const ins = this.inlineHints(u);
         if (ins.length) this.units[this.unit].inserts = ins;
         this.units[this.unit].main = this.blockRange(u.kids[0]);
         this.units[this.unit].ordered = this.ordered(u.kids[0]);
       }
       for (const k of u.kids) this.walk(k, null, env);
+      this.dynamicSql();
     }
     return {
       path: this.path,
@@ -220,8 +238,11 @@ class Finder {
     if (this.inConditional(this.t[a].start)) return;
     const p: Point = { unit: this.unit, op, kind, sub: env.sub, ctx, cat, start: this.sb(a), end: this.eb(last), orig, mutants };
     // SQL inside a PL/SQL statement: the schema switches it by duplicating the statement
-    if ((kind === 'clause' || ctx === 'sql') && env.scope) p.scope = env.scope;
-    if (env.view && env.proj && ctx === 'sql' && (kind === 'bool' || kind === 'value')) p.inline = true;
+    if ((kind === 'clause' || ctx === 'sql') && env.scope) {
+      p.scope = env.scope;
+      if (env.union) p.union = true;
+    }
+    if (env.union && env.proj && ctx === 'sql' && (kind === 'bool' || kind === 'value')) p.inline = true;
     this.points.push(p);
   }
 
@@ -232,12 +253,24 @@ class Finder {
       case 'subprog': {
         const sub = env.sub ? `${env.sub}.${n.name}` : n.name!;
         const inner: Env = { sub, ctx: 'plsql', guard: false };
+        const outer = this.range;
+        this.range = [n.a, n.b];
         for (const k of n.kids) this.walk(k, n, inner);
+        this.range = outer;
         const body = n.kids.find((k) => k.k === 'body');
         if (body) this.ret(body, n, inner);
         return;
       }
-      case 'cursor': case 'query': case 'sql':
+      case 'cursor': {
+        // the query of a cursor declaration: one UNION ALL block, if its order and locks allow
+        // (parameter defaults are PL/SQL expressions outside it)
+        for (const k of n.kids) {
+          if (k.k !== 'query') this.walk(k, n, { ...env, ctx: 'plsql', scope: undefined, union: false });
+          else this.walk(k, n, { ...env, ctx: 'sql', ...(this.cursorBlock(k) ? { scope: this.blockRange(k), union: true } : { scope: undefined, union: false }) });
+        }
+        return;
+      }
+      case 'query': case 'sql':
         env = { ...env, ctx: 'sql' };
         if (env.view && n.k === 'query') {
           // an ordered subquery stays inside its block: wrapped, its order (ROWNUM top-N) would not hold
@@ -245,15 +278,17 @@ class Finder {
           // a recursive WITH element is no block, and it lies outside the main query's block
           else if (env.scope && !(env.scope[0] <= this.sb(n.a) && this.eb(n.b - 1) <= env.scope[1])) env.scope = undefined;
         }
-        if (n.k !== 'cursor') this.sqlClauses(n, parent, env);
+        this.sqlClauses(n, parent, env);
         break;
       case 'stmt':
         env = {
-          ...env, ctx: 'plsql', guard: false,
-          scope: SCOPE_STMTS.has(n.op!) ? [this.sb(n.a), this.eb(n.b - 1)] : undefined,
+          ...env, ctx: 'plsql', guard: false, union: false,
+          // a cursor FOR loop over a query: the loop is duplicated, body and all
+          scope: SCOPE_STMTS.has(n.op!) || (n.op === 'loop' && n.name === 'cursor-for' && n.kids[0]?.k === 'query') ? [this.sb(n.a), this.eb(n.b - 1)] : undefined,
           forall: n.op === 'forall' ? this.t[n.a + 1]?.up : undefined,
         };
         this.stmt(n, env);
+        this.sink(n, env);
         break;
       case 'not':
         if (env.ctx === 'sql' && n.kids.length === 1 && n.kids[0].k === 'pred' && n.kids[0].op === 'EXISTS') {
@@ -297,13 +332,140 @@ class Finder {
         break;
     }
     if (n.k === 'sql' || n.k === 'query') {
-      // only views switch select-list points in place
-      const lists = env.view ? this.selectLists(n) : [];
+      // only UNION ALL blocks (views, cursor declarations) switch select-list points in place
+      const lists = env.union ? this.selectLists(n) : [];
       for (const k of n.kids) this.walk(k, n, { ...env, proj: lists.some(([a, b]) => a <= k.a && k.b <= b) });
       this.whr(n, { ...env, proj: false });
       return;
     }
     for (const k of n.kids) this.walk(k, n, env);
+  }
+
+  /**
+   * Cursor declarations: the query becomes one UNION ALL block (see schema.ts) unless it ends
+   * in ORDER BY (wrapped, the order would no longer be guaranteed), locks rows (FOR UPDATE
+   * cannot be wrapped) or starts with WITH (copies would reference its elements more often,
+   * and Oracle would materialize them in front of every branch).
+   */
+  private cursorBlock(q: Node): boolean {
+    let a = q.a;
+    if (this.t[a].text === '(' && this.close(a) === q.b - 1) a++;
+    if (this.t[a].up !== 'SELECT' || this.ordered(q)) return false;
+    for (let k = a; k < q.b; k++) {
+      if (this.t[k].text === '(') k = this.close(k);
+      else if (this.t[k].up === 'FOR' && this.t[k + 1]?.up === 'UPDATE') return false;
+    }
+    return true;
+  }
+
+  // -------------------------------------------------------- dynamic SQL
+
+  /** Notes where a statement passes a string to the SQL engine: EXECUTE IMMEDIATE, OPEN … FOR, DBMS_SQL.PARSE. */
+  private sink(n: Node, env: Env) {
+    let a = -1;
+    let b = -1;
+    if (n.op === 'exec' || (n.op === 'open' && n.kids[0]?.k !== 'query' && this.t[n.kids[0]?.a - 1]?.up === 'FOR')) {
+      a = n.kids[0].a;
+      b = n.kids[0].b;
+    } else if (n.op === 'call') {
+      // [SYS.]DBMS_SQL.PARSE(c, statement, …)
+      let k = n.a;
+      if (this.t[k].up === 'SYS' && this.t[k + 1]?.text === '.') k += 2;
+      if (this.t[k].up !== 'DBMS_SQL' || this.t[k + 1]?.text !== '.' || this.t[k + 2]?.up !== 'PARSE' || this.t[k + 3]?.text !== '(') return;
+      const open = k + 3;
+      const close = this.close(open);
+      let j = open + 1;
+      while (j < close && this.t[j].text !== ',') j = this.t[j].text === '(' ? this.close(j) + 1 : j + 1;
+      a = j + 1;
+      b = a;
+      while (b < close && this.t[b].text !== ',') b = this.t[b].text === '(' ? this.close(b) + 1 : b + 1;
+      if (this.t[a]?.text.startsWith('=')) return; // named notation: not worth the trouble
+    }
+    if (a < 0 || b !== a + 1) return; // a single token: a literal or a variable
+    if (this.t[a].kind === 'string' || this.t[a].kind === 'ident') this.sinks.push({ tok: a, sub: env.sub, range: this.range });
+  }
+
+  /**
+   * Dynamic SQL: string literals that reach a sink, directly or as the only value a variable
+   * of the subprogram gets (declaration default or assignment). The literal's text is parsed
+   * as SQL and mutated like static SQL; a mutant is the literal with one change (quotes
+   * doubled again). The schema switches the whole literal in place (point.dyn): every variant
+   * is its own statement, parsed when executed, so no plan suffers.
+   */
+  private dynamicSql() {
+    const lits = new Map<number, string>();
+    for (const s of this.sinks) {
+      if (this.t[s.tok].kind === 'string') {
+        lits.set(s.tok, s.sub);
+        continue;
+      }
+      const name = this.t[s.tok].up;
+      for (let k = s.range[0]; k < s.range[1]; k++) {
+        if (this.t[k].kind !== 'string' || this.t[k + 1]?.text !== ';' || !(this.t[k - 1]?.text === ':=' || this.t[k - 1]?.up === 'DEFAULT')) continue;
+        // start of the declaration or assignment
+        let j = k - 2;
+        while (j > s.range[0] && this.t[j].text !== ';' && !['IS', 'AS', 'BEGIN', 'THEN', 'ELSE', 'LOOP', 'DECLARE'].includes(this.t[j].up)) j--;
+        if (this.t[j + 1]?.up === name) lits.set(k, s.sub);
+      }
+    }
+    for (const [k, sub] of [...lits].sort((x, y) => x[0] - y[0])) this.literal(k, sub);
+  }
+
+  private literal(k: number, sub: string) {
+    const tok = this.t[k];
+    if (this.inConditional(tok.start)) return;
+    const s = this.src.slice(tok.start, tok.end);
+    const q = /^n?q'(.)/i.exec(s);
+    let content = '';
+    const map: number[] = [];
+    let closing = '';
+    if (q) {
+      const open = q[1];
+      closing = ({ '[': ']', '{': '}', '<': '>', '(': ')' } as Record<string, string>)[open] ?? open;
+      if (!s.endsWith(`${closing}'`)) return;
+      const from = tok.start + q[0].length;
+      const to = tok.end - 2;
+      content = this.src.slice(from, to);
+      for (let i = 0; i <= content.length; i++) map.push(from + i);
+    } else {
+      const p = /^n?'/i.exec(s);
+      if (!p) return;
+      const from = tok.start + p[0].length;
+      const to = tok.end - 1;
+      for (let i = from; i < to; i++) {
+        map.push(i);
+        content += this.src[i];
+        if (this.src[i] === "'") i++; // '' stands for '
+      }
+      map.push(to);
+    }
+    let prefix: string;
+    if (/^\s*\(?\s*(SELECT|WITH)\b/i.test(content)) prefix = 'OPEN plmut$c FOR ';
+    else if (/^\s*(INSERT|UPDATE|DELETE|MERGE)\b/i.test(content)) prefix = '';
+    else return;
+    if (/;\s*$/.test(content)) return;
+    const head = `CREATE PROCEDURE plmut$dyn IS BEGIN\n${prefix}`;
+    const text = `${head}${content};\nEND;\n`;
+    const inner = new Finder(this.path, text).run();
+    if (inner.errors.length || inner.units.length !== 1) return;
+    const buf = Buffer.from(text, 'utf8');
+    const from = Buffer.byteLength(head);
+    const to = from + Buffer.byteLength(content);
+    const at = (byte: number) => map[buf.subarray(from, byte).toString('utf8').length];
+    const escape = (m: string) => (q ? m : m.replaceAll("'", "''"));
+    this.skipped += inner.skipped;
+    for (const p of inner.points) {
+      if (p.start < from || p.end > to || p.kind === 'insert' || p.kind === 'stmt') continue;
+      const a = at(p.start);
+      const b = at(p.end);
+      const mutants = p.mutants.map(escape).filter((m) => !q || !m.includes(`${closing}'`));
+      if (!mutants.length) continue;
+      this.points.push({
+        unit: this.unit, op: p.op, kind: p.kind, sub, ctx: 'sql', cat: p.cat,
+        start: this.byteAt[a], end: this.byteAt[b], orig: this.src.slice(a, b), mutants,
+        dyn: [this.sb(k), this.eb(k)],
+      });
+    }
   }
 
   /**

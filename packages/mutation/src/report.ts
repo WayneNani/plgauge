@@ -50,12 +50,14 @@ export function textReport(rep: Report): string {
   }
   const side = rep.results.filter((r) => r.sideEffect);
   if (side.length) out.push('', 'Nebenwirkung, ein Test hat committet:', ...side.map(line));
+  const shaky = rep.results.filter((r) => r.unstable);
+  if (shaky.length) out.push('', 'Urteil hängt von Umständen ab (Gegenprobe):', ...shaky.map((r) => `${line(r)}\n      ${r.unstable}`));
   const errs = rep.results.filter((r) => r.status === 'ERROR');
   if (errs.length) out.push('', 'Fehler des Werkzeugs:', ...errs.map((r) => `  ${basename(r.file)}:${r.line} ${r.op}: ${r.detail}`));
   const c = counts(rep);
   const parts = (['KILLED', 'SURVIVED', 'NOT_COVERED', 'TIMEOUT', 'MEMORY', 'COMPILE_ERROR', 'ERROR'] as Status[])
     .filter((s) => c.get(s)).map((s) => `${s} ${c.get(s)}`);
-  out.push('', `${rep.results.length} Mutanten: ${parts.join(', ')}`);
+  out.push('', `${rep.results.length} Mutanten: ${parts.join(', ')}${shaky.length ? ` (${shaky.length} mit unsicherem Urteil)` : ''}`);
   out.push(`Mutation Score ${score(rep).toFixed(1)} % · ${rep.tests} Tests · Baseline ${fmt(rep.baselineMs)} · Laufzeit ${fmt(rep.elapsedMs)}`);
   for (const t of rep.flakyTests) out.push(`unzuverlässiger Test, nachträglich ausgeschlossen: ${t}`);
   if (rep.excludedTests > 0) out.push(`${rep.excludedTests} Tests ausgeschlossen, weil sie schon ohne Mutanten scheitern`);
@@ -84,7 +86,7 @@ export function mutationTestingReport(rep: Report, root: string): string {
       replacement: r.mutated,
       location: { start: { line: r.line, column: r.col }, end: { line: r.endLine, column: r.endCol } },
       status: mtStatus[r.status],
-      ...(r.detail ? { statusReason: r.detail } : {}),
+      ...(r.detail || r.unstable ? { statusReason: [r.detail, r.unstable].filter(Boolean).join('; ') } : {}),
       description: r.category ? `${r.op} in ${r.sub}: ${r.category}` : `${r.op} in ${r.sub}`,
       ...(r.killedBy ? { killedBy: [r.killedBy] } : {}),
       duration: Math.round(r.durationMs),

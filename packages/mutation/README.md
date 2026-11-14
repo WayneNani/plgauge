@@ -15,8 +15,12 @@ Portierung von plmut (Go) nach TypeScript. Abgeglichen gegen die Go-Fassung auf 
 4. Zeitgrenze in drei Stufen (`CANCEL SQL`, Treiber-`break()`, `KILL SESSION`), Ausschluss
    scheiternder und unzuverlässiger Tests, Commit-Erkennung über eine Marker-Zeile, mehrere
    Worker-Datenbanken mit Zurücksetzen nach Nebenwirkung (`--reset-cmd`).
+5. **Gegenprobe** (abschaltbar mit `--no-confirm`): Urteile, die von Umständen abhängen können, laufen ein zweites
+   Mal (siehe unten).
 
-Jede Änderung am Code läuft über das Wiederherstellungs-Journal des Kerns (`pltest restore`).
+Jede Änderung am Code läuft über das Wiederherstellungs-Journal des Kerns (`pltest restore`). Hat ein abgebrochener
+Lauf Einheiten verändert zurückgelassen, stellt der nächste Lauf sie beim Start aus dem Journal wieder her, bevor er
+installiert oder Originale liest.
 
 ## Operatoren
 
@@ -39,7 +43,7 @@ Jede Änderung am Code läuft über das Wiederherstellungs-Journal des Kerns (`p
 | 2 | WHR | Bedingung von `WHERE`/`HAVING` → `TRUE` (Filter fällt weg) |
 | 2 | COL | `UPDATE … SET`: eine Zuweisung weg; `INSERT (Spalten) VALUES (…)`: eine Spalte mit ihrem Wert weg |
 
-Stufe 2 wirkt nur in statischem SQL (Abfragen, DML, Cursor) und folgt den SQL-Operatoren von Tuya, Suárez-Cabal und
+Stufe 2 wirkt in statischem SQL (Abfragen, DML, Cursor), in Views und in dynamischem SQL aus Literalen (unten). Sie folgt den SQL-Operatoren von Tuya, Suárez-Cabal und
 de la Riva (2007), beschränkt auf Varianten, die selten äquivalent sind. Ausgelassen werden: `DISTINCT`, `UNION` und
 `ORDER BY` in Unterabfragen von `IN`/`EXISTS`, `ORDER BY` eines einzeiligen `SELECT … INTO` ohne Zeilenlimit,
 `[INNER] JOIN` → `LEFT JOIN`, wenn `WHERE` eine Spalte der verbundenen Tabelle vergleicht (die Nullzeilen fallen
@@ -49,11 +53,23 @@ ohnehin weg), `WHERE 1 = 1`, ein `WHERE`, für das ROR oder LCR schon `TRUE` lie
 Umschalten im Schema: Mutanten in SQL (beider Stufen) werden nicht per `CASE` im SQL geschaltet, denn ein Schalter um
 eine Join-Bedingung nimmt dem Optimizer den Join (gemessen an plscope-utils: Minuten statt Millisekunden über
 `DBA_IDENTIFIERS`). Stattdessen steht die PL/SQL-Anweisung (statisches SQL, `FORALL`, `OPEN … FOR`) einmal pro Variante
-im Schema (`IF aktiv = id THEN <Variante> ELSIF … ELSE <Original> END IF;`); das Original behält seinen Plan. In
-Cursor-Deklarationen und Cursor-FOR-Schleifen geht das nicht; diese Mutanten werden einzeln kompiliert.
-Für sie gibt es
-keine Aufzeichnung, welche Tests sie erreichen: Sie laufen gegen alle Tests, und ein Mutant, den kein Test erreicht, erscheint als überlebt statt als nicht erreicht. `--ops` wählt
+im Schema (`IF aktiv = id THEN <Variante> ELSIF … ELSE <Original> END IF;`); das Original behält seinen Plan. Eine
+Cursor-FOR-Schleife über eine Abfrage wird als Ganzes verdoppelt, mit Rumpf; die Kopien einer Anweisung zusammen
+dürfen 256 KB groß sein, darüber laufen die übrigen Stellen einzeln. Die Abfrage einer Cursor-Deklaration wird wie
+ein Block einer View geschaltet (`UNION ALL`, unten), mit höchstens 20 Zweigen pro Cursor. Das erste Ausführen
+parst alle Kopien (bei Cursorn über Dictionary-Views Sekunden); ein Aufwärmlauf auf allen Workern vor der Baseline
+hält das aus der Zeitgrenze heraus. Ausgenommen sind Cursor
+mit `ORDER BY` (eingepackt wäre ihre Reihenfolge nicht mehr garantiert), mit `FOR UPDATE` und mit `WITH`; ihre
+Mutanten werden einzeln kompiliert. Für sie gibt es keine Aufzeichnung, welche Tests sie erreichen: Sie laufen gegen
+alle Tests, und ein Mutant, den kein Test erreicht, erscheint als überlebt statt als nicht erreicht. `--ops` wählt
 Operatoren aus, z. B. `--ops ROR,LCR,AOR,SBR,RET,EXC,NUL,CUR` für nur Stufe 1.
+
+Dynamisches SQL: Ein String-Literal, das `EXECUTE IMMEDIATE`, `OPEN … FOR` oder `DBMS_SQL.PARSE` erreicht, direkt
+oder als einziger Wert einer Variablen des Unterprogramms (Vorbelegung oder Zuweisung), wird als SQL geparst und mit
+beiden Stufen mutiert. Der Mutant ist das Literal mit einer Änderung (Anführungszeichen wieder verdoppelt, bei
+`q'[…]'` unverändert). Das Schema schaltet das ganze Literal an Ort und Stelle (`CASE aktiv WHEN 17 THEN '<Variante>'
+… ELSE '<Original>' END`); jede Variante ist eine eigene Anweisung, die erst beim Ausführen geparst wird, also leidet
+kein Plan. Zusammengesetzte Strings (`'select … ' || x`) bleiben außen vor.
 
 Views: `CREATE VIEW` in einer Datei unter `mutate` wird mutiert wie das SQL in PL/SQL, mit beiden Stufen. Das Schema
 schaltet sie blockweise; Blöcke sind die Abfrage der View, `WITH`-Elemente und Inline-Views in `FROM` (Unterabfragen in
@@ -83,9 +99,42 @@ unterstützt. Das Original einer View kommt aus `DBMS_METADATA`, bei Views ander
 über die Fehlerposition des Servers einem Zweig zu. Scheitert der Wrapper eines Blocks, laufen dessen Stellen einzeln,
 und der Block wird nicht noch einmal eingepackt.
 
+Planvergleich: Vor dem Schalten nimmt der Lauf mit `EXPLAIN PLAN` den Plan jeder View auf, danach den der
+geschalteten. Ohne tote Zweige (unter einem Filter, der einen bestimmten Mutanten verlangt, auch die Kopie, die die
+OR-Expansion von 23ai für den Aufzeichnungslauf anlegt) und ohne die Schritte des Schemas selbst müssen dieselben
+Operationen auf denselben Objekten übrig bleiben. Sonst haben die Kopien den Plan verändert (eine materialisierte
+`WITH`-Klausel, ein in einen Tabellenscan geschobener Zweigfilter, eine andere Join-Reihenfolge), und jeder Test,
+der die View abfragt, liefe anders. `EXPLAIN PLAN` läuft dafür in einer eigenen Verbindung: Eine View mit vielen
+schweren Kopien kann den Cursor-Heap des Servers sprengen (ORA-00600 `KGL-heap-size-exceeded`), und der Prozess
+stirbt mit; die View gilt dann als nicht prüfbar. Bei einem abweichenden Plan laufen die Mutanten der View einzeln, und ihr Hauptblock bekommt nur noch
+den Wrapper, der aufzeichnet, welche Tests die View abfragen. Ändert auch der den Plan, bleibt die View ganz im
+Original. Ein häufiger Grund: Ein Zweigfilter landet auf einer View-Zeile statt als Startfilter vor dem Zweig, etwa
+über analytischen Funktionen. Dann rechnet Oracle die toten Zweige bei jeder Abfrage mit.
+
 Tests, die den Text einer View lesen (Quelltext, Lineage-Analysen), sehen im Schema die Kopien. Scheitern Tests mit
 den geschalteten Views, aber nicht mit den Originalen, sucht der Lauf die View, an der es liegt; sie bleibt im
 Original, ihre Mutanten laufen einzeln mit allen Tests. So geht kein Test für die übrigen Mutanten verloren.
+
+## Gegenprobe
+
+Manche Urteile hängen nicht nur vom Mutanten ab. Ein Test kann Daten lesen, die ein anderer Test vorher committet hat,
+oder vom Inhalt der Worker-Datenbank abhängen. Ein Mutant kann eine Abfrage ohne `ORDER BY` liefern, deren erste Zeile
+vom Plan abhängt. Zwei Maßnahmen:
+
+- **Daten zurückschreiben:** Committen die Tests schon ohne Mutanten, stellt die Baseline fest, welche Tests das tun
+  (jeder einmal allein). Nach jedem Mutanten, unter dem committet wurde, laufen von seinen Tests die committenden noch
+  einmal auf dem Original (im Orakel-Modus nach dem Zurückspielen der Einheit, und nur, wenn nicht ohnehin alle Tests
+  liefen). So beginnt kein Mutant mit Daten, die ein anderer Mutant geschrieben hat.
+- **Zweiter Versuch:** Jeder erkannte Mutant läuft noch einmal mit dem erkennenden Test allein. Im Schema-Modus geschieht
+  das nach dem Lauf auf dem nächsten Worker (mit nur einem Worker auf demselben), im Orakel-Modus gleich nach dem
+  Urteil, solange der Mutant noch kompiliert ist (ein anderer Worker müsste ihn neu kompilieren; gemessen an
+  plscope-utils kostete das mehr als der Lauf selbst). Besteht der Test, bleibt der Mutant erkannt, wird aber als
+  unsicher markiert: Die Erkennung hing an der Reihenfolge der Tests, an Daten oder (nur im Schema-Modus prüfbar) an
+  der Datenbank. Eine Zeitüberschreitung (nicht die des Schleifenwächters) läuft mit doppelter Zeit noch einmal.
+  Endet sie dann, gilt das neue Urteil, ebenfalls markiert.
+
+Der Textbericht listet die markierten Mutanten mit Grund, das JSON trägt ihn im Feld `unstable`. Überlebende werden
+nicht wiederholt: Das kostete so viel wie der Lauf selbst.
 
 ## Benutzung
 
@@ -98,7 +147,7 @@ npx pltest mutate compare a.json b.json                     # auch gegen JSON de
 ```
 
 Für die CI: `--diff origin/main` (nur Mutanten auf Zeilen, die sich seit der Merge-Basis geändert haben) und
-`--min-score 60` (Exit-Code 3 darunter). Weitere Optionen: `--ops ROR,SBR`, `--timeout-factor 5`, `--skip-install`, `-q`,
+`--min-score 60` (Exit-Code 3 darunter). Weitere Optionen: `--ops ROR,SBR`, `--timeout-factor 5`, `--skip-install`, `-q`, `--no-confirm`,
 `--coverage plcov-coverage.json` (Orakel-Modus: nur die Tests, die die Anweisung um den Mutanten
 ausgeführt haben).
 Projektdatei `pltest.json` (oder `plmut.json`): `install` (Skripte), `mutate` (Globs der Dateien),

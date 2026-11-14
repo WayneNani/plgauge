@@ -43,8 +43,9 @@ export interface Point {
   /**
    * SQL points inside a PL/SQL statement (static SQL, FORALL, OPEN FOR): the statement's
    * byte range. The schema rewriter switches such points by duplicating the statement, so
-   * the original SQL keeps its execution plan; SQL points without it (cursor declarations,
-   * cursor FOR loops) run with the oracle rewriter.
+   * the original SQL keeps its execution plan (cursor FOR loops: the whole loop); cursor
+   * declarations and views wrap their query block instead (union). SQL points without it
+   * (ordered cursor declarations and the like) run with the oracle rewriter.
    */
   scope?: [number, number];
   /**
@@ -52,6 +53,16 @@ export interface Point {
    * ID) cannot change the execution plan. Other view points get a UNION ALL branch each.
    */
   inline?: boolean;
+  /**
+   * The scope is a query block switched with UNION ALL branches (a view's block, a cursor
+   * declaration's query), not a statement duplicated with IF.
+   */
+  union?: boolean;
+  /**
+   * Dynamic SQL: byte range of the string literal the point lies in. The schema switches the
+   * whole literal in place; start and end stay the change itself (inside the literal).
+   */
+  dyn?: [number, number];
 }
 
 /** Position right after a LOOP keyword, where the schema puts a loop guard. */

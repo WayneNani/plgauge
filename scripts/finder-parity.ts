@@ -20,13 +20,13 @@ const java = (JSON.parse((ref.endsWith('.gz') ? gunzipSync(raw) : raw).toString(
 const t0 = Date.now();
 // the Java finder knows only stage 1
 const stage1 = new Set(STAGE1_OPERATORS);
-// the Java finder knows neither stage 2 nor views: leave both out, renumber the units
+// the Java finder knows neither stage 2 nor views nor dynamic SQL: leave them out, renumber the units
 const ts = findPoints(java.map((f) => join(root, f.path))).map((f) => {
   const idx = new Map<number, number>();
   const units = f.units.filter((u, i) => u.type !== 'VIEW' && idx.set(i, idx.size));
   return {
     ...f, units,
-    points: f.points.filter((p) => stage1.has(p.op) && idx.has(p.unit)).map((p) => ({ ...p, unit: idx.get(p.unit)! })),
+    points: f.points.filter((p) => stage1.has(p.op) && !p.dyn && idx.has(p.unit)).map((p) => ({ ...p, unit: idx.get(p.unit)! })),
     loops: f.loops.filter((l) => idx.has(l.unit)).map((l) => ({ ...l, unit: idx.get(l.unit)! })),
   };
 });

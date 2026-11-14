@@ -60,7 +60,9 @@ Alle Phasen des Umsetzungsplans sind abgeschlossen, dazu aus der Ausbaustufe: CI
 Diff-Modus (A7), Treffer aus Scheduler-Jobs (A8), unzuverlässige Tests in der Coverage (A9) und mehrere Schemas (A4).
 Dazu SQL-Operatoren als Stufe 2 der Mutation (A10: DISTINCT, Joins, ORDER BY, Mengenoperatoren, Aggregate,
 Unterabfragen, WHERE, DML-Spalten), auch in Views (`CREATE VIEW` wird mutiert, im Schema blockweise per
-`UNION ALL` geschaltet). Zurückgestellt: die Versionsmatrix mit 19c (A3). Auswertungen an echtem Code:
+`UNION ALL` geschaltet, mit Planvergleich), in Cursor-Deklarationen, Cursor-FOR-Schleifen und dynamischem SQL aus
+Literalen. Urteile, die von Testreihenfolge, Daten oder Datenbank abhängen, markiert eine Gegenprobe.
+Zurückgestellt: die Versionsmatrix mit 19c (A3). Auswertungen an echtem Code:
 `eval/console/EVAL.md` (A11) und `eval/plscope-utils/EVAL.md` (A10).
 
 ## Wiederherstellungs-Journal
