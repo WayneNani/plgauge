@@ -58,6 +58,7 @@ export function textReport(rep: Report): string {
   const parts = (['KILLED', 'SURVIVED', 'NOT_COVERED', 'TIMEOUT', 'MEMORY', 'COMPILE_ERROR', 'ERROR'] as Status[])
     .filter((s) => c.get(s)).map((s) => `${s} ${c.get(s)}`);
   out.push('', `${rep.results.length} Mutanten: ${parts.join(', ')}${shaky.length ? ` (${shaky.length} mit unsicherem Urteil)` : ''}`);
+  if (rep.aborted) out.push(`ABGEBROCHEN: ${rep.aborted}; die Ergebnisse sind unvollständig`);
   out.push(`Mutation Score ${score(rep).toFixed(1)} % · ${rep.tests} Tests · Baseline ${fmt(rep.baselineMs)} · Laufzeit ${fmt(rep.elapsedMs)}`);
   for (const t of rep.flakyTests) out.push(`unzuverlässiger Test, nachträglich ausgeschlossen: ${t}`);
   if (rep.excludedTests > 0) out.push(`${rep.excludedTests} Tests ausgeschlossen, weil sie schon ohne Mutanten scheitern`);
@@ -107,8 +108,8 @@ export function htmlReport(rep: Report, root: string): string {
 <html lang="de"><head><meta charset="utf-8"><title>pltest – Mutationsbericht</title>
 <script src="https://cdn.jsdelivr.net/npm/mutation-testing-elements@3.5.1/dist/mutation-test-elements.js"></script>
 </head><body>
-<mutation-test-report-app titlePostfix="pltest"></mutation-test-report-app>
-<script>document.querySelector('mutation-test-report-app').report = ${mutationTestingReport(rep, root)};</script>
+${rep.aborted ? `<p style="color:#b00;font:bold 1rem sans-serif">ABGEBROCHEN: ${rep.aborted.replace(/[<&]/g, (c) => (c === '<' ? '&lt;' : '&amp;'))}; die Ergebnisse sind unvollständig</p>\n` : ''}<mutation-test-report-app titlePostfix="pltest"></mutation-test-report-app>
+<script>document.querySelector('mutation-test-report-app').report = ${mutationTestingReport(rep, root).replace(/</g, '\\u003c')};</script>
 <noscript>Der Bericht braucht JavaScript.</noscript>
 </body></html>
 `;

@@ -11,7 +11,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { TextDecoder } from 'node:util';
-import { parse, preprocessBlocks, type Node, type Token } from '@pltest/core';
+import { parse, preprocessBlocks, tokenize, type Node, type Token } from '@pltest/core';
 import type { Loop, Point, SourceFile, Unit } from './mutant.js';
 
 export function findPoints(paths: string[]): SourceFile[] {
@@ -121,6 +121,13 @@ interface Env {
   scope?: [number, number];
   /** Index variable of the enclosing FORALL (upper case). */
   forall?: string;
+  /**
+   * Token ranges of GROUP BY items and of select-list items equal to one: a mutant there makes
+   * the select list no longer derivable from the groups (ORA-00979).
+   */
+  grouped?: [number, number][];
+  /** Token range of the FORALL statement's DML (after the header). */
+  forallDml?: [number, number];
   /** Inside a view's query. */
   view?: boolean;
   /** Inside a query block the schema switches with UNION ALL branches (views, cursor declarations). */
@@ -133,14 +140,19 @@ interface Env {
 interface Sink {
   tok: number;
   sub: string;
-  /** Token range of the enclosing subprogram (or unit), where a variable's literal is searched. */
-  range: [number, number];
+  /** The enclosing subprogram (or unit): a variable must be declared in it (see varLiterals). */
+  scope: Node;
 }
+
+/** The bind placeholders of a statement (:name, :1, :"x"), sorted. */
+const binds = (sql: string) => (sql.match(/:(?:"[^"]+"|[A-Za-z0-9_$#]+)/g) ?? []).sort().join(' ');
 
 /** Statements the schema rewriter may duplicate to switch a clause point. */
 const SCOPE_STMTS = new Set(['sql', 'forall', 'open']);
 const ORDER_END = new Set(['FETCH', 'OFFSET', 'FOR', 'ROWS', 'RANGE', 'GROUPS', 'UNION', 'INTERSECT', 'MINUS', 'EXCEPT', 'LIMIT']);
-const SET_END = new Set(['WHERE', 'RETURNING', 'RETURN', 'LOG', 'DELETE', 'WHEN']);
+/** Where the ORDER BY of MATCH_RECOGNIZE ends (only there: elsewhere these are column names). */
+const MATCH_END = new Set(['MEASURES', 'PATTERN', 'DEFINE', 'SUBSET', 'AFTER']);
+const SET_END = new Set(['WHERE', 'RETURNING', 'RETURN', 'LOG', 'DELETE']);
 const AGGREGATE_SWAP: Record<string, string> = { MIN: 'MAX', MAX: 'MIN', SUM: 'AVG', AVG: 'SUM' };
 
 class Finder {
@@ -155,10 +167,14 @@ class Finder {
   private unit = -1;
   /** Dynamic SQL of the current unit: EXECUTE IMMEDIATE, OPEN … FOR, DBMS_SQL.PARSE with a literal or variable. */
   private sinks: Sink[] = [];
-  /** Token range of the innermost subprogram being walked. */
-  private range: [number, number] = [0, 0];
+  /** The innermost subprogram (or unit) being walked. */
+  private scopeNode!: Node;
+
+  /** The source as written: $IF branches the preprocessing dropped are still in it. */
+  private orig: string;
 
   constructor(private path: string, text: string) {
+    this.orig = text;
     const r = prepare(text);
     this.src = r.text;
     this.blocks = r.blocks;
@@ -193,7 +209,7 @@ class Finder {
       });
       const env: Env = { sub: '', ctx: 'plsql', guard: false };
       this.sinks = [];
-      this.range = [u.a, u.b];
+      this.scopeNode = u;
       // a view's query is its own scope: the schema switches it with one UNION ALL branch per variant
       if (u.op === 'VIEW') {
         env.view = true;
@@ -236,6 +252,29 @@ class Finder {
 
   private pointSpan(op: string, kind: Point['kind'], a: number, last: number, orig: string, env: Env, ctx: 'plsql' | 'sql', cat: string, mutants: string[]) {
     if (this.inConditional(this.t[a].start)) return;
+    // a span over a $IF directive: the mutant would cut it apart (a statement deletion may take
+    // blocks that lie wholly inside it)
+    const from = this.t[a].start;
+    const to = this.t[last].end;
+    if (this.blocks.some(([x, y]) => x < to && y > from && (kind !== 'stmt' || x < from || y > to))) return;
+    if (ctx === 'sql' && kind !== 'clause' && env.grouped?.some(([x, y]) => x <= a && last < y)) {
+      this.skipped++;
+      return;
+    }
+    if (env.forall && env.forallDml && ctx === 'sql') {
+      // FORALL needs a bulk bind left in its DML (PLS-00435): a mutant that takes the last one out is not compiled
+      const [da, db] = env.forallDml;
+      let outside = false;
+      // (x.i is a column, not the index)
+      for (let k = da; k < db && !outside; k++) if ((k < a || k > last) && this.t[k].up === env.forall && this.t[k - 1]?.text !== '.') outside = true;
+      if (!outside) {
+        const idx = new RegExp(`(^|[^A-Za-z0-9_$#.])${env.forall.replace(/[$]/g, '\\$&')}($|[^A-Za-z0-9_$#])`, 'i');
+        const keep = mutants.filter((m) => idx.test(m));
+        this.skipped += mutants.length - keep.length;
+        if (!keep.length) return;
+        mutants = keep;
+      }
+    }
     const p: Point = { unit: this.unit, op, kind, sub: env.sub, ctx, cat, start: this.sb(a), end: this.eb(last), orig, mutants };
     // SQL inside a PL/SQL statement: the schema switches it by duplicating the statement
     if ((kind === 'clause' || ctx === 'sql') && env.scope) {
@@ -253,10 +292,10 @@ class Finder {
       case 'subprog': {
         const sub = env.sub ? `${env.sub}.${n.name}` : n.name!;
         const inner: Env = { sub, ctx: 'plsql', guard: false };
-        const outer = this.range;
-        this.range = [n.a, n.b];
+        const outer = this.scopeNode;
+        this.scopeNode = n;
         for (const k of n.kids) this.walk(k, n, inner);
-        this.range = outer;
+        this.scopeNode = outer;
         const body = n.kids.find((k) => k.k === 'body');
         if (body) this.ret(body, n, inner);
         return;
@@ -283,9 +322,13 @@ class Finder {
       case 'stmt':
         env = {
           ...env, ctx: 'plsql', guard: false, union: false,
-          // a cursor FOR loop over a query: the loop is duplicated, body and all
-          scope: SCOPE_STMTS.has(n.op!) || (n.op === 'loop' && n.name === 'cursor-for' && n.kids[0]?.k === 'query') ? [this.sb(n.a), this.eb(n.b - 1)] : undefined,
+          // a cursor FOR loop over a query: the loop is duplicated, body and all (not a labelled
+          // one: the copies would lose the label that EXIT and END LOOP name)
+          // (nor one with labels in its body: the copies would declare them twice, PLS-00371)
+          scope: SCOPE_STMTS.has(n.op!) || (n.op === 'loop' && n.name === 'cursor-for' && n.kids[0]?.k === 'query' && n.at2 === n.a
+            && !this.labelled(n)) ? [this.sb(n.a), this.eb(n.b - 1)] : undefined,
           forall: n.op === 'forall' ? this.t[n.a + 1]?.up : undefined,
+          forallDml: n.op === 'forall' ? [n.kids.at(-1)!.a, n.kids.at(-1)!.b] : undefined,
         };
         this.stmt(n, env);
         this.sink(n, env);
@@ -332,20 +375,157 @@ class Finder {
         break;
     }
     if (n.k === 'sql' || n.k === 'query') {
-      // only UNION ALL blocks (views, cursor declarations) switch select-list points in place
-      const lists = env.union ? this.selectLists(n) : [];
-      for (const k of n.kids) this.walk(k, n, { ...env, proj: lists.some(([a, b]) => a <= k.a && k.b <= b) });
-      this.whr(n, { ...env, proj: false });
+      // UNION ALL blocks (views, cursor declarations) switch the points of their own select list in
+      // place; that of a subquery or an inline view inside feeds a semi-join or join key, where a
+      // CASE could cost the plan an index or the unnesting
+      // (a scalar subquery in that list is a projection too)
+      const own = env.union && env.scope && (env.proj || ((r) => r[0] === env.scope![0] && r[1] === env.scope![1])(this.blockRange(n)));
+      const lists = own ? this.selectLists(n) : [];
+      // (an outer block's keys reach into correlated subqueries too)
+      const own2 = this.groupedRanges(n);
+      const grouped = own2 || env.grouped ? [...(env.grouped ?? []), ...(own2 ?? [])] : undefined;
+      const inner = { ...env, grouped };
+      for (const k of n.kids) this.walk(k, n, { ...inner, proj: lists.some(([a, b]) => a <= k.a && k.b <= b) });
+      this.whr(n, { ...inner, proj: false });
       return;
     }
-    for (const k of n.kids) this.walk(k, n, env);
+    // a predicate with a subquery (IN, ANY, ALL, EXISTS) in a select list: its sides are a
+    // semi-join's keys, no projection (other expressions around a scalar subquery are)
+    const sub = env.proj && n.k === 'pred' && n.kids.some((k) => k.k === 'query' || k.kids.some((x) => x.k === 'query'));
+    for (const k of n.kids) this.walk(k, n, sub ? { ...env, proj: false } : env);
+  }
+
+  /**
+   * Expressions a query block must not change inside: its composite GROUP BY keys (of every
+   * branch; ROLLUP, CUBE, GROUPING SETS and parentheses resolved) and, with SELECT DISTINCT, its
+   * composite ORDER BY keys. Returns the token ranges of every occurrence in the block (select
+   * list, HAVING, ORDER BY, correlated subqueries): a mutant inside one no longer matches the
+   * key (ORA-00979, ORA-01791). Qualifiers (t.) are ignored when comparing; a single column has
+   * no mutants of its own and expressions around it stay derivable. Undefined without keys.
+   */
+  private groupedRanges(q: Node): [number, number][] | undefined {
+    const nested = q.kids.filter((k) => k.k === 'query' || k.k === 'sql');
+    const base = this.t[q.a].text === '(' && this.close(q.a) === q.b - 1 ? 1 : 0;
+    const top: number[] = [];
+    let d = 0;
+    for (let k = q.a; k < q.b; k++) {
+      const r = nested.find((x) => x.a <= k && k < x.b);
+      if (r) {
+        k = r.b - 1;
+        continue;
+      }
+      if (this.t[k].text === '(') d++;
+      else if (this.t[k].text === ')') d--;
+      else if (d === base) top.push(k);
+    }
+    const ENDS = new Set(['HAVING', 'ORDER', 'UNION', 'INTERSECT', 'MINUS', 'EXCEPT', 'FETCH', 'OFFSET', 'WINDOW', 'MODEL', 'FOR', 'LOG', ';']);
+    const end = base ? q.b - 1 : q.b;
+    const split = (a: number, b: number): [number, number][] => {
+      const out: [number, number][] = [];
+      let s0 = a;
+      let dd = 0;
+      for (let k = a; k < b; k++) {
+        if (this.t[k].text === '(') dd++;
+        else if (this.t[k].text === ')') dd--;
+        else if (dd === 0 && this.t[k].text === ',') {
+          out.push([s0, k]);
+          s0 = k + 1;
+        }
+      }
+      out.push([s0, b]);
+      return out.filter(([x, y]) => x < y);
+    };
+    const keys: [number, number][] = [];
+    const flatten = (a: number, b: number) => {
+      for (const [x, y] of split(a, b)) {
+        let i = x;
+        if (['ROLLUP', 'CUBE'].includes(this.t[i].up)) i++;
+        else if (this.t[i].up === 'GROUPING' && this.t[i + 1]?.up === 'SETS') i += 2;
+        if (this.t[i].text === '(' && this.close(i) === y - 1) flatten(i + 1, y - 1);
+        else keys.push([x, y]);
+      }
+    };
+    const listAfter = (kw: number) => {
+      let to = end;
+      for (const k of top) if (k > kw + 1 && ENDS.has(this.t[k].up)) {
+        to = k;
+        break;
+      }
+      return [kw + 2, to] as [number, number];
+    };
+    for (let i = 0; i < top.length; i++) {
+      if (this.t[top[i]].up === 'GROUP' && this.t[top[i + 1]]?.up === 'BY') flatten(...listAfter(top[i]));
+    }
+    const distinct = top.some((k, i) => this.t[k].up === 'SELECT' && ['DISTINCT', 'UNIQUE'].includes(this.t[top[i + 1]]?.up));
+    if (distinct) {
+      for (let i = 0; i < top.length; i++) {
+        if (this.t[top[i]].up === 'ORDER' && this.t[top[i + 1]]?.up === 'BY') {
+          for (const [x, y] of split(...listAfter(top[i]))) {
+            let e = y;
+            while (e > x + 1 && ['ASC', 'DESC', 'NULLS', 'FIRST', 'LAST'].includes(this.t[e - 1].up)) e--;
+            keys.push([x, e]);
+          }
+        }
+      }
+    }
+    // significant tokens: qualifiers (x. before a name) left out
+    const sig = (a: number, b: number): number[] => {
+      const out: number[] = [];
+      for (let k = a; k < b; k++) {
+        if ((this.t[k].kind === 'ident' || this.t[k].kind === 'qident') && this.t[k + 1]?.text === '.' && k + 2 < b) {
+          k++;
+          continue;
+        }
+        out.push(k);
+      }
+      return out;
+    };
+    // "A" and A are the same name
+    const words = (ks: number[]) => ks.map((k) => (this.t[k].kind === 'qident' ? this.t[k].text.slice(1, -1) : this.t[k].up));
+    // GROUP BY alias (23ai): the select item's expression is the key
+    const aliases = new Map<string, [number, number]>();
+    for (const [la, lb] of this.selectLists(q)) {
+      for (const [a, b] of split(la, lb)) {
+        const al = b - 1;
+        // (not the column of t.col)
+        if (al > a && (this.t[al].kind === 'ident' || this.t[al].kind === 'qident') && this.t[al - 1].text !== '.') {
+          const e = this.t[al - 1]?.up === 'AS' ? al - 1 : al;
+          if (e > a) aliases.set(words([al])[0], [a, e]);
+        }
+      }
+    }
+    const resolved = keys.map(([a, b]) => (b === a + 1 && aliases.has(words([a])[0]) ? aliases.get(words([a])[0])! : [a, b]));
+    const patterns = resolved.map(([a, b]) => words(sig(a, b))).filter((w) => w.length > 1);
+    if (!patterns.length) return undefined;
+    const all = sig(q.a, q.b);
+    const w = words(all);
+    const out: [number, number][] = [];
+    for (const p of patterns) {
+      for (let i = 0; i + p.length <= w.length; i++) {
+        if (!p.every((x, j) => w[i + j] === x)) continue;
+        // the occurrence starts with its qualifier (t.f + 1)
+        let from = all[i];
+        while (from - 2 >= q.a && this.t[from - 1].text === '.' && ['ident', 'qident'].includes(this.t[from - 2].kind)) from -= 2;
+        out.push([from, all[i + p.length - 1] + 1]);
+      }
+    }
+    return out;
+  }
+
+  /** Whether a statement has a label inside, also in a $IF branch the preprocessing dropped. */
+  private labelled(n: Node): boolean {
+    if (this.t.slice(n.a, n.b).some((x) => x.text === '<<')) return true;
+    const from = this.t[n.a].start;
+    const to = this.t[n.b - 1].end;
+    return this.blocks.some(([a, b]) => a < to && b > from && tokenize(this.orig.slice(a, b)).some((x) => x.text === '<<'));
   }
 
   /**
    * Cursor declarations: the query becomes one UNION ALL block (see schema.ts) unless it ends
    * in ORDER BY (wrapped, the order would no longer be guaranteed), locks rows (FOR UPDATE
-   * cannot be wrapped) or starts with WITH (copies would reference its elements more often,
-   * and Oracle would materialize them in front of every branch).
+   * cannot be wrapped), starts with WITH (copies would reference its elements more often,
+   * and Oracle would materialize them in front of every branch) or has an implied order
+   * anywhere inside (CONNECT BY, a sorted inline view): wrapped, it is not guaranteed.
    */
   private cursorBlock(q: Node): boolean {
     let a = q.a;
@@ -354,6 +534,13 @@ class Finder {
     for (let k = a; k < q.b; k++) {
       if (this.t[k].text === '(') k = this.close(k);
       else if (this.t[k].up === 'FOR' && this.t[k + 1]?.up === 'UPDATE') return false;
+    }
+    // an implied order anywhere inside (a hierarchical or a sorted inline view, the classic
+    // top-N with ROWNUM): wrapped, the rows would come in an order nobody guarantees any more;
+    // the ORDER BY of an analytic function or WITHIN GROUP decides no row order
+    for (let k = a; k < q.b; k++) {
+      if (this.t[k].text === '(' && ['OVER', 'GROUP', 'KEEP'].includes(this.t[k - 1]?.up)) k = this.close(k);
+      else if (['ORDER', 'CONNECT'].includes(this.t[k].up) && this.t[k + 1]?.up === 'BY') return false;
     }
     return true;
   }
@@ -387,7 +574,7 @@ class Finder {
       b--;
     }
     if (a < 0 || b !== a + 1) return; // a single token: a literal or a variable
-    if (this.t[a].kind === 'string' || this.t[a].kind === 'ident') this.sinks.push({ tok: a, sub: env.sub, range: this.range });
+    if (['string', 'ident', 'qident'].includes(this.t[a].kind)) this.sinks.push({ tok: a, sub: env.sub, scope: this.scopeNode });
   }
 
   /**
@@ -405,7 +592,7 @@ class Finder {
         lits.set(s.tok, { sub: s.sub });
         continue;
       }
-      const v = this.varLiterals(this.t[s.tok].up, s.range, sinks);
+      const v = this.varLiterals(this.norm(s.tok)!, s.scope, sinks);
       if (!v) continue;
       for (const k of v.lits) {
         const max = Math.min(lits.get(k)?.max ?? Infinity, v.max ?? Infinity);
@@ -415,85 +602,119 @@ class Finder {
     for (const [k, l] of [...lits].sort((x, y) => x[0] - y[0])) this.literal(k, l.sub, l.max);
   }
 
+  /** An identifier as Oracle compares it (quoted ones exactly), else undefined. */
+  private norm(k: number): string | undefined {
+    const t = this.t[k];
+    if (t?.kind === 'ident') return t.up;
+    if (t?.kind === 'qident') return t.text.slice(1, -1);
+    return undefined;
+  }
+
   /**
-   * The literals a variable holds as whole statements: declared in the range, every other
-   * occurrence an assignment (name := …; a literal is noted, any other value replaces it), a
-   * sink or a read in a concatenation. A variable built from itself (l_sql := l_sql || …,
-   * replace(l_sql, …)), passed to a procedure (an OUT parameter) or fetched into holds a
-   * statement the literal is only part of: mutated alone, a fragment would break where the
-   * whole statement does not. max: the declared length (VARCHAR2(n)), which a variant must not exceed.
+   * Whether the variable name occurs in [a, b), qualified ones included: p.v names the local v
+   * of p, pk.g the variable g of package pk (a field of the same name counts too: harmless).
    */
-  private varLiterals(name: string, range: [number, number], sinks: Set<number>): { lits: number[]; max?: number } | undefined {
-    const lits: number[] = [];
-    let declared = false;
-    let max: number | undefined;
-    const starts = new Set(['IS', 'AS', 'BEGIN', 'THEN', 'ELSE', 'LOOP', 'DECLARE']);
-    for (let k = range[0]; k < range[1]; k++) {
-      const t = this.t[k];
-      if (t.kind !== 'ident' || t.up !== name || this.t[k - 1]?.text === '.') continue;
-      if (this.t[k + 1]?.text === '.' || this.t[k + 1]?.text === '(') return undefined; // a record, a collection
-      if (sinks.has(k)) continue;
-      const prev = this.t[k - 1];
-      const atStart = !prev || prev.text === ';' || starts.has(prev.up);
-      if (atStart && this.t[k + 1]?.text === ':=') {
-        if (this.t[k + 2]?.kind === 'string' && this.t[k + 3]?.text === ';') {
-          lits.push(k + 2);
-          k += 3;
-          continue;
-        }
-        // another value replaces the literal; one built from the variable itself (v := v || …, replace(v, …)) does not
-        const e = this.rhsEnd(k + 2, range[1]);
-        if (this.mentions(name, k + 2, e)) return undefined;
-        k = e;
-        continue;
-      }
-      if (atStart && !declared && this.t[k + 1]?.kind === 'ident') {
-        // name [CONSTANT] type[(n [BYTE|CHAR])] [NOT NULL] [:= | DEFAULT literal];
-        let e = k + 1;
-        if (this.t[e].up === 'CONSTANT') e++;
-        // other types (a subtype, %TYPE) give no length to check
-        if (['VARCHAR2', 'VARCHAR', 'NVARCHAR2'].includes(this.t[e]?.up) && this.t[e + 1]?.text === '(' && this.t[e + 2]?.kind === 'number') {
-          const n = Number(this.t[e + 2].text);
-          // BYTE (the default semantics) is checked in bytes, CHAR and NVARCHAR2 in characters
-          const chars = this.t[e + 3]?.up === 'CHAR' || this.t[e].up === 'NVARCHAR2';
-          max = chars ? -n : n;
-        }
-        while (e < range[1] && this.t[e].text !== ';' && this.t[e].text !== ':=' && this.t[e].up !== 'DEFAULT') e = this.t[e].text === '(' ? this.close(e) + 1 : e + 1;
-        declared = true;
-        if (this.t[e]?.text === ';') {
-          k = e;
-          continue;
-        }
-        if (this.t[e + 1]?.kind === 'string' && this.t[e + 2]?.text === ';') {
-          lits.push(e + 1);
-          k = e + 2;
-        } else k = this.rhsEnd(e + 1, range[1]);
-        continue;
-      }
-      // read in a concatenation for a call (logging); one that builds another statement would
-      // carry the literal as a fragment (other := name || ' where …')
-      if (prev?.text === '||' || this.t[k + 1]?.text === '||') {
-        let j = k - 1;
-        while (j > range[0] && this.t[j].text !== ';' && !starts.has(this.t[j].up)) j--;
-        if (this.t[j + 2]?.text === ':=' || this.t[j + 1]?.up === 'RETURN') return undefined;
-        continue;
-      }
-      return undefined;
-    }
-    return declared && lits.length ? { lits, max } : undefined;
-  }
-
-  /** The semicolon that ends an expression starting at a. */
-  private rhsEnd(a: number, end: number): number {
-    let e = a;
-    while (e < end && this.t[e].text !== ';') e = this.t[e].text === '(' ? this.close(e) + 1 : e + 1;
-    return e;
-  }
-
-  /** Whether the variable name occurs in [a, b) (not as a member: x.name). */
   private mentions(name: string, a: number, b: number): boolean {
-    for (let k = a; k < b; k++) if (this.t[k].kind === 'ident' && this.t[k].up === name && this.t[k - 1]?.text !== '.') return true;
+    for (let k = a; k < b; k++) if (this.norm(k) === name) return true;
     return false;
+  }
+
+  /**
+   * The literals a variable holds as whole statements. It must be declared in the scope's own
+   * declarations (a parameter, a package variable or one of a nested block could be set
+   * elsewhere), and every mention must be one of: its declaration, an assignment statement
+   * to it (name := 'literal'; is noted, any value not built from the variable replaces it),
+   * a sink, or a read in a logging call (see logging). Anything else (concatenated into
+   * another value, passed to a procedure, fetched into, a CASE branch, a qualified mention
+   * p.v, a nested subprogram or block that declares or uses the name, a $IF branch that
+   * names it) may make the executed statement differ from the literal: the variable is left
+   * out. max: the declared length (VARCHAR2(n) and the like): bytes if positive, characters
+   * if negative.
+   */
+  private varLiterals(name: string, scope: Node, sinks: Set<number>): { lits: number[]; max?: number } | undefined {
+    const decls = scope.kids.find((k) => k.k === 'decls');
+    const own = decls?.kids.find((d) => d.k === 'decl' && this.norm(d.a) === name);
+    if (!own) return undefined;
+    const allowed = new Set<number>([own.a]);
+    const lits: number[] = [];
+    let max: number | undefined;
+    let e = own.a + 1;
+    if (this.t[e].up === 'CONSTANT') e++;
+    // other types (a subtype, %TYPE) give no length to check
+    if (['VARCHAR2', 'VARCHAR', 'STRING', 'CHAR', 'NVARCHAR2', 'NCHAR'].includes(this.t[e]?.up) && this.t[e + 1]?.text === '(' && this.t[e + 2]?.kind === 'number') {
+      const n = Number(this.t[e + 2].text);
+      // BYTE (the default semantics) is checked in bytes, CHAR and the national types in characters
+      max = this.t[e + 3]?.up === 'CHAR' || this.t[e].up.startsWith('N') ? -n : n;
+    }
+    const dv = own.kids[0];
+    if (dv && dv.b === dv.a + 1 && this.t[dv.a].kind === 'string') lits.push(dv.a);
+    let ok = true;
+    const visit = (n: Node) => {
+      if (!ok || n === own) return;
+      if (n.k === 'subprog' || (n.k === 'decl' && this.norm(n.a) === name)) {
+        if (this.mentions(name, n.a, n.b)) ok = false;
+        return;
+      }
+      if (n.k === 'stmt' && n.op === 'assign' && n.at2 === n.a) {
+        const [target, value] = n.kids;
+        if (target.b === target.a + 1 && this.norm(target.a) === name) {
+          allowed.add(target.a);
+          if (value.b === value.a + 1 && this.t[value.a].kind === 'string') lits.push(value.a);
+          else if (this.mentions(name, value.a, value.b)) ok = false;
+          return;
+        }
+      }
+      if (n.k === 'stmt' && n.op === 'call') {
+        // a logging call reads it: DBMS_OUTPUT.PUT[_LINE] and LOGGER take IN parameters only; any
+        // other logging procedure only inside a concatenation (an expression cannot be IN OUT)
+        const lg = this.logging(n.a);
+        if (lg) {
+          // the call's own parenthesis: a direct argument there, not one of a function inside
+          let open = n.a;
+          while (open < n.b && this.t[open].text !== '(') open++;
+          for (let k = open + 1; k < n.b; k++) {
+            if (this.norm(k) !== name) continue;
+            const concat = this.t[k - 1]?.text === '||' || this.t[k + 1]?.text === '||';
+            let depth = 0;
+            for (let j = open; j < k; j++) depth += this.t[j].text === '(' ? 1 : this.t[j].text === ')' ? -1 : 0;
+            const direct = depth === 1 && ['(', ',', '=>'].includes(this.t[k - 1]?.text) && [',', ')'].includes(this.t[k + 1]?.text);
+            if (concat || (lg === 'in' && direct)) allowed.add(k);
+          }
+          return;
+        }
+      }
+      for (const k of n.kids) visit(k);
+    };
+    for (const k of scope.kids) visit(k);
+    if (!ok || !lits.length) return undefined;
+    for (let k = scope.a; k < scope.b; k++) {
+      if (this.norm(k) === name && !allowed.has(k) && !sinks.has(k)) return undefined;
+    }
+    // a $IF branch the preprocessing dropped may change it as well
+    const from = this.t[scope.a].start;
+    const to = this.t[scope.b - 1].end;
+    // (lexed like the rest: v and "V" are the same variable, "v" is another one)
+    const names = (t: string) => tokenize(t).some((x) => (x.kind === 'ident' && x.up === name) || (x.kind === 'qident' && x.text.slice(1, -1) === name));
+    if (this.blocks.some(([a, b]) => a < to && b > from && names(this.orig.slice(a, b)))) return undefined;
+    return { lits, max };
+  }
+
+  /**
+   * A call to a logging procedure: 'in' for DBMS_OUTPUT.PUT[_LINE] and LOGGER (OraOpenSource
+   * Logger: IN parameters only), 'other' for packages LOG, LOGGING, DEBUG, TRACE and
+   * procedures named LOG…, DEBUG…, TRACE… (their parameters may be IN OUT), else undefined.
+   */
+  private logging(a: number): 'in' | 'other' | undefined {
+    const segs: string[] = [];
+    for (let k = a; this.t[k] && (this.t[k].kind === 'ident' || this.t[k].kind === 'qident'); k += 2) {
+      segs.push(this.t[k].up);
+      if (this.t[k + 1]?.text !== '.') break;
+    }
+    const last = segs.pop() ?? '';
+    const pkg = segs.pop() ?? '';
+    if ((pkg === 'DBMS_OUTPUT' && /^PUT(_LINE)?$/.test(last)) || pkg === 'LOGGER') return 'in';
+    if (['LOG', 'LOGGING', 'DEBUG', 'TRACE'].includes(pkg) || /^(LOG|DEBUG|TRACE)(_|$)/.test(last)) return 'other';
+    return undefined;
   }
 
   /** max: the variable's declared length; bytes if positive, characters if negative (see varLiterals). */
@@ -544,11 +765,16 @@ class Finder {
       if (p.start < from || p.end > to || p.kind === 'insert' || p.kind === 'stmt') continue;
       const a = at(p.start);
       const b = at(p.end);
-      const orig = buf.subarray(p.start, p.end).toString('utf8');
-      // a variant longer than the variable would fail with ORA-06502 before reaching SQL
-      const fits = (m: string) => max === undefined
-        || (max > 0 ? Buffer.byteLength(content) - (p.end - p.start) + Buffer.byteLength(m) <= max : content.length - orig.length + m.length <= -max);
-      const mutants = p.mutants.filter(fits).map(escape).filter((m) => !q || !m.includes(`${closing}'`));
+      const ca = buf.subarray(from, p.start).toString('utf8').length;
+      const cb = buf.subarray(from, p.end).toString('utf8').length;
+      const keep = (m: string) => {
+        const v = content.slice(0, ca) + m + content.slice(cb);
+        // a variant longer than the variable would fail with ORA-06502 before reaching SQL
+        if (max !== undefined && (max > 0 ? Buffer.byteLength(v) > max : v.length > -max)) return false;
+        // USING and BIND_VARIABLE still pass every bind: a lost placeholder fails with ORA-01006
+        return binds(v) === binds(content);
+      };
+      const mutants = p.mutants.filter(keep).map(escape).filter((m) => !q || !m.includes(`${closing}'`));
       if (!mutants.length) continue;
       this.points.push({
         unit: this.unit, op: p.op, kind: p.kind, sub, ctx: 'sql', cat: p.cat,
@@ -921,10 +1147,15 @@ class Finder {
     const own: number[] = [];
     const depth: number[] = [];
     let d = 0;
+    // a nested query counts as one opaque entry (its last token): list items that end in one keep it
+    const opaque = new Map<number, number>(); // own index → first token of the nested query
     for (let k = from; k < to; k++) {
       const r = nested.find(([a, b]) => a <= k && k < b);
       if (r) {
+        opaque.set(own.length, r[0]);
         k = r[1] - 1;
+        own.push(k);
+        depth.push(d);
         continue;
       }
       const x = this.t[k];
@@ -933,25 +1164,31 @@ class Finder {
       depth.push(d);
       if (x.kind === 'op' && x.text === '(') d++;
     }
-    const up = (i: number) => (i >= 0 && i < own.length ? (this.t[own[i]].kind === 'op' ? this.t[own[i]].text : this.t[own[i]].up) : '');
+    /** First token of own entry i (an opaque nested query starts before its last token). */
+    const first = (i: number) => opaque.get(i) ?? own[i];
+    const up = (i: number) => (i >= 0 && i < own.length ? (opaque.has(i) ? '(query)' : this.t[own[i]].kind === 'op' ? this.t[own[i]].text : this.t[own[i]].up) : '');
     // a subquery of IN or EXISTS: duplicates and order do not matter
-    const member = parent?.k === 'pred' && (parent.op === 'IN' || parent.op === 'EXISTS');
+    const inSub = parent?.k === 'pred' && (parent.op === 'IN' || parent.op === 'EXISTS');
     const top = own.map((_, i) => i).filter((i) => depth[i] === 0);
     const has = (w: string) => top.some((i) => up(i) === w);
     const fetch = top.some((i) => up(i) === 'FETCH' && ['FIRST', 'NEXT'].includes(up(i + 1)));
+    // (in IN with FETCH FIRST the order and duplicates decide which rows count; EXISTS only asks for one)
+    const member = inSub && (!fetch || parent?.op === 'EXISTS');
     const singleRow = q.k === 'sql' && (q.op === 'SELECT' || q.op === 'WITH') && has('INTO') && !has('BULK');
     // body of a WITH element with a column list: may be recursive, and then needs UNION ALL (ORA-32040)
     const b0 = this.t[q.a].text === '(' ? q.a : q.a - 1;
     const recursive = this.t[b0]?.text === '(' && this.t[b0 - 1]?.up === 'AS' && this.t[b0 - 2]?.text === ')';
     const clause = (op: string, i: number, j: number, mutants: string[]) =>
-      this.pointSpan(op, 'clause', own[i], own[j], this.span(own[i], own[j]), env, 'sql', '', mutants);
+      this.pointSpan(op, 'clause', first(i), own[j], this.span(first(i), own[j]), env, 'sql', '', mutants);
     /** Items of a comma list from own index i while depth is dd, up to a stop word. */
-    const items = (i: number, dd: number, stop: Set<string>): [number, number][] => {
+    const items = (i: number, dd: number, stop: Set<string>, more?: (j: number) => boolean): [number, number][] => {
       const out: [number, number][] = [];
       let s = i;
       let j = i;
       for (; j < own.length; j++) {
-        if (depth[j] < dd || (depth[j] === dd && (stop.has(up(j)) || up(j) === ';'))) break;
+        // a stop word after a dot is a column name (t.rows)
+        const word = up(j - 1) !== '.' && (stop.has(up(j)) || !!more?.(j));
+        if (depth[j] < dd || (depth[j] === dd && (word || up(j) === ';'))) break;
         if (depth[j] === dd && up(j) === ',') {
           out.push([s, j - 1]);
           s = j + 1;
@@ -980,7 +1217,7 @@ class Finder {
       return al && this.t[own[k]].kind !== 'op' && !JOIN_WORDS.has(al) ? al : name;
     };
     const dropOne = (list: [number, number][]) =>
-      list.map((_, k) => list.filter((__, m) => m !== k).map(([a, b]) => this.span(own[a], own[b])).join(', '));
+      list.map((_, k) => list.filter((__, m) => m !== k).map(([a, b]) => this.span(first(a), own[b])).join(', '));
 
     for (let i = 0; i < own.length; i++) {
       const w = up(i);
@@ -1002,7 +1239,13 @@ class Finder {
           let s = i;
           if (up(s - 1) === 'OUTER') s--;
           const kind = up(s - 1);
-          if (kind === 'LEFT' || kind === 'RIGHT' || kind === 'FULL') clause('JOI', s - 1, i, ['JOIN']);
+          // a partitioned outer join (PARTITION BY next to it) has no inner form
+          let pb = false;
+          const stop = (k: number, words: string[]) => depth[k] === depth[i] && words.includes(up(k));
+          for (let k = s - 2; k >= 0 && depth[k] >= depth[i] && !stop(k, ['FROM', 'JOIN']); k--) if (depth[k] === depth[i] && up(k) === 'PARTITION') pb = true;
+          for (let k = i + 1; k < own.length && depth[k] >= depth[i] && !stop(k, ['ON', 'USING', 'JOIN', 'WHERE']); k++) if (depth[k] === depth[i] && up(k) === 'PARTITION') pb = true;
+          if (pb) this.skipped++;
+          else if (kind === 'LEFT' || kind === 'RIGHT' || kind === 'FULL') clause('JOI', s - 1, i, ['JOIN']);
           else if (kind === 'INNER' || (kind !== 'CROSS' && s === i)) {
             const a0 = kind === 'INNER' ? s - 1 : i;
             // WHERE rejects the NULL rows of the joined table: LEFT JOIN changes nothing
@@ -1035,7 +1278,25 @@ class Finder {
           let b = i + 1;
           if (up(b) === 'SIBLINGS') b++;
           if (up(b) !== 'BY') break;
-          const list = items(b + 1, depth[b], ORDER_END);
+          // inside MATCH_RECOGNIZE (…): MEASURES, ONE ROW PER MATCH and the like end it
+          let open = b - 1;
+          while (open >= 0 && !(up(open) === '(' && depth[open] < depth[b])) open--;
+          const mr = open > 0 && up(open - 1) === 'MATCH_RECOGNIZE';
+          // clauses after the order of an aggregate or an INSERT … SELECT
+          const after = (j: number) => up(j) === 'RETURNING' || up(j) === 'STRICT' || (up(j) === 'ABSENT' && up(j + 1) === 'ON')
+            || (up(j) === 'NULL' && up(j + 1) === 'ON') || (up(j) === 'LOG' && up(j + 1) === 'ERRORS');
+          const list = items(b + 1, depth[b], ORDER_END, mr
+            ? (j) => after(j) || MATCH_END.has(up(j)) || (['ONE', 'ALL'].includes(up(j)) && ['ROW', 'ROWS'].includes(up(j + 1)))
+            : after);
+          // a constant key orders nothing: ORDER BY NULL, and in OVER/WITHIN GROUP also a number
+          // (there it is a value, not a position)
+          const analytic = open > 0 && ['OVER', 'GROUP'].includes(up(open - 1));
+          const constant = (a0: number, b0: number) => a0 === b0 && (up(a0) === 'NULL' || (analytic && ['number', 'string'].includes(this.t[own[a0]].kind)));
+          if (list.length && list.every(([a0, b0]) => constant(a0, b0))) {
+            this.skipped += list.length;
+            i = b;
+            break;
+          }
           // the order of a single-row SELECT INTO or of an IN/EXISTS subquery does not matter
           if (depth[i] === 0 && (member || (singleRow && !fetch))) {
             this.skipped += list.length;
@@ -1054,8 +1315,8 @@ class Finder {
           if (edits.length) {
             const [s0] = list[0];
             const eN = list[list.length - 1][1];
-            const base = this.t[own[s0]].start;
-            let txt = this.span(own[s0], own[eN]);
+            const base = this.t[first(s0)].start;
+            let txt = this.span(first(s0), own[eN]);
             for (const [at, len, ins] of edits.reverse()) txt = txt.slice(0, at - base) + ins + txt.slice(at - base + len);
             clause('ORD', s0, eN, [txt]);
           }
@@ -1066,7 +1327,8 @@ class Finder {
           if (q.k !== 'sql' || depth[i] !== 0) break;
           const target = (q.op === 'UPDATE' && !top.slice(0, top.indexOf(i)).some((k) => up(k) === 'SET')) || (q.op === 'MERGE' && up(i - 1) === 'UPDATE');
           if (!target) break;
-          const list = items(i + 1, 0, SET_END);
+          // (MERGE: WHEN [NOT] MATCHED ends it, the WHEN of a CASE does not)
+          const list = items(i + 1, 0, SET_END, (j) => up(j) === 'WHEN' && (up(j + 1) === 'MATCHED' || (up(j + 1) === 'NOT' && up(j + 2) === 'MATCHED')));
           if (list.length >= 2) clause('COL', list[0][0], list[list.length - 1][1], dropOne(list));
           break;
         }

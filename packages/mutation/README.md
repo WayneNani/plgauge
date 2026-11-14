@@ -22,7 +22,8 @@ Jede Änderung am Code läuft über das Wiederherstellungs-Journal des Kerns (`p
 Lauf Einheiten verändert zurückgelassen, stellt der nächste Lauf sie beim Start aus dem Journal wieder her, bevor er
 installiert oder Originale liest. Damit das nicht einen noch laufenden Lauf trifft, hält jeder Lauf für seine Dauer
 eine Zeilensperre in `PLTEST_LOCK` (eigene Verbindung, nie committet); ein zweiter Lauf auf demselben Schema bricht
-sofort ab. Die Sperre endet mit der Sitzung, auch wenn der Prozess stirbt.
+sofort ab, auch ein Coverage-Lauf (beide Werkzeuge nehmen dieselbe Sperre und stellen beim Start wieder her, was ein
+abgebrochener Lauf des einen oder anderen im Journal hinterlassen hat). Die Sperre endet mit der Sitzung, auch wenn der Prozess stirbt. Lässt sich ein Rest nicht zurückspielen (etwa weil eine Sitzung des toten Laufs die Einheit noch hält), bricht der Lauf ab, statt den veränderten Code für das Original zu halten. Sperre und Journal liegen im Schema des Laufs; ein Coverage-Lauf über mehrere Schemas sperrt nur sein Laufzeitschema, Mutationsläufe auf den gemessenen Schemas dürfen dann nicht gleichzeitig laufen.
 
 ## Operatoren
 
@@ -62,24 +63,26 @@ Schleife und ihres Rumpfs. Die Abfrage einer Cursor-Deklaration wird wie
 ein Block einer View geschaltet (`UNION ALL`, unten), mit höchstens 20 Zweigen pro Cursor. Das erste Ausführen
 parst alle Zweige (bei Cursorn über Dictionary-Views Sekunden); gibt es Zweige, hält ein Aufwärmlauf auf allen
 Workern vor der Baseline das aus der Zeitgrenze heraus. Ausgenommen sind Cursor
-mit `ORDER BY` (eingepackt wäre ihre Reihenfolge nicht mehr garantiert), mit `FOR UPDATE` und mit `WITH`; ihre
+mit `ORDER BY` oder `CONNECT BY` (eingepackt wäre ihre Reihenfolge nicht mehr garantiert), mit `FOR UPDATE` und mit
+`WITH`, ebenso Cursor-FOR-Schleifen mit Label (die Kopien kompilieren weder mit noch ohne Label); ihre
 Mutanten werden einzeln kompiliert. Für sie gibt es keine Aufzeichnung, welche Tests sie erreichen: Sie laufen gegen
 alle Tests, und ein Mutant, den kein Test erreicht, erscheint als überlebt statt als nicht erreicht. `--ops` wählt
 Operatoren aus, z. B. `--ops ROR,LCR,AOR,SBR,RET,EXC,NUL,CUR` für nur Stufe 1.
 
-Dynamisches SQL: Ein String-Literal, das `EXECUTE IMMEDIATE`, `OPEN … FOR` oder `DBMS_SQL.PARSE` erreicht, direkt
-oder über eine im Unterprogramm deklarierte Variable (Vorbelegung oder `v := '…';`), wird als SQL geparst und mit
-beiden Stufen mutiert, auch in Klammern (`EXECUTE IMMEDIATE (v)`). Andere Werte der Variablen ersetzen das Literal und
-stören nicht. Wird der Wert aber aus der Variablen selbst gebaut (`v := v || …`, `replace(v, …)`), in eine andere
-Anweisung eingebaut (`w := v || ' where …'`), wird die Variable an eine Prozedur übergeben (vielleicht als OUT; Lesen
-in einer Verkettung für einen Aufruf, etwa zum Protokollieren, ist erlaubt) oder in sie gefetcht, ist das Literal nur
-ein Stück einer Anweisung und bleibt außen vor. Varianten, die länger würden als die deklarierte Länge (`VARCHAR2(n)`), entfallen:
-Sie scheiterten mit ORA-06502, bevor das SQL läuft. Die Kopien eines Literals zusammen dürfen 256 KB groß sein. Der Mutant ist das Literal mit einer Änderung (Anführungszeichen wieder verdoppelt, bei
-`q'[…]'` unverändert). Das Schema schaltet das ganze Literal an Ort und Stelle (`CASE aktiv WHEN 17 THEN '<Variante>'
-… ELSE '<Original>' END`); jede Variante ist eine eigene Anweisung, die erst beim Ausführen geparst wird, also leidet
-kein Plan. Zusammengesetzte Strings (`'select … ' || x`) bleiben außen vor.
+Dynamisches SQL: Ein String-Literal, das `EXECUTE IMMEDIATE`, `OPEN … FOR` oder `DBMS_SQL.PARSE` erreicht (auch in
+Klammern), wird als SQL geparst und mit beiden Stufen mutiert. Über eine Variable nur, wenn sie im Deklarationsteil
+des Unterprogramms selbst steht und jede Erwähnung eine dieser ist: ihre Deklaration, eine Zuweisung `v := …;` (ein
+Literal wird notiert, jeder andere Wert, der nicht aus `v` gebaut ist, ersetzt es), eine Senke oder ein Argument eines
+Protokollaufrufs (`DBMS_OUTPUT`, `LOGGER`, Prozeduren namens `LOG…`, `DEBUG…`, `TRACE…`). Alles andere, etwa
+`v := v || …`, `w := v || …`, ein `CASE`-Zweig, die Übergabe an eine Prozedur oder ein gleichnamiger Bezeichner in einem
+verschachtelten Block, kann die ausgeführte Anweisung vom Literal unterscheiden; die Variable bleibt außen vor.
+Varianten entfallen, wenn sie länger würden als die deklarierte Länge (`VARCHAR2(n)`, sonst ORA-06502) oder einen
+Bind-Platzhalter verlören (`USING` übergibt ihn weiter, sonst ORA-01006). Der Mutant ist das Literal mit einer Änderung
+(Anführungszeichen wieder verdoppelt, bei `q'[…]'` unverändert). Das Schema schaltet das ganze Literal an Ort und Stelle
+(`CASE aktiv WHEN 17 THEN '<Variante>' … ELSE '<Original>' END`, die Kopien eines Literals zusammen höchstens 256 KB);
+jede Variante ist eine eigene Anweisung, die erst beim Ausführen geparst wird, also leidet kein Plan.
 
-Views: `CREATE VIEW` in einer Datei unter `mutate` wird mutiert wie das SQL in PL/SQL, mit beiden Stufen. Das Schema
+Views: `CREATE VIEW` in einer Datei unter `mutate` wird mutiert wie das SQL in PL/SQL, mit beiden Stufen. Ausgenommen sind Views mit INSTEAD-OF-Trigger: `CREATE OR REPLACE VIEW` löscht den Trigger, und das Zurückspielen des Originals bringt ihn nicht wieder. Was `CREATE OR REPLACE` sonst verliert, stellt jedes Kompilieren wieder her: Tabellen- und Spaltenkommentare einer View, den Status DISABLED eines Triggers; Materialized Views auf einer zurückgespielten View werden neu kompiliert. Eine View, die sich ohne DBMS_METADATA nicht originalgetreu nachbauen lässt (Editioning-, Objekt-, BEQUEATH-DEFINER-View), wird nicht angefasst. Das Schema
 schaltet sie blockweise; Blöcke sind die Abfrage der View, `WITH`-Elemente und Inline-Views in `FROM` (Unterabfragen in
 Bedingungen bleiben in ihrem Block, damit der Optimizer sie weiter in Joins auflösen kann; rekursive `WITH`-Elemente
 sind kein Block). Ein Block mit Mutanten wird zu

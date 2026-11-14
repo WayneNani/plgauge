@@ -27,6 +27,12 @@ export async function ensureJournal(conn: oracledb.Connection): Promise<void> {
   } catch (e) {
     if (!(e as Error).message.includes('ORA-00955')) throw e;
   }
+  // settings as a CLOB (a view's comments outgrow VARCHAR2(4000)); journals of older versions get the column
+  try {
+    await conn.execute(`alter table pltest_journal add (props clob)`);
+  } catch (e) {
+    if (!(e as Error).message.includes('ORA-01430')) throw e;
+  }
 }
 
 /** Records the original of an object unless an older entry exists (that one is the true original). */
@@ -35,8 +41,8 @@ export async function journalRemember(conn: oracledb.Connection, obj: SourceObje
     `merge into pltest_journal j
      using (select :o owner, :n name, :t type from dual) x
         on (j.owner = x.owner and j.name = x.name and j.type = x.type)
-      when not matched then insert (owner, name, type, source, settings, tool) values (:o, :n, :t, :src, :st, :tool)`,
-    { o: obj.owner, n: obj.name, t: obj.type, src: { val: obj.original, type: oracledb.DB_TYPE_CLOB }, st: JSON.stringify(obj.settings), tool },
+      when not matched then insert (owner, name, type, source, props, tool) values (:o, :n, :t, :src, :st, :tool)`,
+    { o: obj.owner, n: obj.name, t: obj.type, src: { val: obj.original, type: oracledb.DB_TYPE_CLOB }, st: { val: JSON.stringify(obj.settings), type: oracledb.DB_TYPE_CLOB }, tool },
   );
   await conn.commit();
 }
@@ -57,15 +63,18 @@ export interface JournalEntry {
 
 export async function journalEntries(conn: oracledb.Connection): Promise<JournalEntry[]> {
   const res = await conn.execute<[string, string, string, string, string | null, string | null, Date]>(
-    `select owner, name, type, source, settings, tool, created_at from pltest_journal order by created_at`,
+    `select owner, name, type, source, nvl(props, to_clob(settings)) settings, tool, created_at from pltest_journal order by created_at`,
     {},
-    { fetchInfo: { SOURCE: { type: oracledb.STRING } } },
+    { fetchInfo: { SOURCE: { type: oracledb.STRING }, SETTINGS: { type: oracledb.STRING } } },
   );
   return (res.rows ?? []).map(([owner, name, type, source, settings, tool, createdAt]) => ({
     owner, name, type, tool: tool ?? '', createdAt,
     object: { owner, name, type, original: source, processed: source, settings: settings ? JSON.parse(settings) : {} },
   }));
 }
+
+/** The lock both tools take: a coverage run and a mutation run must not share a schema either. */
+export const RUN_LOCK = 'pltest';
 
 /**
  * Holds a row lock for the rest of the session: a second run of the same tool on the same
@@ -90,7 +99,7 @@ export async function lockRun(conn: oracledb.Connection, tool: string): Promise<
     await conn.execute(`select tool from pltest_lock where tool = :t for update nowait`, { t: tool });
   } catch (e) {
     if ((e as Error).message.includes('ORA-00054')) {
-      throw new Error(`Auf diesem Schema läuft gerade ein anderer pltest-Lauf (${tool}); zwei Läufe würden sich gegenseitig den Code zurücksetzen`);
+      throw new Error('Auf diesem Schema läuft gerade ein anderer pltest-Lauf; zwei Läufe würden sich gegenseitig den Code zurücksetzen');
     }
     throw e;
   }

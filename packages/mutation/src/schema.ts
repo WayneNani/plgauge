@@ -576,43 +576,143 @@ export interface PlanRow {
   filter: string | null;
 }
 
-/** A filter of the schema: it mentions the switch context. */
-const SCAFFOLD = /SYS_CONTEXT\('PLMUT_CTX/;
+/** A predicate of the schema: it mentions the switch context or the control package. */
+const SCAFFOLD = /PLMUT_CT[XL]/i;
 /**
- * A branch that runs only under one mutant (V = 'id'), or only in the recording run (what
+ * A conjunct that holds only under one mutant (V = 'id') or only in the recording run (what
  * OR expansion makes of the original branch's recording condition: LNNVL(NVL(V, '0') <> '-1')).
  */
-const DEAD = /SYS_CONTEXT\('PLMUT_CTX[^']*','ACTIVE'\)(,'0'\))?='-?\d+'|LNNVL\(NVL\(SYS_CONTEXT\('PLMUT_CTX[^']*','ACTIVE'\),'0'\)<>'-1'\)/;
+const DEAD = /^(NVL\()?SYS_CONTEXT\('PLMUT_CTX[^']*','ACTIVE'\)(,'0'\))?='-?\d+'$|^LNNVL\(NVL\(SYS_CONTEXT\('PLMUT_CTX[^']*','ACTIVE'\),'0'\)<>'-1'\)$/;
+
+/** The top-level AND terms of a predicate, outer parentheses removed (and split again). */
+function conjuncts(f: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let quote = '';
+  let from = 0;
+  for (let i = 0; i < f.length; i++) {
+    const c = f[i];
+    if (quote) {
+      if (c === quote) quote = '';
+    } else if (c === "'" || c === '"') quote = c;
+    else if (c === '(') depth++;
+    else if (c === ')') depth--;
+    else if (depth === 0 && /^ AND /i.test(f.slice(i, i + 5))) {
+      out.push(f.slice(from, i));
+      from = i + 5;
+    }
+  }
+  out.push(f.slice(from));
+  /** The term without parentheses around all of it, or undefined if there are none. */
+  const inner = (t: string): string | undefined => {
+    if (!t.startsWith('(') || !t.endsWith(')')) return undefined;
+    let d = 0;
+    let q = '';
+    for (let i = 0; i < t.length - 1; i++) {
+      const c = t[i];
+      if (q) {
+        if (c === q) q = '';
+      } else if (c === "'" || c === '"') q = c;
+      else if (c === '(') d++;
+      else if (c === ')') d--;
+      if (!q && d === 0) return undefined; // (a) AND (b)
+    }
+    return t.slice(1, -1);
+  };
+  return out.flatMap((t) => {
+    const x = inner(t.trim());
+    return x === undefined ? (t.trim() ? [t.trim()] : []) : conjuncts(x);
+  });
+}
 
 /**
- * The operations of a plan that run without a mutant, sorted: dead branches (under a FILTER
- * that needs one mutant) are left out, and so are the schema's own steps (its filters, the
- * dual of the recording, views and UNION ALL, which wrapping adds or merges). The plan of a
- * switched view must give what the original gives.
+ * The operations of a plan that run without a mutant, each as its path from the root
+ * ("0:HASH JOIN / 1:TABLE ACCESS FULL T"), sorted: the shape counts (join order, build and
+ * probe side, which join a table belongs to). Left out:
+ * - dead branches: a FILTER with a top-level AND term that needs one mutant kills the whole
+ *   UNION ALL branch it lies in (Oracle may push the branch's condition below an aggregate
+ *   or into one side of a join);
+ * - the schema's own steps: filters made only of its terms, the dual of the recording (the
+ *   last child of a filter whose recording subquery reads DUAL), views (not VIEW PUSHED
+ *   PREDICATE) and UNION ALL, which wrapping adds or merges; their children hang on the
+ *   nearest kept ancestor.
+ * A filter that also has terms of the original stays. Names of temporary tables and parallel
+ * table queues are normalized. The plan of a switched view must give what the original gives.
  */
 export function livePlan(rows: PlanRow[]): string[] {
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const kids = new Map<number, number[]>();
+  for (const r of rows) kids.set(r.parent ?? -1, [...(kids.get(r.parent ?? -1) ?? []), r.id].sort((x, y) => x - y));
   const dead = new Set<number>();
-  const scaffold = new Set<number>();
-  const out: string[] = [];
-  for (const r of [...rows].sort((a, b) => a.id - b.id)) {
-    const parent = r.parent ?? -1;
-    if (dead.has(parent)) {
+  const recordingDual = new Set<number>();
+  const unionAll = (op?: string) => /^UNION[- ]ALL\b/.test(op ?? '');
+  const scaffolded = (id: number): boolean => SCAFFOLD.test(byId.get(id)?.filter ?? '') || (kids.get(id) ?? []).some(scaffolded);
+  for (const r of rows) {
+    if (r.op !== 'FILTER' || !SCAFFOLD.test(r.filter ?? '')) continue;
+    // the recording's subquery (… <> '-1' OR (SELECT … FROM DUAL) = 0) brings one FAST DUAL
+    // child; which one of several is dropped does not matter, they are alike
+    if (/'-1'/.test(r.filter!) && /"DUAL"/.test(r.filter!)) {
+      const dual = kids.get(r.id)?.filter((k) => byId.get(k)!.op === 'FAST DUAL').at(-1);
+      if (dual !== undefined) recordingDual.add(dual);
+    }
+    if (!conjuncts(r.filter!).some((t) => DEAD.test(t))) continue;
+    // the branch below the nearest UNION ALL (OR expansion makes one too)
+    let branch = r.id;
+    let up = r.parent;
+    while (up !== null && up !== undefined && !unionAll(byId.get(up)?.op)) {
+      branch = up;
+      up = byId.get(up)?.parent ?? null;
+    }
+    if (up === null || up === undefined) {
       dead.add(r.id);
       continue;
     }
-    const f = r.filter ?? '';
-    if (r.op === 'FILTER' && SCAFFOLD.test(f)) {
-      (DEAD.test(f) && !/ OR /.test(f) ? dead : scaffold).add(r.id);
+    dead.add(branch);
+    // the branch's scalar subqueries come before its top row: the siblings back to the
+    // previous branch (one with a schema predicate somewhere in it), if there is one to bound them
+    const sib = kids.get(up)!;
+    const at = sib.indexOf(branch);
+    let prev = at - 1;
+    while (prev >= 0 && !scaffolded(sib[prev])) prev--;
+    if (prev >= 0) for (let i = prev + 1; i < at; i++) dead.add(sib[i]);
+  }
+  /** Nearest kept ancestor (or itself) of every row; -1 = the root. */
+  const anchor = new Map<number, number>();
+  const kept = new Map<number, { op: string; parent: number }>();
+  for (const r of [...rows].sort((a, b) => a.id - b.id)) {
+    const parent = r.parent ?? -1;
+    if (dead.has(parent)) dead.add(r.id);
+    if (dead.has(r.id)) continue;
+    const up = anchor.get(parent) ?? -1;
+    const drop = /^(SELECT STATEMENT|UNION[- ]ALL)\b/.test(r.op) || (/^VIEW\b/.test(r.op) && !r.op.startsWith('VIEW PUSHED PREDICATE'))
+      || recordingDual.has(r.id)
+      || (r.op === 'FILTER' && SCAFFOLD.test(r.filter ?? '') && conjuncts(r.filter!).every((t) => SCAFFOLD.test(t)));
+    if (drop) {
+      anchor.set(r.id, up);
       continue;
     }
-    if (r.op === 'FAST DUAL' && scaffold.has(parent)) continue;
-    if (/^(SELECT STATEMENT|VIEW|UNION-ALL)\b/.test(r.op)) continue;
-    out.push(r.op.replace(/SYS_TEMP_\w+/g, 'SYS_TEMP'));
+    anchor.set(r.id, r.id);
+    kept.set(r.id, { op: r.op.replace(/SYS_TEMP_\w+/g, 'SYS_TEMP').replace(/:TQ\d+/g, ':TQ'), parent: up });
   }
-  return out.sort();
+  const pos = new Map<number, number>();
+  const seen = new Map<number, number>();
+  for (const [id, k] of kept) {
+    const i = seen.get(k.parent) ?? 0;
+    pos.set(id, i);
+    seen.set(k.parent, i + 1);
+  }
+  const path = (id: number): string => {
+    const k = kept.get(id)!;
+    const own = `${pos.get(id)}:${k.op}`;
+    return kept.has(k.parent) ? `${path(k.parent)} / ${own}` : own;
+  };
+  return [...kept.keys()].map(path).sort();
 }
 
-/** What a live plan has more (+n) or less (-n) than the original; undefined if they are the same. */
+/**
+ * What a live plan has more (+n) or less (-n) than the original, as "operation ← parent"
+ * (undefined if they are the same).
+ */
 export function planDiff(orig: string[], now: string[]): string | undefined {
   const count = (xs: string[]) => xs.reduce((m, x) => m.set(x, (m.get(x) ?? 0) + 1), new Map<string, number>());
   const a = count(orig);
@@ -620,7 +720,11 @@ export function planDiff(orig: string[], now: string[]): string | undefined {
   const out: string[] = [];
   for (const k of new Set([...a.keys(), ...b.keys()])) {
     const d = (b.get(k) ?? 0) - (a.get(k) ?? 0);
-    if (d) out.push(`${d > 0 ? '+' : ''}${d} ${k}`);
+    if (!d) continue;
+    const segs = k.split(' / ').map((x) => x.replace(/^\d+:/, ''));
+    const op = segs.pop()!;
+    const parent = segs.pop();
+    out.push(`${d > 0 ? '+' : ''}${d} ${op}${parent ? ` ← ${parent}` : ''}`);
   }
   if (!out.length) return undefined;
   out.sort();

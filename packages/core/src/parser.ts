@@ -1409,6 +1409,11 @@ class Parser {
         return p;
       }
       if (x.text === ':' && this.t[a + 1] && a + 1 < this.lim) {
+        // a numbered bind (:1) is a value of its own
+        if (this.t[a + 1].kind === 'number' && /^\d+$/.test(this.t[a + 1].text)) {
+          this.i = a + 2;
+          return node('lit', a, this.i);
+        }
         this.i = a + 1;
         return this.nameChain(a);
       }

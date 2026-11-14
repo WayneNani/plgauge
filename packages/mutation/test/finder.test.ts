@@ -298,9 +298,14 @@ test('finder: unordered cursor declarations are UNION ALL blocks; cursor FOR loo
     CURSOR c2 IS SELECT a FROM t WHERE a > 2 ORDER BY a;
     CURSOR c3 IS SELECT a FROM t WHERE a > 3 FOR UPDATE;
     CURSOR c4 IS WITH w AS (SELECT a FROM t) SELECT a FROM w WHERE a > 4;
+    CURSOR c5 IS SELECT a FROM t WHERE a > 7 CONNECT BY PRIOR a = b;
+    CURSOR c6 IS SELECT a FROM t WHERE a IN (SELECT b + 1 FROM u);
   BEGIN
-    <<l>> FOR r IN (SELECT a FROM t WHERE a > 5) LOOP
+    FOR r IN (SELECT a FROM t WHERE a > 5) LOOP
       UPDATE t SET a = 0 WHERE a = r.a;
+    END LOOP;
+    <<l>> FOR r IN (SELECT a FROM t WHERE a > 6) LOOP
+      EXIT l WHEN r.a = 9;
     END LOOP l;
   END;
 END k;
@@ -317,11 +322,15 @@ END k;
   assert.deepEqual(aor.map((p) => `${p.orig} ${p.ctx} ${p.inline ? 'inline' : ''} ${span(p.scope)}`), [
     'n + 1 plsql  -',
     'a + 1 sql inline SELECT a + 1 AS b FROM t WHERE a > x',
+    // the select list of an IN subquery feeds a semi-join: a branch, not a switch in place
+    'b + 1 sql  SELECT a FROM t WHERE a IN (SELECT b + 1 FROM u)',
   ]);
-  for (const o of ['a > 2', 'a > 3', 'a > 4']) assert.equal(pt(o).scope, undefined, o);
+  for (const o of ['a > 2', 'a > 3', 'a > 4', 'a > 7']) assert.equal(pt(o).scope, undefined, o);
   const loop = pt('a > 5');
-  assert.match(span(loop.scope), /^(<<l>> )?FOR r IN \(SELECT a FROM t WHERE a > 5\) LOOP[\s\S]*END LOOP l;$/);
+  assert.match(span(loop.scope), /^FOR r IN \(SELECT a FROM t WHERE a > 5\) LOOP[\s\S]*END LOOP;$/);
   assert.ok(!loop.union);
+  // a labelled loop is not duplicated: neither copies without the label (PLS-00373) nor with it (PLS-00371) compile
+  assert.equal(pt('a > 6').scope, undefined);
   // statements in the body have their own scope
   assert.equal(span(pt('a = r.a').scope), 'UPDATE t SET a = 0 WHERE a = r.a;');
 });
@@ -370,6 +379,386 @@ END d;
   }
 });
 
+test('finder: dynamic SQL variables are resolved by scope and by every mention (review cases)', () => {
+  const src = `CREATE OR REPLACE PACKAGE BODY d AS
+  g_sql VARCHAR2(200);
+  PROCEDURE add_filter IS BEGIN g_sql := g_sql || ' where b = 1'; END;
+  PROCEDURE p(x BOOLEAN) IS
+    l_a VARCHAR2(200) := 'select a from t where a > 1';
+    l_c VARCHAR2(200) := 'select a from t where c > 1';
+    l2 VARCHAR2(400);
+    "L_Q" VARCHAR2(200) := 'select a from t where q > 1';
+    l_d VARCHAR2(200) := 'insert into t (a, b) values (:1, :2)';
+    l_l VARCHAR2(200) := 'select a from t where l > 1';
+    c SYS_REFCURSOR;
+    h INTEGER;
+  BEGIN
+    IF x THEN OPEN c FOR l_a || ' and c = 2'; ELSE OPEN c FOR l_a; END IF;
+    l2 := CASE WHEN x THEN l_c || ' and c = 3' ELSE 'select 1 from dual' END;
+    OPEN c FOR l_c;
+    "L_Q" := "L_Q" || ' and c = 4';
+    OPEN c FOR "L_Q";
+    DECLARE
+      g_sql VARCHAR2(200) := 'delete from log where id > 7';
+    BEGIN NULL; END;
+    g_sql := 'select a from t where d > 0';
+    add_filter;
+    OPEN c FOR g_sql;
+    DBMS_SQL.PARSE(h, l_d, DBMS_SQL.NATIVE);
+    DBMS_OUTPUT.PUT_LINE('sql: ' || l_l);
+    logger.log(l_l);
+    OPEN c FOR l_l;
+  END;
+END d;
+/
+`;
+  const f = points(src)[0];
+  assert.deepEqual(f.errors, []);
+  const got = expand([f]).filter((m) => m.point.dyn).map((m) => `${m.op} ${m.original} → ${m.mutated}`);
+  // a fragment in a sink, in a CASE branch, a quoted name built from itself, package and block variables: none
+  for (const s of ['a > 1', 'c > 1', 'q > 1', 'id > 7', 'd > 0']) assert.ok(!got.some((g) => g.includes(s)), `${s}\n${got.join('\n')}`);
+  // logging calls do not change the statement
+  assert.ok(got.includes('ROR l > 1 → l >= 1'), got.join('\n'));
+  // no variant loses a bind placeholder (USING / BIND_VARIABLE would fail with ORA-01006)
+  for (const m of expand([f]).filter((x) => x.point.dyn && x.mutated.includes('values'))) {
+    assert.ok(m.mutated.includes(':1') && m.mutated.includes(':2'), m.mutated);
+  }
+  assert.ok(!got.some((g) => g.startsWith('COL')), got.join('\n'));
+});
+
+test('finder: dynamic SQL variables: qualified mentions, $IF branches, logging calls, declared lengths (review round 2)', () => {
+  const src = `CREATE OR REPLACE PACKAGE BODY d AS
+  PROCEDURE p IS
+    v VARCHAR2(100) := 'select a from t where v > 1';
+    w VARCHAR2(100) := 'delete from t where w > 1';
+    x VARCHAR2(100) := 'delete from t where x > 1';
+    y VARCHAR2(100) := 'delete from t where y > 1';
+    z STRING(25) := 'DELETE FROM t WHERE z > 1';
+    c SYS_REFCURSOR;
+  BEGIN
+    p.v := p.v || ' and b = 2';
+    OPEN c FOR v;
+    $IF $$debug $THEN w := w || ' and b = 2'; $ELSE NULL; $END
+    EXECUTE IMMEDIATE w;
+    log_and_fix(x);
+    EXECUTE IMMEDIATE x;
+    log_it('sql: ' || y);
+    DBMS_OUTPUT.PUT_LINE(y);
+    EXECUTE IMMEDIATE y;
+    EXECUTE IMMEDIATE z;
+  END;
+END d;
+/
+`;
+  const f = points(src)[0];
+  assert.deepEqual(f.errors, []);
+  const got = expand([f]).filter((m) => m.point.dyn).map((m) => `${m.op} ${m.original} → ${m.mutated}`);
+  // p.v is v; a $IF branch may change w; log_and_fix(x) may take it IN OUT
+  for (const s of ['v > 1', 'w > 1', 'x > 1']) assert.ok(!got.some((g) => g.includes(s)), `${s}\n${got.join('\n')}`);
+  // concatenated into a logging call, or DBMS_OUTPUT: only read
+  assert.ok(got.includes('ROR y > 1 → y >= 1'), got.join('\n'));
+  // STRING(25) holds the literal exactly: one character more would raise ORA-06502
+  assert.ok(!got.includes('ROR z > 1 → z >= 1') && got.includes('ROR z > 1 → FALSE'), got.join('\n'));
+});
+
+test('finder: dynamic SQL, review round 3: odd quoted names, quoted $IF mentions, nested calls in logging, numbered binds', () => {
+  const src = `CREATE OR REPLACE PACKAGE BODY d AS
+  PROCEDURE p IS
+    "A(B" VARCHAR2(100) := 'delete from t where a > 3';
+    v VARCHAR2(100) := 'delete from t where v > 1';
+    w VARCHAR2(100) := 'delete from t where w > 1';
+  BEGIN
+    EXECUTE IMMEDIATE "A(B";
+    $IF $$extra $THEN "V" := "V" || ' and b = 2'; $ELSE NULL; $END
+    EXECUTE IMMEDIATE v;
+    DBMS_OUTPUT.PUT_LINE(add_filter(w));
+    EXECUTE IMMEDIATE w;
+    EXECUTE IMMEDIATE 'delete from t where n = :1 and m > 2' USING 1;
+  END;
+END d;
+/
+`;
+  const f = points(src)[0];
+  assert.deepEqual(f.errors, []);
+  const got = expand([f]).filter((m) => m.point.dyn).map((m) => `${m.op} ${m.original} → ${m.mutated}`);
+  const has = (s: string) => assert.ok(got.includes(s), `${s}\n${got.join('\n')}`);
+  has('ROR a > 3 → a >= 3');
+  // "V" in a dropped $IF branch is v; add_filter(w) may take w IN OUT
+  for (const s of ['v > 1', 'w > 1']) assert.ok(!got.some((g) => g.includes(s)), `${s}\n${got.join('\n')}`);
+  // :1 is a bind, not a stop: the rest of the statement is mutated, the bind stays
+  has('ROR m > 2 → m >= 2');
+  assert.ok(!got.some((g) => g.includes(':1') && !g.split('→')[1].includes(':1')), got.join('\n'));
+});
+
+test('finder: a subquery predicate inside a select-list expression is no projection', () => {
+  const f = points(`CREATE OR REPLACE PACKAGE BODY k AS
+  PROCEDURE p IS
+    CURSOR c1 IS SELECT CASE WHEN a IN (SELECT b + 1 FROM u) THEN 1 END x, a + 2 y FROM t;
+  BEGIN NULL; END;
+END k;
+/
+`)[0];
+  const aor = f.points.filter((p) => p.op === 'AOR').map((p) => `${p.orig} ${p.inline ? 'inline' : 'branch'}`);
+  assert.deepEqual(aor.sort(), ['a + 2 inline', 'b + 1 branch']);
+});
+
+test('finder: dynamic SQL and cursor rules, branches named by review round 4', () => {
+  const src = `CREATE OR REPLACE PACKAGE BODY d AS
+  PROCEDURE p IS
+    a1 VARCHAR2(100) := 'delete from t where a1 > 1';
+    a2 VARCHAR2(100) := 'delete from t where a2 > 1';
+    a3 VARCHAR2(100) := 'delete from t where a3 > 1';
+    a4 VARCHAR2(25 CHAR) := 'delete from t where ä > 1';
+    a5 VARCHAR2(100) := 'delete from t where a5 > 1';
+    a6 VARCHAR2(100) := 'delete from t where a6 > 1';
+    a7 VARCHAR2(100) := 'delete from t where a7 > :b and c = 1';
+    mäx VARCHAR2(100) := 'delete from t where m > 1';
+    h INTEGER;
+  BEGIN
+    DBMS_OUTPUT.PUT_LINE(a => a1);
+    EXECUTE IMMEDIATE a1;
+    log_it(p_msg => a2);
+    EXECUTE IMMEDIATE a2;
+    DEBUG.print('sql ' || a3);
+    SYS.DBMS_SQL.PARSE(h, a3, DBMS_SQL.NATIVE);
+    EXECUTE IMMEDIATE a4;
+    $IF $$x $THEN "a5" := 'x'; $END
+    EXECUTE IMMEDIATE a5;
+    DECLARE a6 VARCHAR2(10); BEGIN a6 := 'x'; END;
+    EXECUTE IMMEDIATE a6;
+    EXECUTE IMMEDIATE a7 USING 1;
+    $IF $$x $THEN mäx := mäx || ' and z = 1'; $ELSE NULL; $END
+    EXECUTE IMMEDIATE mäx;
+  END;
+END d;
+/
+`;
+  const f = points(src)[0];
+  assert.deepEqual(f.errors, []);
+  const got = expand([f]).filter((m) => m.point.dyn).map((m) => `${m.op} ${m.original} → ${m.mutated}`);
+  const has = (x: string) => assert.ok(got.includes(x), `${x}\n${got.join('\n')}`);
+  const none = (x: string) => assert.ok(!got.some((g) => g.includes(x)), `${x}\n${got.join('\n')}`);
+  has('ROR a1 > 1 → a1 >= 1'); // named argument of DBMS_OUTPUT: read only
+  none('a2 > 1'); // named argument of another logging procedure: may be IN OUT
+  has('ROR a3 > 1 → a3 >= 1'); // DEBUG package inside a concatenation; SYS.DBMS_SQL.PARSE is a sink
+  // 25 characters (CHAR): ä is one character, two bytes; one more character does not fit
+  has('ROR ä > 1 → FALSE');
+  none('ä > 1 → ä >= 1');
+  has('ROR a5 > 1 → a5 >= 1'); // "a5" is another variable than a5
+  none('a6 > 1'); // a nested block declares a6 again
+  // a named bind must not get lost
+  assert.ok(!got.some((g) => g.includes('a7') && !g.split('→')[1].includes(':b')), got.join('\n'));
+  none('m > 1'); // a $IF branch builds mäx from itself
+});
+
+test('finder: cursor blocks refuse implied orders anywhere; a scalar subquery in an expression stays a projection', () => {
+  const f = points(`CREATE OR REPLACE PACKAGE BODY k AS
+  PROCEDURE p IS
+    CURSOR c1 IS SELECT a FROM (SELECT a FROM t START WITH a = 1 CONNECT BY PRIOR a = b) WHERE a > 1;
+    CURSOR c2 IS SELECT a FROM (SELECT a FROM t ORDER BY a DESC) WHERE ROWNUM <= 5 AND a > 2;
+    CURSOR c3 IS SELECT a, ROW_NUMBER() OVER (ORDER BY a) r FROM t WHERE a > 3;
+    CURSOR c4 IS SELECT CASE (SELECT count(*) FROM u) WHEN 0 THEN a + 4 END x, (SELECT max(b) + 1 FROM u) + 2 y FROM t;
+    CURSOR c5 IS SELECT v.a + 5 x FROM (SELECT a + 6 a FROM t) v WHERE v.a > 7;
+  BEGIN NULL; END;
+END k;
+/
+`)[0];
+  const text = f.src.toString();
+  const pt = (orig: string) => f.points.find((p) => p.orig === orig)!;
+  for (const o of ['a > 1', 'a > 2']) assert.equal(pt(o).scope, undefined, o);
+  assert.ok(pt('a > 3').union, 'an analytic ORDER BY decides no row order');
+  for (const o of ['a + 4', 'max(b) + 1', 'v.a + 5']) assert.ok(pt(o).inline, o);
+  // an inline view's select list in a cursor is a join key, not the block's projection
+  assert.ok(!pt('a + 6').inline);
+  assert.ok(text.length > 0);
+});
+
+test('finder: review round 5: # and ß in variable names, MATCH_RECOGNIZE order, labels in a cursor loop body', () => {
+  const src = `CREATE OR REPLACE PACKAGE BODY d AS
+  PROCEDURE p IS
+    l#s VARCHAR2(100) := 'delete from t where a > 1';
+    straße VARCHAR2(100) := 'delete from t where b > 2';
+    n NUMBER;
+  BEGIN
+    EXECUTE IMMEDIATE l#s;
+    $IF $$x $THEN straße := straße || ' or 1 = 1'; $ELSE NULL; $END
+    EXECUTE IMMEDIATE straße;
+    SELECT count(*) INTO n FROM t MATCH_RECOGNIZE (PARTITION BY a ORDER BY b MEASURES FIRST(b) AS fb ONE ROW PER MATCH PATTERN (x+) DEFINE x AS b > 4);
+    FOR r IN (SELECT a FROM t WHERE a > 5) LOOP
+      <<inner>> NULL;
+    END LOOP;
+  END;
+END d;
+/
+`;
+  const f = points(src)[0];
+  assert.deepEqual(f.errors, []);
+  const got = expand([f]).map((m) => `${m.op} ${m.original} → ${m.mutated}`);
+  assert.ok(got.includes('ROR a > 1 → a >= 1'), got.join('\n'));
+  assert.ok(!got.some((g) => g.includes('b > 2')), got.join('\n'));
+  // the ORDER BY of MATCH_RECOGNIZE ends before MEASURES
+  assert.ok(got.includes('ORD b → b DESC'), got.join('\n'));
+  assert.ok(!got.some((g) => g.startsWith('ORD') && g.includes('MEASURES')), got.join('\n'));
+  assert.equal(f.points.find((p) => p.orig === 'a > 5')!.scope, undefined);
+});
+
+test('finder: review round 6: ORDER BY stop words only where they end it; $IF labels in a cursor loop', () => {
+  const f = points(`CREATE OR REPLACE PACKAGE BODY d AS
+  PROCEDURE p IS
+    n NUMBER;
+  BEGIN
+    SELECT count(*) INTO n FROM (SELECT a FROM t ORDER BY t.pattern, t.rows);
+    SELECT count(*) INTO n FROM (SELECT a FROM t ORDER BY pattern);
+    SELECT count(*) INTO n FROM t MATCH_RECOGNIZE (PARTITION BY a ORDER BY c ONE ROW PER MATCH PATTERN (x+) DEFINE x AS c > 4);
+    FOR r IN (SELECT a FROM t WHERE a > 5) LOOP
+      $IF $$dbg $THEN <<dbg>> NULL; $ELSE NULL; $END
+    END LOOP;
+  END;
+END d;
+/
+`)[0];
+  assert.deepEqual(f.errors, []);
+  const ord = expand([f]).filter((m) => m.op === 'ORD').map((m) => `${m.original} → ${m.mutated}`);
+  assert.ok(ord.includes('t.pattern, t.rows → t.pattern DESC, t.rows DESC'), ord.join('\n'));
+  assert.ok(ord.includes('pattern → pattern DESC'), ord.join('\n'));
+  assert.ok(ord.includes('c → c DESC'), ord.join('\n'));
+  assert.ok(!ord.some((o) => o.includes('ONE ROW') || o.endsWith('t. DESC')), ord.join('\n'));
+  assert.equal(f.points.find((p) => p.orig === 'a > 5')!.scope, undefined);
+});
+
+test('finder: review round 7: list items ending in a subquery, clauses after ORDER BY, spans over $IF directives', () => {
+  const f = points(`CREATE OR REPLACE PACKAGE BODY d AS
+  PROCEDURE p(n NUMBER) IS
+    v VARCHAR2(10);
+    j CLOB;
+  BEGIN
+    UPDATE t SET a = 1, b = (SELECT max(x) FROM u) WHERE d = 1;
+    SELECT JSON_ARRAYAGG(a ORDER BY b RETURNING CLOB) INTO j FROM t;
+    IF n > 1 $IF $$x $THEN AND n < 5 $END THEN NULL; END IF;
+  END;
+END d;
+/
+`)[0];
+  assert.deepEqual(f.errors, []);
+  const text = f.src.toString();
+  const got = expand([f]).map((m) => `${m.op} ${m.original} → ${m.mutated}`);
+  // every point's original is its bytes in the source
+  for (const p of f.points) assert.equal(text.slice(p.start, p.end), p.orig, p.op);
+  assert.ok(got.includes('COL a = 1, b = (SELECT max(x) FROM u) → a = 1'), got.join('\n'));
+  assert.ok(got.includes('ORD b → b DESC'), got.join('\n'));
+  assert.ok(!got.some((g) => g.includes('$IF')), got.join('\n'));
+});
+
+test('finder: review round 8: items starting with a subquery, partitioned outer joins, STRICT, $IF inside a statement', () => {
+  const f = points(`CREATE OR REPLACE PACKAGE BODY d AS
+  PROCEDURE p(n NUMBER) IS
+    x NUMBER;
+    j CLOB;
+  BEGIN
+    INSERT INTO t (a, b, c) VALUES ((SELECT 1 FROM dual) + 1, 2, 3);
+    SELECT count(*) INTO x FROM a LEFT JOIN b PARTITION BY (b.k) ON a.id = b.id;
+    SELECT JSON_ARRAYAGG(v ORDER BY v STRICT) INTO j FROM t;
+    SELECT count(*) INTO x FROM t WHERE y IN (SELECT y FROM s ORDER BY y FETCH FIRST 3 ROWS ONLY);
+    x := 1 $IF $$d $THEN + 2; $ELSE + 3; $END
+  END;
+END d;
+/
+`)[0];
+  assert.deepEqual(f.errors, []);
+  const text = f.src.toString();
+  const got = expand([f]).map((m) => `${m.op} ${m.original} → ${m.mutated}`);
+  for (const p of f.points) if (p.kind !== 'stmt') assert.equal(text.slice(p.start, p.end), p.orig, p.op);
+  assert.ok(got.includes('COL (a, b, c) VALUES ((SELECT 1 FROM dual) + 1, 2, 3) → (b, c) VALUES (2, 3)') || got.some((g) => g.startsWith('COL') && g.includes('(SELECT 1 FROM dual) + 1, 2')), got.join('\n'));
+  assert.ok(!got.some((g) => g.includes('VALUES ()')), got.join('\n'));
+  assert.ok(!got.some((g) => g.startsWith('JOI') && g.includes('LEFT JOIN')), got.join('\n'));
+  assert.ok(got.includes('ORD v → v DESC'), got.join('\n'));
+  // with FETCH FIRST the order of an IN subquery decides which rows count
+  assert.ok(got.includes('ORD y → y DESC'), got.join('\n'));
+  assert.ok(!got.some((g) => g.startsWith('SBR') && g.includes('x := 1')), got.join('\n'));
+});
+
+test('finder: review round 9: CASE in SET lists, partitioned joins with several keys, FORALL bulk binds, GROUP BY keys, constant order keys', () => {
+  const f = points(`CREATE OR REPLACE PACKAGE BODY d AS
+  PROCEDURE p(n NUMBER) IS
+    x NUMBER;
+    s VARCHAR2(4000);
+    TYPE ids_t IS TABLE OF NUMBER;
+    ids ids_t;
+  BEGIN
+    UPDATE t SET c = 3, a = CASE WHEN b > 1 THEN 1 ELSE 2 END WHERE id = n;
+    SELECT count(*) INTO x FROM a PARTITION BY (a.k, a.j) RIGHT JOIN b ON a.id = b.id;
+    FORALL i IN 1 .. ids.count DELETE FROM t WHERE id = ids(i);
+    FORALL i IN 1 .. ids.count INSERT INTO t (a, b) VALUES (ids(i), 1);
+    SELECT max(c) INTO x FROM (SELECT nvl(dept, 0) dd, e + 1 ee, count(*) c FROM t GROUP BY nvl(dept, 0), e + 1);
+    SELECT LISTAGG(v, ',') WITHIN GROUP (ORDER BY NULL) INTO s FROM t;
+  END;
+END d;
+/
+`)[0];
+  assert.deepEqual(f.errors, []);
+  const got = expand([f]).map((m) => `${m.op} ${m.original} → ${m.mutated}`);
+  const no = (x: string) => assert.ok(!got.some((g) => g.includes(x)), `${x}\n${got.join('\n')}`);
+  assert.ok(got.some((g) => g.startsWith('COL c = 3, a = CASE WHEN b > 1 THEN 1 ELSE 2 END →')), got.join('\n'));
+  no('a = CASE →');
+  assert.ok(!got.some((g) => g.startsWith('JOI') && g.includes('RIGHT JOIN')), got.join('\n'));
+  // the only bulk bind of a FORALL DML stays
+  no('id = ids(i) → FALSE');
+  no('(a, b) VALUES (ids(i), 1) → (b) VALUES (1)');
+  // GROUP BY keys and the select items equal to them are not mutated (ORA-00979)
+  no('nvl(dept, 0) → dept');
+  no('e + 1 → e - 1');
+  assert.ok(!got.some((g) => g.startsWith('ORD NULL')), got.join('\n'));
+});
+
+test('finder: review round 10: every occurrence of a composite GROUP BY key, DISTINCT with ORDER BY', () => {
+  const f = points(`CREATE OR REPLACE PACKAGE BODY d AS
+  PROCEDURE p IS
+    x NUMBER;
+  BEGIN
+    SELECT max(v) INTO x FROM (SELECT nvl(a, 0) + 1 v, count(*) c FROM t GROUP BY nvl(a, 0) HAVING nvl(a, 0) > 3 ORDER BY nvl(a, 0) + 1);
+    SELECT max(v) INTO x FROM (SELECT (e + 1) * 2 v FROM t GROUP BY ROLLUP (e + 1, b));
+    SELECT max(v) INTO x FROM (SELECT t.f + 1 v FROM t GROUP BY f + 1 UNION ALL SELECT nvl(g, 0) FROM u GROUP BY nvl(g, 0));
+    SELECT max(v) INTO x FROM (SELECT DISTINCT nvl(h, 0) v FROM t ORDER BY nvl(h, 0));
+    SELECT max(v) INTO x FROM (SELECT sum(k + 1) v FROM t GROUP BY m);
+  END;
+END d;
+/
+`)[0];
+  assert.deepEqual(f.errors, []);
+  const got = expand([f]).map((m) => `${m.op} ${m.original} → ${m.mutated}`);
+  const no = (x: string) => assert.ok(!got.some((g) => g.includes(x)), `${x}\n${got.join('\n')}`);
+  for (const k of ['NUL nvl(a, 0) →', 'e + 1 → e - 1', 't.f + 1 →', 'NUL nvl(g, 0) →', 'NUL nvl(h, 0) →']) no(k);
+  // an expression around a key and one outside any key stay
+  assert.ok(got.includes('AOR nvl(a, 0) + 1 → nvl(a, 0) - 1'), got.join('\n'));
+  assert.ok(got.includes('AOR k + 1 → k - 1'), got.join('\n'));
+});
+
+test('finder: review round 11: GROUP BY keys before LOG ERRORS, GROUP BY alias, quoted names, a column named like the FORALL index', () => {
+  const f = points(`CREATE OR REPLACE PACKAGE BODY d AS
+  PROCEDURE p IS
+    x NUMBER;
+    TYPE ids_t IS TABLE OF NUMBER;
+    ids ids_t;
+  BEGIN
+    INSERT INTO s (k, c) SELECT nvl(a, 0), count(*) FROM t GROUP BY nvl(a, 0) LOG ERRORS INTO err$_s ('x') REJECT LIMIT 10;
+    SELECT max(w) INTO x FROM (SELECT nvl(b, 0) k, nvl(b, 0) + 1 w, count(*) c FROM t GROUP BY k HAVING nvl(b, 0) > 3);
+    SELECT max(v) INTO x FROM (SELECT nvl("C", 0) v FROM t GROUP BY nvl(c, 0));
+    SELECT max(v) INTO x FROM (SELECT t.e + 1 v FROM t GROUP BY t.e);
+    FORALL i IN 1 .. ids.count DELETE FROM t WHERE x.i = 0 AND id = ids(i);
+  END;
+END d;
+/
+`)[0];
+  assert.deepEqual(f.errors, []);
+  const got = expand([f]).map((m) => `${m.op} ${m.original} → ${m.mutated}`);
+  const no = (x: string) => assert.ok(!got.some((g) => g.includes(x)), `${x}\n${got.join('\n')}`);
+  for (const k of ['NUL nvl(a, 0) →', 'NUL nvl(b, 0) →', 'NUL nvl("C", 0) →']) no(k);
+  // a single column key: the expression around it stays derivable
+  assert.ok(got.includes('AOR t.e + 1 → t.e - 1'), got.join('\n'));
+  // x.i is a column: the DML's bulk bind ids(i) must stay
+  no('x.i = 0 AND id = ids(i) → x.i = 0');
+});
+
 test('finder: dynamic SQL through a variable only when it holds nothing but whole literals', () => {
   const src = `CREATE OR REPLACE PACKAGE BODY d AS
   PROCEDURE p(x BOOLEAN) IS
@@ -386,7 +775,7 @@ test('finder: dynamic SQL through a variable only when it holds nothing but whol
     EXECUTE IMMEDIATE l_a;
     IF x THEN l_b := l_b || ' and e = 2'; END IF;
     EXECUTE IMMEDIATE l_b;
-    log(l_c);
+    fill(l_c);
     EXECUTE IMMEDIATE l_c;
     EXECUTE IMMEDIATE l_d;
     l_e := 'delete from t where e > 1';

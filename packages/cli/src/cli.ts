@@ -23,7 +23,7 @@
  */
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
-import { changedLines, connect, ensureJournal, journalEntries, preprocess, restoreAll, splitScript } from '@pltest/core';
+import { changedLines, connect, dbIdent, ensureJournal, journalEntries, journalForget, lockRun, preprocess, RUN_LOCK, restoreAll, splitScript } from '@pltest/core';
 import {
   checkQuotas, instrument, mergeExports, newIds, quotas, restrictToChanged, runCoverage, runCorpus, sourceMap, toCobertura,
   toCoverageExport, toJunit,
@@ -292,6 +292,7 @@ async function main() {
         coverage: coverageFile ? (JSON.parse(readFileSync(coverageFile, 'utf8')) as CoverageExport) : undefined,
       });
       process.stdout.write(textReport(rep));
+      if (rep.aborted) process.exitCode = 1;
       if (jsonOut) writeFileSync(jsonOut, jsonReport(rep));
       if (reportOut) writeFileSync(reportOut, reportOut.endsWith('.html') ? htmlReport(rep, dir) : mutationTestingReport(rep, dir));
       if (minScore !== undefined && score(rep) + 1e-9 < minScore) enforce([`Mutation Score: ${score(rep).toFixed(1)} % < ${minScore} %`]);
@@ -314,8 +315,15 @@ async function main() {
       const db = opt('db') ?? process.env.PLMUT_DB?.split(',')[0];
       const cfg = configFile || !db ? loadConfig(configFile) : parseDbUrl(db);
       const listOnly = flag('list');
+      // entries that cannot be restored at all (their table is gone, say) would block every run
+      const forget = flag('forget');
+      if (!(cfg as { user?: string }).user) throw new Error('keine Datenbankangaben: --db oder eine Coverage-Konfiguration angeben');
+      // journal and lock live where the runs keep them: the coverage config's runtime schema
+      const c2 = cfg as { schema?: string; schemas?: string[]; runtimeSchema?: string; user: string };
+      const home = (c2.schemas?.length ? c2.runtimeSchema ?? c2.user : c2.schema ?? c2.user).toUpperCase();
       const conn = await connect(cfg);
       try {
+        await conn.execute(`alter session set current_schema = ${dbIdent(home)}`);
         await ensureJournal(conn);
         const entries = await journalEntries(conn);
         if (!entries.length) {
@@ -323,7 +331,25 @@ async function main() {
           break;
         }
         for (const e of entries) console.error(`  ${e.type} ${e.owner}.${e.name} (${e.tool}, seit ${e.createdAt.toISOString()})`);
-        if (!listOnly) await restoreAll(conn, entries.map((e) => e.object), (m) => console.error(m));
+        if (!listOnly) {
+          const lock = await connect(cfg);
+          try {
+            await lock.execute(`alter session set current_schema = ${dbIdent(home)}`);
+            // a running run (of either tool) holds the lock: its objects are not leftovers
+            await lockRun(lock, RUN_LOCK);
+            await restoreAll(conn, entries.map((e) => e.object), (m) => console.error(m));
+            const still = await journalEntries(conn);
+            if (still.length && forget) {
+              for (const e of still) await journalForget(conn, e.object);
+              console.error(`${still.length} Einträge ohne Wiederherstellung aus dem Journal gelöscht: ${still.map((e) => e.name).join(', ')}`);
+            } else if (still.length) {
+              console.error(`${still.length} Einträge ließen sich nicht wiederherstellen; --forget löscht sie aus dem Journal`);
+              process.exitCode = 1;
+            }
+          } finally {
+            await lock.close().catch(() => {});
+          }
+        }
       } finally {
         await conn.close();
       }

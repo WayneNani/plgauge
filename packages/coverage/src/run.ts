@@ -12,8 +12,9 @@
  */
 import oracledb from 'oracledb';
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import {
-  connect, databaseInfo, dbIdent, ensureJournal, loadObjects, replaceSource, restoreAll, sha256,
+  connect, databaseInfo, dbIdent, ensureJournal, journalEntries, loadObjects, lockRun, replaceSource, restoreAll, RUN_LOCK, runScript, sha256, splitScript,
   runTestsJunit as runTests, sameResults, suiteTests, type SourceObject, type TestCase, type TestRun,
 } from '@pltest/core';
 import { instrument } from './instrument.js';
@@ -45,6 +46,11 @@ export interface RunConfig {
   perTest?: boolean;
   /** Test runs without coverage before measuring (default 2); a test whose result changes is flaky. */
   baselineRuns?: number;
+  /**
+   * Scripts (paths) the run installs first, under the run lock and after restoring what a
+   * crashed run left: installed earlier, they would be overwritten by those old originals.
+   */
+  installScripts?: string[];
 }
 
 export type { TestCase, TestRun } from '@pltest/core';
@@ -77,20 +83,54 @@ export interface RunReport {
 export async function runCoverage(cfg: RunConfig, log: (m: string) => void = console.error): Promise<RunReport> {
   const messages: string[] = [];
   const say = (m: string) => { messages.push(m); log(m); };
-  const conn = await connect(cfg);
   const schema = cfg.schema.toUpperCase();
   const multi = !!cfg.schemas?.length;
   const schemas = multi ? cfg.schemas!.map((s) => s.toUpperCase()) : [schema];
   const rtOwner = (multi ? cfg.runtimeSchema ?? cfg.user : schema).toUpperCase();
-  const restore: SourceObject[] = [];
+  // the run lock (shared with mutation runs) on a connection of its own, held to the end; in the
+  // schema of the journal (rtOwner), where a mutation run of that schema takes it too
+  const lock = await connect(cfg);
   try {
+    await lock.execute(`alter session set current_schema = ${dbIdent(rtOwner)}`);
+    await lockRun(lock, RUN_LOCK);
+  } catch (e) {
+    await lock.close().catch(() => {});
+    throw e;
+  }
+  const conn = await connect(cfg).catch(async (e) => {
+    await lock.close().catch(() => {});
+    throw e;
+  });
+  const restore: SourceObject[] = [];
+  let nls = 'BYTE';
+  try {
+    nls = (await conn.execute<[string]>(`select value from nls_session_parameters where parameter = 'NLS_LENGTH_SEMANTICS'`)).rows?.[0]?.[0] ?? 'BYTE';
     await conn.execute(`alter session set current_schema = ${dbIdent(rtOwner)}`);
     const { banner, major } = await databaseInfo(conn);
     const sqlProbes = cfg.sqlProbes === 'auto' || cfg.sqlProbes === undefined ? major >= 23 : cfg.sqlProbes;
     say(`Datenbank: ${banner} · SQL-Sonden ${sqlProbes ? 'aktiv' : 'aus'}`);
 
-    await installRuntime(conn);
     await ensureJournal(conn);
+    // what a run that died left changed (either tool): back to the originals first, or this run
+    // would instrument the changed code and forget the entry with the true original
+    const left = await journalEntries(conn);
+    if (left.length) {
+      say(`${left.length} Objekte eines abgebrochenen Laufs werden aus dem Journal wiederhergestellt`);
+      // on a connection of its own: compiling sets session parameters the install must not inherit
+      const r = await connect(cfg);
+      try {
+        await r.execute(`alter session set current_schema = ${dbIdent(rtOwner)}`);
+        await restoreAll(r, left.map((e) => e.object), say);
+        const still = await journalEntries(r);
+        if (still.length) throw new Error(`${still.length} Objekte eines abgebrochenen Laufs ließen sich nicht wiederherstellen (${still.map((e) => e.name).join(', ')}); erst pltest restore`);
+      } finally {
+        await r.close().catch(() => {});
+      }
+    }
+    // then the project's install scripts: the new code is the original
+    for (const path of cfg.installScripts ?? []) await runScript(conn, splitScript(readFileSync(path, 'utf8')), path);
+    if (cfg.installScripts?.length) say(`${cfg.installScripts.length} Skripte installiert`);
+    await installRuntime(conn);
     const objects: SourceObject[] = [];
     for (const s of schemas) objects.push(...(await loadObjects(conn, s, { include: cfg.include, exclude: cfg.exclude, skip: ['COV$'] })));
     say(`${objects.length} Objekte gefunden: ${objects.map((o) => (multi ? `${o.owner}.${o.name}` : o.name)).join(', ')}`);
@@ -156,6 +196,9 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     await conn.execute(`begin cov$.reset; cov$.per_test(:p = 1); cov$.start_run(:r); end;`, { p: perTest ? 1 : 0, r: runId });
     await conn.execute(LOGOFF_TRIGGER).catch((e) => say(`  Hinweis: ohne Logoff-Trigger (${(e as Error).message.split('\n')[0]}), andere Sessions schreiben nur alle 1000 Anweisungen`));
     let instrumentedRun;
+    // compiling left the last object's length semantics in the session; the tests (DDL in them)
+    // run with the session's own, as in the baseline
+    await conn.execute(`alter session set nls_length_semantics = ${nls === 'CHAR' ? 'CHAR' : 'BYTE'}`);
     try {
       instrumentedRun = await runTests(conn, cfg.tests, null);
       await conn.execute(`begin cov$.flush(:r); end;`, { r: runId });
@@ -229,8 +272,12 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       log: messages,
     };
   } finally {
-    if (restore.length) await restoreAll(conn, restore, say);
-    await conn.close();
+    try {
+      if (restore.length) await restoreAll(conn, restore, say);
+    } finally {
+      await conn.close().catch(() => {});
+      await lock.close().catch(() => {});
+    }
   }
 }
 

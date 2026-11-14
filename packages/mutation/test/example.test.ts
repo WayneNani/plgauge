@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import oracledb from 'oracledb';
-import { journalEntries, loadObject, lockRun, replaceSource } from '@pltest/core';
+import { journalEntries, loadObject, lockRun, replaceSource, RUN_LOCK } from '@pltest/core';
 import { CoverageIndex, crossCheck, parseDbUrl, projectCoverageConfig, runMutation, type Result } from '@pltest/mutation';
 import { runCoverage, toCoverageExport } from '@pltest/coverage';
 
@@ -219,7 +219,7 @@ test('a second run on the same schema stops at once instead of restoring the fir
   const conn = await oracledb.getConnection(parseDbUrl(db!));
   try {
     // the lock as a running run holds it
-    await lockRun(conn, 'mutation');
+    await lockRun(conn, RUN_LOCK);
     await assert.rejects(runMutation({ dir, dbUrls: [db!], mode: 'schema', skipInstall: true, sample: 1, seed: 1 }), /anderer pltest-Lauf/);
   } finally {
     await conn.close();
@@ -227,4 +227,89 @@ test('a second run on the same schema stops at once instead of restoring the fir
   // gone with the session
   const rep = await runMutation({ dir, dbUrls: [db!], mode: 'schema', skipInstall: true, sample: 1, seed: 1 });
   assert.equal(rep.results.length, 1);
+});
+
+// CREATE OR REPLACE VIEW drops INSTEAD OF triggers: such a view must not be touched
+test('a view with an INSTEAD OF trigger is not mutated and keeps its trigger', { skip: !db && 'PLMUT_DB nicht gesetzt', timeout: 600_000 }, async () => {
+  const p = mkdtempSync(join(tmpdir(), 'pltest-trg-'));
+  mkdirSync(join(p, 'src'));
+  writeFileSync(join(p, 'src', 'v.sql'), `CREATE TABLE IF NOT EXISTS pltest_trg_t (id NUMBER, s VARCHAR2(10))
+/
+CREATE OR REPLACE VIEW pltest_trg_v AS SELECT id, s FROM pltest_trg_t WHERE id > 0
+/
+CREATE OR REPLACE TRIGGER pltest_trg_io INSTEAD OF UPDATE ON pltest_trg_v FOR EACH ROW
+BEGIN UPDATE pltest_trg_t SET s = :new.s WHERE id = :old.id; END;
+/
+`);
+  writeFileSync(join(p, 'src', 'test.sql'), `CREATE OR REPLACE PACKAGE pltest_trg_test AS
+  --%suite
+
+  --%test
+  PROCEDURE count_rows;
+END;
+/
+CREATE OR REPLACE PACKAGE BODY pltest_trg_test AS
+  PROCEDURE count_rows IS n NUMBER; BEGIN SELECT count(*) INTO n FROM pltest_trg_v; ut.expect(n).to_be_greater_or_equal(0); END;
+END;
+/
+`);
+  writeFileSync(join(p, 'pltest.json'), JSON.stringify({ install: ['src/v.sql', 'src/test.sql'], mutate: ['src/v.sql'], tests: ['pltest_trg_test'] }));
+  const log: string[] = [];
+  const rep = await runMutation({ dir: p, dbUrls: [db!], mode: 'schema', log: (m) => log.push(m) });
+  // only the trigger's own code is mutated, not the view
+  assert.deepEqual(rep.results.filter((r) => r.mutant.unitRef.type === 'VIEW'), [], rep.results.map((r) => `${r.unit} ${r.op}`).join('\n'));
+  assert.ok(log.some((l) => l.includes('INSTEAD-OF-Trigger')), log.join('\n'));
+  const conn = await oracledb.getConnection(parseDbUrl(db!));
+  try {
+    const n = (await conn.execute<[number]>(`select count(*) from user_triggers where trigger_name = 'PLTEST_TRG_IO'`)).rows![0][0];
+    assert.equal(n, 1);
+  } finally {
+    await conn.close();
+  }
+});
+
+// CREATE OR REPLACE drops a view's comments and enables a disabled trigger: both come back
+test('a mutated view keeps its comments, a mutated disabled trigger stays disabled', { skip: !db && 'PLMUT_DB nicht gesetzt', timeout: 600_000 }, async () => {
+  const p = mkdtempSync(join(tmpdir(), 'pltest-keep-'));
+  mkdirSync(join(p, 'src'));
+  writeFileSync(join(p, 'src', 'v.sql'), `CREATE TABLE IF NOT EXISTS pltest_keep_t (id NUMBER, s VARCHAR2(10))
+/
+CREATE OR REPLACE VIEW pltest_keep_v AS SELECT id, s FROM pltest_keep_t WHERE id > 0
+/
+COMMENT ON TABLE pltest_keep_v IS 'die View'
+/
+COMMENT ON COLUMN pltest_keep_v.s IS 'die Spalte'
+/
+CREATE OR REPLACE TRIGGER pltest_keep_trg BEFORE INSERT ON pltest_keep_t FOR EACH ROW
+BEGIN IF :new.id > 100 THEN :new.s := 'gross'; END IF; END;
+/
+ALTER TRIGGER pltest_keep_trg DISABLE
+/
+`);
+  writeFileSync(join(p, 'src', 'test.sql'), `CREATE OR REPLACE PACKAGE pltest_keep_test AS
+  --%suite
+
+  --%test
+  PROCEDURE count_rows;
+END;
+/
+CREATE OR REPLACE PACKAGE BODY pltest_keep_test AS
+  PROCEDURE count_rows IS n NUMBER; BEGIN SELECT count(*) INTO n FROM pltest_keep_v; ut.expect(n).to_be_greater_or_equal(0); END;
+END;
+/
+`);
+  writeFileSync(join(p, 'pltest.json'), JSON.stringify({ install: ['src/v.sql', 'src/test.sql'], mutate: ['src/v.sql'], tests: ['pltest_keep_test'] }));
+  for (const mode of ['schema', 'naive'] as const) {
+    const rep = await runMutation({ dir: p, dbUrls: [db!], mode, skipInstall: mode === 'naive' });
+    assert.ok(rep.results.some((r) => r.mutant.unitRef.type === 'VIEW') && rep.results.some((r) => r.mutant.unitRef.type === 'TRIGGER'), mode);
+    const conn = await oracledb.getConnection(parseDbUrl(db!));
+    try {
+      const one = async (sql: string) => (await conn.execute<[string]>(sql)).rows?.[0]?.[0];
+      assert.equal(await one(`select comments from user_tab_comments where table_name = 'PLTEST_KEEP_V'`), 'die View', mode);
+      assert.equal(await one(`select comments from user_col_comments where table_name = 'PLTEST_KEEP_V' and column_name = 'S'`), 'die Spalte', mode);
+      assert.equal(await one(`select status from user_triggers where trigger_name = 'PLTEST_KEEP_TRG'`), 'DISABLED', mode);
+    } finally {
+      await conn.close();
+    }
+  }
 });

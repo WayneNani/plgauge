@@ -147,7 +147,7 @@ export async function runTests(s: Session, monitor: oracledb.Connection, paths: 
   const res: RunResult = { tests: [], elapsedMs: 0, timedOut: false, killed: false, committed: false };
   try {
     const r = await s.conn.execute(`BEGIN plmut_rt.run_tests(:p, :o); END;`, {
-      p: paths.join(','),
+      p: { val: paths.join(','), type: oracledb.DB_TYPE_CLOB },
       o: { dir: oracledb.BIND_OUT, type: oracledb.DB_TYPE_CLOB },
     });
     const lob = (r.outBinds as { o: oracledb.Lob | null }).o;

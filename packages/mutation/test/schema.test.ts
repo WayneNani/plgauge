@@ -263,7 +263,69 @@ test('livePlan: dead branches and the schema scaffold drop out; a changed plan s
   // a WITH clause materialized for the copies, a branch filter pushed into a scan: different
   const worse = [r(0, null, 'SELECT STATEMENT'), r(1, 0, 'TEMP TABLE TRANSFORMATION'), r(2, 1, 'LOAD AS SELECT SYS_TEMP_0FD9D6604_2B3C'), ...join(3, 1),
     r(6, 1, 'TABLE ACCESS FULL PT_C', `${V}='4' AND "C"."Y">1`)];
-  assert.equal(planDiff(orig, livePlan(worse)), '+1 LOAD AS SELECT SYS_TEMP, +1 TABLE ACCESS FULL PT_C, +1 TEMP TABLE TRANSFORMATION');
+  assert.equal(planDiff(orig, livePlan(worse)),
+    '+1 HASH JOIN ← TEMP TABLE TRANSFORMATION, +1 LOAD AS SELECT SYS_TEMP ← TEMP TABLE TRANSFORMATION, +1 TABLE ACCESS FULL PT_A ← HASH JOIN, +1 TABLE ACCESS FULL PT_B ← HASH JOIN, …');
+  // (A ⋈ B) ⋈ C against (A ⋈ C) ⋈ B: the same operations and parents, another tree
+  const t3 = (x: string, y: string, z: string, base = 1, parent = 0) => [r(base, parent, 'HASH JOIN'), r(base + 1, base, 'HASH JOIN'),
+    r(base + 2, base + 1, `TABLE ACCESS FULL ${x}`), r(base + 3, base + 1, `TABLE ACCESS FULL ${y}`), r(base + 4, base, `TABLE ACCESS FULL ${z}`)];
+  const abc = livePlan([r(0, null, 'SELECT STATEMENT'), ...t3('A', 'B', 'C')]);
+  const acb = livePlan([r(0, null, 'SELECT STATEMENT'), r(1, 0, 'UNION-ALL'), r(2, 1, 'FILTER', `NVL(${V},'0')<>'2'`), ...t3('A', 'C', 'B', 3, 2),
+    r(8, 1, 'FILTER', `${V}='2'`), ...t3('A', 'B', 'C', 9, 8)]);
+  assert.notEqual(planDiff(abc, acb), undefined);
+  // a filter of the original that took the wrapper's terms stays; a dead branch with an OR of its own stays dead
+  const ne = (f: string) => [r(0, null, 'SELECT STATEMENT'), r(1, 0, 'FILTER', f), r(2, 1, 'TABLE ACCESS FULL T'), r(3, 1, 'TABLE ACCESS FULL U')];
+  const plainNe = livePlan(ne('NOT EXISTS (SELECT 0 FROM "U" "U" WHERE "U"."X"=:B1)'));
+  assert.equal(planDiff(plainNe, livePlan(ne(`NOT EXISTS (SELECT 0 FROM "U" "U" WHERE "U"."X"=:B1) AND NVL(${V},'0')<>'2'`))), undefined);
+  // a view's own FROM dual stays; only the recording's dual (last child of a filter that reads DUAL) goes
+  const rec = `(NVL(${V},'0')<>'-1' OR  (SELECT "PLMUT_CTL"."HIT"(1,5) FROM "SYS"."DUAL" "DUAL")=0)`;
+  const dual = livePlan([r(0, null, 'SELECT STATEMENT'), r(1, 0, 'FAST DUAL')]);
+  assert.equal(planDiff(dual, livePlan([r(0, null, 'SELECT STATEMENT'), r(1, 0, 'FILTER', `NVL(${V},'0')<>'2' AND ${rec}`), r(2, 1, 'FAST DUAL'), r(3, 1, 'FAST DUAL')])), undefined);
+  // a kept filter of the original with the recording folded in loses only the recording dual
+  assert.equal(planDiff(plainNe, livePlan([r(0, null, 'SELECT STATEMENT'), r(1, 0, 'FILTER', `NOT EXISTS (SELECT 0 FROM "U" "U" WHERE "U"."X"=:B1) AND ${rec}`),
+    r(2, 1, 'TABLE ACCESS FULL T'), r(3, 1, 'TABLE ACCESS FULL U'), r(4, 1, 'FAST DUAL')])), undefined);
+  // a dead branch's condition pushed below an aggregate kills the whole branch
+  const agg = (base: number, parent: number, f: string) => [r(base, parent, 'HASH GROUP BY'), r(base + 1, base, 'FILTER', f), r(base + 2, base + 1, 'TABLE ACCESS FULL T')];
+  const grouped = livePlan([r(0, null, 'SELECT STATEMENT'), r(1, 0, 'HASH GROUP BY'), r(2, 1, 'TABLE ACCESS FULL T')]);
+  assert.equal(planDiff(grouped, livePlan([r(0, null, 'SELECT STATEMENT'), r(1, 0, 'UNION-ALL'), r(2, 1, 'HASH GROUP BY'), r(3, 2, 'TABLE ACCESS FULL T'),
+    ...agg(4, 1, `${V}='3'`)])), undefined);
+  // terms in parentheses as a whole, and quoted identifiers with odd characters, still split
+  assert.equal(planDiff(grouped, livePlan([r(0, null, 'SELECT STATEMENT'), r(1, 0, 'UNION-ALL'), r(2, 1, 'HASH GROUP BY'), r(3, 2, 'TABLE ACCESS FULL T'),
+    ...agg(4, 1, `("T"."A(B"=1 AND ${V}='3')`)])), undefined);
+  // join predicate pushdown into the switched block: UNION ALL PUSHED PREDICATE is the wrapper's UNION ALL
+  const nl = livePlan([r(0, null, 'SELECT STATEMENT'), r(1, 0, 'NESTED LOOPS'), r(2, 1, 'TABLE ACCESS FULL A'), r(3, 1, 'TABLE ACCESS BY INDEX ROWID B')]);
+  assert.equal(planDiff(nl, livePlan([r(0, null, 'SELECT STATEMENT'), r(1, 0, 'NESTED LOOPS'), r(2, 1, 'TABLE ACCESS FULL A'), r(3, 1, 'VIEW V'),
+    r(4, 3, 'UNION ALL PUSHED PREDICATE'), r(5, 4, 'FILTER', `NVL(${V},'0')<>'2'`), r(6, 5, 'TABLE ACCESS BY INDEX ROWID B'),
+    r(7, 4, 'FILTER', `${V}='2'`), r(8, 7, 'TABLE ACCESS BY INDEX ROWID B')])), undefined);
+  // a dead branch's scalar subquery (printed before the branch's top row) goes with it
+  const sq = (base: number) => [r(base, 1, 'TABLE ACCESS BY INDEX ROWID S'), r(base + 1, base, 'INDEX UNIQUE SCAN S_PK')];
+  const withSq = livePlan([r(0, null, 'SELECT STATEMENT'), r(1, 0, 'UNION-ALL'), ...sq(2), r(4, 1, 'FILTER', `NVL(${V},'0')<>'2'`), r(5, 4, 'TABLE ACCESS FULL T'),
+    ...sq(6), r(8, 1, 'FILTER', `${V}='2'`), r(9, 8, 'TABLE ACCESS FULL T')]);
+  assert.deepEqual(withSq, livePlan([r(0, null, 'SELECT STATEMENT'), r(1, 0, 'UNION-ALL'), ...sq(2), r(4, 1, 'FILTER', `NVL(${V},'0')<>'2'`),
+    r(5, 4, 'TABLE ACCESS FULL T')]));
+  // the recording dual need not be the last child; a filter without the recording keeps its own dual
+  const ex = livePlan([r(0, null, 'SELECT STATEMENT'), r(1, 0, 'FILTER', 'EXISTS (SELECT 0 FROM "SYS"."DUAL" "DUAL")'), r(2, 1, 'FAST DUAL')]);
+  assert.equal(planDiff(ex, livePlan([r(0, null, 'SELECT STATEMENT'), r(1, 0, 'FILTER', `${rec} AND EXISTS (SELECT 0 FROM "SYS"."DUAL" "DUAL")`),
+    r(2, 1, 'FAST DUAL'), r(3, 1, 'FAST DUAL')])), undefined);
+  assert.equal(planDiff(ex, livePlan([r(0, null, 'SELECT STATEMENT'), r(1, 0, 'FILTER', `EXISTS (SELECT 0 FROM "SYS"."DUAL" "DUAL") AND NVL(${V},'0')<>'5'`),
+    r(2, 1, 'FAST DUAL')])), undefined);
+  // a scalar subquery with a startup FILTER of its own; the live branch's head without one
+  const sqf = (base: number) => [r(base, 1, 'FILTER', '"T"."KIND"=\'A\''), r(base + 1, base, 'TABLE ACCESS BY INDEX ROWID S'), r(base + 2, base + 1, 'INDEX UNIQUE SCAN S_PK')];
+  const liveHead = [r(5, 1, 'HASH GROUP BY'), r(6, 5, 'FILTER', `NVL(${V},'0')<>'2'`), r(7, 6, 'TABLE ACCESS FULL T')];
+  const base5 = livePlan([r(0, null, 'SELECT STATEMENT'), r(1, 0, 'UNION-ALL'), ...sqf(2), ...liveHead]);
+  assert.deepEqual(livePlan([r(0, null, 'SELECT STATEMENT'), r(1, 0, 'UNION-ALL'), ...sqf(2), ...liveHead,
+    ...sqf(8), r(11, 1, 'FILTER', `${V}='2'`), r(12, 11, 'TABLE ACCESS FULL T')]), base5);
+  assert.equal(planDiff(plainNe, livePlan([...ne('NOT EXISTS (SELECT 0 FROM "U" "U" WHERE "U"."X"=:B1)'),
+    r(4, 0, 'FILTER', `${V}='2' AND (NOT EXISTS (SELECT 0 FROM "U" "U" WHERE "U"."X"=:B1) OR "T"."X"=1)`), r(5, 4, 'TABLE ACCESS FULL T')])), undefined);
+  // the same operations in another shape (join order, build and probe side) are a different plan
+  const a = livePlan([r(0, null, 'SELECT STATEMENT'), r(1, 0, 'NESTED LOOPS'), r(2, 1, 'HASH JOIN'), r(3, 2, 'TABLE ACCESS FULL A'),
+    r(4, 2, 'TABLE ACCESS FULL B'), r(5, 1, 'INDEX RANGE SCAN IX_C')]);
+  const b = livePlan([r(0, null, 'SELECT STATEMENT'), r(1, 0, 'UNION-ALL'), r(2, 1, 'FILTER', `NVL(${V},'0')<>'2'`), r(3, 2, 'HASH JOIN'),
+    r(4, 3, 'NESTED LOOPS'), r(5, 4, 'TABLE ACCESS FULL B'), r(6, 4, 'INDEX RANGE SCAN IX_C'), r(7, 3, 'TABLE ACCESS FULL A'),
+    r(8, 1, 'FILTER', `${V}='2'`), r(9, 8, 'TABLE ACCESS FULL A')]);
+  assert.notEqual(planDiff(a, b), undefined);
+  // VIEW PUSHED PREDICATE is a choice of the optimizer, not wrapping
+  assert.notEqual(planDiff(a, livePlan([r(0, null, 'SELECT STATEMENT'), r(1, 0, 'NESTED LOOPS'), r(2, 1, 'HASH JOIN'), r(3, 2, 'TABLE ACCESS FULL A'),
+    r(4, 2, 'TABLE ACCESS FULL B'), r(5, 1, 'VIEW PUSHED PREDICATE V'), r(6, 5, 'INDEX RANGE SCAN IX_C')])), undefined);
 });
 
 test('schema: a view whose points all run one by one keeps a recording wrapper; a plain view goes in as written', () => {

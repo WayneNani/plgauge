@@ -95,7 +95,20 @@ export async function loadObjects(conn: oracledb.Connection, schema: string, fil
 export async function loadObject(conn: oracledb.Connection, owner: string, name: string, type: string): Promise<SourceObject> {
   if (type === 'VIEW') {
     const original = await viewDdl(conn, owner, name);
-    return { owner, name, type, original, processed: original, settings: {} };
+    // CREATE OR REPLACE VIEW drops the comments: compile puts them back
+    const t = await conn.execute<[string | null]>(`select comments from all_tab_comments where owner = :o and table_name = :n`, { o: owner, n: name });
+    const c = await conn.execute<[string, string]>(
+      `select column_name, comments from all_col_comments where owner = :o and table_name = :n and comments is not null`, { o: owner, n: name });
+    const table = t.rows?.[0]?.[0] ?? null;
+    const cols = Object.fromEntries(c.rows ?? []);
+    const settings: Record<string, string> = table || Object.keys(cols).length ? { comments: JSON.stringify({ table, cols }) } : {};
+    // CAST(… AS VARCHAR2(n)) without BYTE/CHAR takes the session's length semantics at CREATE:
+    // compile the view with what its columns have (mixed: the default BYTE)
+    const u = await conn.execute<[string]>(
+      `select distinct char_used from all_tab_columns where owner = :o and table_name = :n and char_used in ('B', 'C')`, { o: owner, n: name });
+    const used = (u.rows ?? []).map((r) => r[0]);
+    settings.nls_length_semantics = used.length === 1 && used[0] === 'C' ? 'CHAR' : 'BYTE';
+    return { owner, name, type, original, processed: original, settings };
   }
   const src = await conn.execute<[string]>(
     `select text from all_source where owner = :o and name = :n and type = :t order by line`, { o: owner, n: name, t: type },
@@ -116,11 +129,16 @@ export async function loadObject(conn: oracledb.Connection, owner: string, name:
        from all_plsql_object_settings where owner = :o and name = :n and type = :t`, { o: owner, n: name, t: type },
   );
   const s = st.rows?.[0];
+  // CREATE OR REPLACE TRIGGER enables a disabled trigger: compile disables it again
+  const status = type === 'TRIGGER'
+    ? (await conn.execute<[string]>(`select status from all_triggers where owner = :o and trigger_name = :n`, { o: owner, n: name })).rows?.[0]?.[0]
+    : undefined;
   return {
     owner, name, type, original, processed,
-    settings: s
-      ? { plsql_optimize_level: String(s[0]), plsql_code_type: s[1], plsql_ccflags: s[2] ?? '', nls_length_semantics: s[3], plscope_settings: s[4] ?? '' }
-      : {},
+    settings: {
+      ...(s ? { plsql_optimize_level: String(s[0]), plsql_code_type: s[1], plsql_ccflags: s[2] ?? '', nls_length_semantics: s[3], plscope_settings: s[4] ?? '' } : {}),
+      ...(status === 'DISABLED' ? { trigger_status: 'DISABLED' } : {}),
+    },
   };
 }
 
@@ -142,9 +160,21 @@ async function viewDdl(conn: oracledb.Connection, owner: string, name: string): 
 
 /** A view's statement from ALL_VIEWS, ALL_TAB_COLUMNS and ALL_CONSTRAINTS (FORCE VIEW … AS …). */
 export async function viewFromDictionary(conn: oracledb.Connection, owner: string, name: string): Promise<string> {
-  const v = await conn.execute<[string]>(`select text from all_views where owner = :o and view_name = :n`, { o: owner, n: name });
-  const text = v.rows?.[0]?.[0];
-  if (text === undefined) throw new Error(`View ${owner}.${name} nicht gefunden`);
+  const v = await conn.execute<[string, string, string | null, string | null, string | null]>(
+    `select text, editioning_view, type_text, bequeath, duality_view from all_views where owner = :o and view_name = :n`, { o: owner, n: name });
+  const row = v.rows?.[0];
+  if (!row) throw new Error(`View ${owner}.${name} nicht gefunden`);
+  const text = row[0];
+  // what this statement cannot say: restored from it, the view would lose it for good
+  const extra = await conn.execute<[number, number]>(
+    `select (select count(*) from all_constraints where owner = :o and table_name = :n
+               and (constraint_type in ('P', 'U', 'R') or (constraint_type in ('O', 'V') and constraint_name not like 'SYS\\_%' escape '\\'))),
+            (select count(*) from all_tab_cols where owner = :o and table_name = :n and hidden_column = 'YES' and user_generated = 'YES')
+       from dual`, { o: owner, n: name });
+  const [cons0, invisible] = extra.rows?.[0] ?? [0, 0];
+  if (row[1] === 'Y' || row[2] || row[3] === 'DEFINER' || row[4] === 'Y' || cons0 > 0 || invisible > 0) {
+    throw new Error(`View ${owner}.${name} lässt sich ohne DBMS_METADATA nicht originalgetreu nachbauen (Editioning-, Objekt-, Duality- oder BEQUEATH-DEFINER-View, benannte Constraints oder unsichtbare Spalten)`);
+  }
   const cols = await conn.execute<[string]>(`select column_name from all_tab_columns where owner = :o and table_name = :n order by column_id`, { o: owner, n: name });
   const cons = await conn.execute<[string]>(`select constraint_type from all_constraints where owner = :o and table_name = :n and constraint_type in ('O', 'V')`, { o: owner, n: name });
   const q = (x: string) => `"${x.replace(/"/g, '""')}"`;
@@ -170,6 +200,8 @@ export interface CompileOutcome {
    * the server reports it.
    */
   offset?: number;
+  /** Compiled, but a property could not be put back (a trigger's DISABLED status, say). */
+  warning?: string;
 }
 
 export async function compileDetailed(conn: oracledb.Connection, obj: SourceObject, source: string): Promise<CompileOutcome> {
@@ -181,6 +213,30 @@ export async function compileDetailed(conn: oracledb.Connection, obj: SourceObje
   } finally {
     await conn.execute(`alter session set current_schema = ${dbIdent(cur)}`);
   }
+}
+
+/**
+ * What CREATE OR REPLACE loses and the original object had: a trigger's DISABLED status, a
+ * view's table and column comments (from loadObject's settings, kept in the journal too).
+ */
+async function keepProperties(conn: oracledb.Connection, obj: SourceObject): Promise<string | undefined> {
+  const q = (x: string) => `"${x.replace(/"/g, '""')}"`;
+  const lit = (x: string) => `'${x.replace(/'/g, "''")}'`;
+  const full = `${q(obj.owner)}.${q(obj.name)}`;
+  if (obj.type === 'TRIGGER' && obj.settings.trigger_status === 'DISABLED') {
+    try {
+      await conn.execute(`alter trigger ${full} disable`);
+    } catch (e) {
+      return `Trigger ${obj.name} bleibt aktiv (war deaktiviert): ${(e as Error).message.split('\n')[0]}`;
+    }
+  }
+  if (obj.type === 'VIEW' && obj.settings.comments) {
+    const c = JSON.parse(obj.settings.comments) as { table: string | null; cols: Record<string, string> };
+    if (c.table) await conn.execute(`comment on table ${full} is ${lit(c.table)}`).catch(() => {});
+    // a column the mutant's text no longer has cannot take its comment
+    for (const [col, text] of Object.entries(c.cols)) await conn.execute(`comment on column ${full}.${q(col)} is ${lit(text)}`).catch(() => {});
+  }
+  return undefined;
 }
 
 async function compileHere(conn: oracledb.Connection, obj: SourceObject, source: string): Promise<CompileOutcome> {
@@ -202,12 +258,13 @@ async function compileHere(conn: oracledb.Connection, obj: SourceObject, source:
       return { error: msg.split('\n')[0], offset: typeof off === 'number' && off >= prefix.length ? off - prefix.length : undefined };
     }
   }
+  const warning = await keepProperties(conn, obj);
   const err = await conn.execute<[number, string]>(
     `select line, text from all_errors where owner = :o and name = :n and type = :t and attribute = 'ERROR' order by sequence`,
     { o: obj.owner, n: obj.name, t: obj.type },
   );
-  if (err.rows?.length) return { error: err.rows.slice(0, 3).map((r) => `Zeile ${r[0]}: ${r[1].trim()}`).join('; ') };
-  return { error: null };
+  if (err.rows?.length) return { error: err.rows.slice(0, 3).map((r) => `Zeile ${r[0]}: ${r[1].trim()}`).join('; '), warning };
+  return { error: null, warning };
 }
 
 /**
@@ -231,15 +288,34 @@ export async function replaceSourceDetailed(conn: oracledb.Connection, obj: Sour
 export async function restoreAll(conn: oracledb.Connection, objs: SourceObject[], say: (m: string) => void, recompile = true): Promise<void> {
   const schemas = new Set<string>();
   for (const obj of objs) {
-    const err = await compile(conn, obj, obj.original);
+    const out = await compileDetailed(conn, obj, obj.original);
+    const err = out.error;
+    if (out.warning) say(`  ✗ ${out.warning}`);
     if (err) {
       say(`  ✗ Wiederherstellung von ${obj.name} fehlgeschlagen: ${err}`);
-      continue;
+      // compile errors ("Zeile n: …"): the original is in place, only invalid; anything else
+      // left the changed code there and the entry must stay
+      if (!/^Zeile \d+:/.test(err)) continue;
     }
     await journalForget(conn, obj);
     schemas.add(obj.owner);
   }
-  if (recompile) for (const s of schemas) await conn.execute(`begin dbms_utility.compile_schema(:s, compile_all => false); end;`, { s });
+  // (may be refused for another schema: the originals are back anyway)
+  if (recompile) {
+    for (const s of schemas) {
+      await conn.execute(`begin dbms_utility.compile_schema(:s, compile_all => false, reuse_settings => true); end;`, { s })
+        .catch((e: Error) => say(`  Hinweis: Neukompilieren von ${s} nicht möglich: ${e.message.split('\n')[0]}`));
+    }
+  }
+  // materialized views on a replaced view are left NEEDS_COMPILE
+  for (const obj of objs.filter((o) => o.type === 'VIEW')) {
+    const mv = await conn.execute<[string, string]>(
+      `select owner, name from all_dependencies where referenced_owner = :o and referenced_name = :n and type = 'MATERIALIZED VIEW'`,
+      { o: obj.owner, n: obj.name },
+    ).catch(() => ({ rows: [] as [string, string][] }));
+    const q = (x: string) => `"${x.replace(/"/g, '""')}"`;
+    for (const [o, n] of mv.rows ?? []) await conn.execute(`alter materialized view ${q(o)}.${q(n)} compile`).catch(() => {});
+  }
   say(`Originalcode von ${objs.length} Objekten wiederhergestellt`);
 }
 
