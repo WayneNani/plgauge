@@ -20,7 +20,7 @@ function expected(): Map<string, string> {
   for (const line of readFileSync(`${dir}/expected.tsv`, 'utf8').split('\n')) {
     if (!line || line.startsWith('#')) continue;
     const f = line.split('\t');
-    m.set(`${f[0]}|${f[1]}|${f[2].replaceAll('\\n', '\n')}|${f[3]}`, f[4]);
+    m.set(`${f[0]}|${f[1]}|${f[2].replaceAll('\\n', '\n')}|${f[3].replaceAll('\\n', '\n')}`, f[4]);
   }
   return m;
 }
@@ -34,7 +34,7 @@ function check(results: Result[]) {
     const w = want.get(key);
     const got = r.status === 'NOT_COVERED' ? 'SURVIVED' : r.status; // no test reaches it: survives every run
     if (w === undefined) wrong.push(`unerwartet: ${key}`);
-    else if (got !== w) wrong.push(`${r.line} ${r.op} ${r.original} → ${r.mutated}: ${r.status}, erwartet ${w} (${r.detail ?? ''})`);
+    else if (!w.split('|').includes(got)) wrong.push(`${r.line} ${r.op} ${r.original} → ${r.mutated}: ${r.status}, erwartet ${w} (${r.detail ?? ''})`);
   }
   assert.deepEqual(wrong, []);
 }
@@ -63,7 +63,7 @@ for (const mode of ['naive', 'schema'] as const) {
       const w = want.get(key);
       const got = r.status === 'NOT_COVERED' ? 'SURVIVED' : r.status; // no test reaches it: survives every run
       if (w === undefined) wrong.push(`unerwartet: ${key}`);
-      else if (got !== w) wrong.push(`${r.line} ${r.op} ${r.original} → ${r.mutated}: ${r.status}, erwartet ${w} (${r.detail ?? ''})`);
+      else if (!w.split('|').includes(got)) wrong.push(`${r.line} ${r.op} ${r.original} → ${r.mutated}: ${r.status}, erwartet ${w} (${r.detail ?? ''})`);
       const side = r.sub === 'storniere' && r.original === "p_modus = 'final'" && r.mutated === 'TRUE';
       if (!!r.sideEffect !== side) wrong.push(`${r.line} ${r.mutated}: Nebenwirkung ${!!r.sideEffect}, erwartet ${side}`);
     }

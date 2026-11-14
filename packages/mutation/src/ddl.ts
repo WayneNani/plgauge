@@ -1,13 +1,15 @@
 /**
- * Database packages of the mutation runtime, unchanged from plmut:
+ * Database packages of the mutation runtime, from plmut:
  * - plmut_rt runs utPLSQL through ut_runner.run with the TeamCity reporter (test names
- *   are full paths) and detects commits of tests with an uncommitted marker row.
+ *   are full paths) and detects commits of tests with an uncommitted marker row. It has
+ *   invoker rights (unlike plmut): with definer rights roles are off, and tests that run
+ *   DDL with a role privilege (CREATE PROCEDURE from RESOURCE) fail with ORA-01031.
  * - plmut_ctl holds the active mutant in the application context PLMUT_CTX (it
  *   survives package state resets), records reached points per test (UT3_INFO) and
  *   counts loop iterations for the loop guards.
  */
 
-export const RT_SPEC = "CREATE OR REPLACE PACKAGE plmut_rt AS\n  PROCEDURE run_tests(p_paths VARCHAR2, p_out OUT CLOB);\nEND plmut_rt;";
+export const RT_SPEC = "CREATE OR REPLACE PACKAGE plmut_rt AUTHID CURRENT_USER AS\n  PROCEDURE run_tests(p_paths VARCHAR2, p_out OUT CLOB);\nEND plmut_rt;";
 
 export const RT_BODY = "CREATE OR REPLACE PACKAGE BODY plmut_rt AS\n  FUNCTION marker_committed(p_token VARCHAR2) RETURN PLS_INTEGER IS\n    PRAGMA AUTONOMOUS_TRANSACTION;\n    n PLS_INTEGER;\n  BEGIN\n    SELECT COUNT(*) INTO n FROM plmut_marker WHERE token = p_token;\n    IF n > 0 THEN\n      DELETE FROM plmut_marker WHERE token = p_token;\n    END IF;\n    COMMIT;\n    RETURN n;\n  END marker_committed;\n\n  PROCEDURE run_tests(p_paths VARCHAR2, p_out OUT CLOB) IS\n    l_paths    ut_varchar2_list := ut_varchar2_list();\n    l_reporter ut_teamcity_reporter := ut_teamcity_reporter();\n    l_line     VARCHAR2(32767);\n    l_status   INTEGER;\n    l_token    VARCHAR2(80) := RAWTOHEX(SYS_GUID());\n    l_commit   PLS_INTEGER;\n  BEGIN\n    FOR r IN (SELECT TRIM(REGEXP_SUBSTR(p_paths, '[^,]+', 1, LEVEL)) p FROM dual\n              CONNECT BY REGEXP_SUBSTR(p_paths, '[^,]+', 1, LEVEL) IS NOT NULL) LOOP\n      l_paths.EXTEND;\n      l_paths(l_paths.COUNT) := r.p;\n    END LOOP;\n    IF l_paths.COUNT = 0 THEN\n      l_paths := ut_varchar2_list(SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA'));\n    END IF;\n    INSERT INTO plmut_marker (token) VALUES (l_token);\n    ut_runner.run(l_paths, ut_reporters(l_reporter));\n    l_commit := marker_committed(l_token);\n    ROLLBACK;\n    DBMS_OUTPUT.ENABLE(NULL);\n    l_reporter.lines_to_dbms_output(0, 0);\n    DBMS_LOB.CREATETEMPORARY(p_out, TRUE);\n    IF l_commit > 0 THEN\n      l_line := '##plmut[committed]' || CHR(10);\n      DBMS_LOB.WRITEAPPEND(p_out, LENGTH(l_line), l_line);\n    END IF;\n    LOOP\n      DBMS_OUTPUT.GET_LINE(l_line, l_status);\n      EXIT WHEN l_status = 1;\n      IF l_line IS NOT NULL THEN\n        DBMS_LOB.WRITEAPPEND(p_out, LENGTH(l_line), l_line);\n      END IF;\n      DBMS_LOB.WRITEAPPEND(p_out, 1, CHR(10));\n    END LOOP;\n  END run_tests;\nEND plmut_rt;";
 

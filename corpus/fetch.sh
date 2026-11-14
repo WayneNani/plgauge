@@ -20,3 +20,5 @@ fetch utplsql-3.2.2      https://github.com/utPLSQL/utPLSQL.git                 
 fetch oos-utils          https://github.com/OraOpenSource/oos-utils.git          b6217292   # MIT
 fetch plex               https://github.com/ogobrecht/plex.git                   3b13e44d   # MIT
 fetch oracle-db-examples https://github.com/oracle-samples/oracle-db-examples.git f02e504e   # UPL / per directory
+# added for A10 (SQL operators): SQL-heavy code with utPLSQL tests
+fetch plscope-utils      https://github.com/PhilippSalvisberg/plscope-utils.git  dc22daf    # Apache 2.0

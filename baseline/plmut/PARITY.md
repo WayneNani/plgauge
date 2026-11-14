@@ -63,3 +63,12 @@ gleich). Seitdem verfolgt es den zuletzt geprüften Stand (`npm run parity:cover
 | --- | --- | --- |
 | A6: einfache CASE-Ausdrücke gemessen (Sonde vor jedem Ergebnis) | 13 | Korpus-Kompiliertest: 330 von 332 Bodies, die im Original kompilieren, kompilieren instrumentiert; die 2 übrigen sind Namenskonflikte zwischen Beispielskripten (ORA-00955) |
 | Anweisungen mit Spalten in der Sondenkarte | alle (beim Vergleich ausgeblendet) | – |
+
+### Mutation seit A10 (SQL-Operatoren)
+
+| Änderung | Prüfung |
+| --- | --- |
+| Neue Operatoren der Stufe 2 (SEL, JOI, ORD, UNI, AGR, SUB, WHR, COL) | `npm run parity:finder` vergleicht nur Stufe 1 mit dem Java-Finder, unverändert |
+| SQL-Mutanten beider Stufen werden im Schema durch Verdoppeln der PL/SQL-Anweisung geschaltet statt per `CASE` im SQL; SQL in Cursor-Deklarationen läuft einzeln kompiliert | Beispielprojekt: alle 81 Urteile wie von Hand erwartet, in beiden Modi; Gegenprobe mit der Coverage ohne Widerspruch |
+| `PLSCOPE_SETTINGS` bleibt beim Neukompilieren erhalten; `plmut_rt` mit Invoker-Rechten | plscope-utils: 35 von 36 Tests laufen unter dem Werkzeug wie direkt (vorher 26) |
+

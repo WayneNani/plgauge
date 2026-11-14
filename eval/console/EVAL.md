@@ -66,7 +66,10 @@ Der erste echte Fremdcode hat vier Schwächen gezeigt, alle behoben und mit Test
 
 ## Entscheidung über Stufe 2 (A10)
 
-Zurückgestellt. Gründe:
+Nachtrag: Stufe 2 ist inzwischen umgesetzt und an SQL-lastigem Code ausgewertet, siehe
+[`eval/plscope-utils/EVAL.md`](../plscope-utils/EVAL.md). In console erzeugt sie 6 Mutanten.
+
+Ursprünglich zurückgestellt. Gründe:
 
 1. Nur 47 der 1 630 Mutanten liegen in SQL (2,9 %), davon überleben 7. SQL-Operatoren (DISTINCT, Joins, GROUP BY,
    Spalten tauschen) hätten in console kaum Angriffsfläche.

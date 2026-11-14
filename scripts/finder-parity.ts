@@ -7,7 +7,7 @@
 import { readFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { join } from 'node:path';
-import { findPoints } from '../packages/mutation/src/find.ts';
+import { findPoints, STAGE1_OPERATORS } from '../packages/mutation/src/find.ts';
 
 const ref = process.argv[2] || 'baseline/plmut/finder-corpus.json.gz';
 const filter = process.argv[3] ?? '';
@@ -18,7 +18,9 @@ type P = { unit: number; op: string; kind: string; sub: string; ctx: string; cat
 type F = { path: string; errors: string[]; units: { type: string; name: string; start: number; end: number; decl: number }[]; points: P[]; loops: { unit: number; at: number }[]; skipped: number };
 const java = (JSON.parse((ref.endsWith('.gz') ? gunzipSync(raw) : raw).toString('utf8')).files as F[]).filter((f) => f.path.includes(filter));
 const t0 = Date.now();
-const ts = findPoints(java.map((f) => join(root, f.path)));
+// the Java finder knows only stage 1
+const stage1 = new Set(STAGE1_OPERATORS);
+const ts = findPoints(java.map((f) => join(root, f.path))).map((f) => ({ ...f, points: f.points.filter((p) => stage1.has(p.op)) }));
 const ms = Date.now() - t0;
 /** Java left methods of type bodies and standalone subprograms unnamed, and restarted names below them. */
 const subImproved = (j: string, t: string) => j === '' || t.endsWith('.' + j);

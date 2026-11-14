@@ -21,7 +21,7 @@ Umsetzungsplan: Claude Doc „PL/SQL-Testwerkzeuge – Umsetzungsplan für das g
 | `packages/report` | HTML-Bericht |
 | `packages/cli` | Befehl `pltest` |
 | `examples/` | `order_pricing` (Coverage-Demo), `shop_pricing` (Mutation, mit `expected.tsv`) |
-| `eval/` | Konfiguration für pljson (Auswertung auf fremdem Code) |
+| `eval/` | Auswertungen auf fremdem Code: pljson, console (A11), plscope-utils (A10) |
 | `baseline/` | Ergebnisse der alten Fassungen für Paritätsprüfungen |
 
 ## Voraussetzungen und Befehle
@@ -58,7 +58,9 @@ darin, erzeugt aber nie falsche. Abgleich mit den alten Fassungen: `baseline/plm
 Alle Phasen des Umsetzungsplans sind abgeschlossen, dazu aus der Ausbaustufe: CI-Formate und Schwellen mit Vorlagen
 (A1, A2), größerer Korpus mit 898 Bodies (A5), Compound-Trigger, einfache CASE-Ausdrücke und FOR-Filter (A6),
 Diff-Modus (A7), Treffer aus Scheduler-Jobs (A8), unzuverlässige Tests in der Coverage (A9) und mehrere Schemas (A4).
-Zurückgestellt: die Versionsmatrix mit 19c (A3). Die Auswertung an echtem Code steht in `eval/console/EVAL.md` (A11).
+Dazu SQL-Operatoren als Stufe 2 der Mutation (A10: DISTINCT, Joins, ORDER BY, Mengenoperatoren, Aggregate,
+Unterabfragen, WHERE, DML-Spalten). Zurückgestellt: die Versionsmatrix mit 19c (A3). Auswertungen an echtem Code:
+`eval/console/EVAL.md` (A11) und `eval/plscope-utils/EVAL.md` (A10).
 
 ## Wiederherstellungs-Journal
 

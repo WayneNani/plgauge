@@ -17,7 +17,8 @@ export interface Unit {
 export interface Point {
   unit: number;
   op: string;
-  kind: 'bool' | 'value' | 'stmt' | 'insert' | 'guard';
+  /** clause: a structural SQL change (DISTINCT, join type, ORDER BY …) that no expression switch can express. */
+  kind: 'bool' | 'value' | 'stmt' | 'insert' | 'guard' | 'clause';
   sub: string;
   ctx: 'plsql' | 'sql';
   cat: string;
@@ -25,6 +26,13 @@ export interface Point {
   end: number;
   orig: string;
   mutants: string[];
+  /**
+   * SQL points inside a PL/SQL statement (static SQL, FORALL, OPEN FOR): the statement's
+   * byte range. The schema rewriter switches such points by duplicating the statement, so
+   * the original SQL keeps its execution plan; SQL points without it (cursor declarations,
+   * cursor FOR loops) run with the oracle rewriter.
+   */
+  scope?: [number, number];
 }
 
 /** Position right after a LOOP keyword, where the schema puts a loop guard. */

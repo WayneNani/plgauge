@@ -107,14 +107,16 @@ export async function loadObject(conn: oracledb.Connection, owner: string, name:
   );
   const lob = (pp.outBinds as { x: oracledb.Lob | null }).x;
   const processed = lob ? String(await lob.getData()) : original;
-  const st = await conn.execute<[number, string, string, string]>(
-    `select plsql_optimize_level, plsql_code_type, plsql_ccflags, nls_length_semantics
+  const st = await conn.execute<[number, string, string, string, string]>(
+    `select plsql_optimize_level, plsql_code_type, plsql_ccflags, nls_length_semantics, plscope_settings
        from all_plsql_object_settings where owner = :o and name = :n and type = :t`, { o: owner, n: name, t: type },
   );
   const s = st.rows?.[0];
   return {
     owner, name, type, original, processed,
-    settings: s ? { plsql_optimize_level: String(s[0]), plsql_code_type: s[1], plsql_ccflags: s[2] ?? '', nls_length_semantics: s[3] } : {},
+    settings: s
+      ? { plsql_optimize_level: String(s[0]), plsql_code_type: s[1], plsql_ccflags: s[2] ?? '', nls_length_semantics: s[3], plscope_settings: s[4] ?? '' }
+      : {},
   };
 }
 
@@ -140,6 +142,8 @@ async function compileHere(conn: oracledb.Connection, obj: SourceObject, source:
   if (st.plsql_code_type) await conn.execute(`alter session set plsql_code_type = '${st.plsql_code_type.replace(/'/g, '')}'`);
   await conn.execute(`alter session set plsql_ccflags = '${(st.plsql_ccflags ?? '').replace(/'/g, "''")}'`);
   if (st.nls_length_semantics) await conn.execute(`alter session set nls_length_semantics = ${st.nls_length_semantics === 'CHAR' ? 'CHAR' : 'BYTE'}`);
+  // PL/Scope data of the unit stays as it was (code that inspects PL/Scope, e.g. plscope-utils)
+  if (st.plscope_settings) await conn.execute(`alter session set plscope_settings = '${st.plscope_settings.replace(/'/g, '')}'`);
   try {
     await conn.execute(`create or replace ${source.replace(/\s*$/, '')}`);
   } catch (e) {

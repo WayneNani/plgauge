@@ -138,3 +138,63 @@ END;
   assert.deepEqual(pts.sort(), ['AOR name.inner i * 2', 'RET name', 'RET name.inner', 'RET solo'].sort());
   assert.deepEqual(files[0].units.map((u) => `${u.type} ${u.name}`), ['PROCEDURE solo', 'TYPE BODY t_obj']);
 });
+
+test('finder: SQL operators (stage 2) and their equivalence heuristics', () => {
+  const src = `CREATE OR REPLACE PACKAGE BODY s AS
+  PROCEDURE p IS
+    CURSOR c IS SELECT DISTINCT a FROM t WHERE x NOT IN (SELECT DISTINCT y FROM u ORDER BY y) ORDER BY a DESC NULLS LAST, b;
+  BEGIN
+    SELECT COUNT(DISTINCT a), MAX(b) OVER (ORDER BY d) INTO n, m FROM t LEFT OUTER JOIN u ON t.id = u.id CROSS JOIN w
+     WHERE NOT EXISTS (SELECT 1 FROM v WHERE v.z = t.z(+)) ORDER BY 1;
+    UPDATE t SET a = 1, b = NULL WHERE 1 = 1;
+    SELECT 1 INTO n FROM t JOIN u x ON x.id = t.id WHERE x.k = 1;
+    SELECT 1 INTO n FROM t JOIN u ON u.id = t.id;
+    INSERT INTO t (a, b) VALUES (1, SYSDATE);
+    FOR r IN (SELECT COUNT(e) FROM t UNION SELECT SUM(f) FROM u INTERSECT SELECT 1 FROM w FETCH FIRST 3 ROWS ONLY) LOOP NULL; END LOOP;
+  END;
+END s;
+/
+`;
+  const sql = ['SEL', 'JOI', 'ORD', 'UNI', 'AGR', 'SUB', 'WHR', 'COL'];
+  assert.deepEqual(mutants(src, sql), [
+    'AGR: COUNT(DISTINCT a) → COUNT(a)',
+    'AGR: COUNT(e) → COUNT(*)',
+    'AGR: MAX(b) OVER (ORDER BY d) → MIN(b) OVER (ORDER BY d)',
+    'AGR: SUM(f) → AVG(f)',
+    'COL: (a, b) VALUES (1, SYSDATE) → (a) VALUES (1)',
+    'COL: (a, b) VALUES (1, SYSDATE) → (b) VALUES (SYSDATE)',
+    'COL: a = 1, b = NULL → a = 1',
+    'COL: a = 1, b = NULL → b = NULL',
+    'JOI: (+) → ',
+    'JOI: JOIN → LEFT JOIN',
+    'JOI: LEFT OUTER JOIN → JOIN',
+    'ORD: a DESC NULLS LAST, b → a ASC NULLS LAST, b DESC',
+    'ORD: d → d DESC',
+    'SEL: DISTINCT → ',
+    'SEL: FETCH FIRST 3 ROWS ONLY → ',
+    'SUB: NOT EXISTS (SELECT 1 FROM v WHERE v.z = t.z(+)) → EXISTS (SELECT 1 FROM v WHERE v.z = t.z(+))',
+    'SUB: x NOT IN (SELECT DISTINCT y FROM u ORDER BY y) → x IN (SELECT DISTINCT y FROM u ORDER BY y)',
+    'UNI: INTERSECT → MINUS',
+    'UNI: UNION → UNION ALL',
+    'WHR: NOT EXISTS (SELECT 1 FROM v WHERE v.z = t.z(+)) → TRUE',
+    'WHR: v.z = t.z(+) → TRUE',
+    'WHR: x NOT IN (SELECT DISTINCT y FROM u ORDER BY y) → TRUE',
+    'WHR: x.k = 1 → TRUE',
+  ]);
+  // clause points in PL/SQL statements carry the statement, cursors and loops do not
+  const ps = points(src)[0].points.filter((p) => p.kind === 'clause');
+  assert.deepEqual([...new Set(ps.map((p) => `${p.op}${p.scope ? '*' : ''}`))].sort(), ['COL*', 'JOI*', 'ORD', 'ORD*', 'SEL', 'UNI']);
+});
+
+test('finder: SQL operators leave out what Oracle rejects (bulk bind in FORALL, recursive WITH)', () => {
+  const src = `CREATE OR REPLACE PROCEDURE r(ids sys.odcinumberlist) IS
+  BEGIN
+    FORALL i IN 1 .. ids.count DELETE FROM t WHERE id = ids(i);
+    FORALL j IN 1 .. ids.count DELETE FROM t WHERE id = ids(j) AND k > 0;
+    FOR x IN (WITH h (n) AS (SELECT 1 FROM dual UNION ALL SELECT n + 1 FROM h WHERE n < 3) SELECT n FROM h) LOOP NULL; END LOOP;
+    FOR y IN (WITH g AS (SELECT 1 a FROM dual UNION ALL SELECT 2 FROM dual) SELECT a FROM g) LOOP NULL; END LOOP;
+  END;
+/
+`;
+  assert.deepEqual(mutants(src, ['WHR', 'UNI']), ['UNI: UNION ALL → UNION', 'WHR: n < 3 → TRUE']);
+});

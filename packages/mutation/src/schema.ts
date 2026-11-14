@@ -2,13 +2,17 @@
  * Schema rewriter, ported from plmut (internal/mutant/schema.go). All mutants of a
  * unit are compiled into one body; every point becomes a switch on the active ID:
  *
- *   bool (PL/SQL), value: (CASE CASE A WHEN -1 THEN plmut_ctl.hit(b, n) ELSE A END
+ *   bool, value (PL/SQL): (CASE CASE A WHEN -1 THEN plmut_ctl.hit(b, n) ELSE A END
  *                          WHEN b THEN (m1) … ELSE (orig) END)
- *   bool (SQL):           each branch as CASE WHEN (x) THEN 1 WHEN NOT (x) THEN 0 END,
- *                         compared with 1, which keeps three-valued logic intact
  *   stmt:                 IF A = -1 THEN plmut_ctl.reach(b, 1); END IF; IF A <> b THEN stmt END IF;
  *   insert:               IF A = -1 THEN reach; END IF; IF A = id THEN <variant> END IF; …
  *   loop guard:           IF A <> 0 THEN plmut_ctl.tick(loop); END IF;
+ *   SQL (any kind):       the enclosing PL/SQL statement, once per variant:
+ *                         IF A = -1 THEN reach; END IF; IF A = id THEN <stmt'> ELSIF … ELSE stmt END IF;
+ *                         A switch inside the SQL would hide predicates from the optimizer
+ *                         (a CASE around a join condition turns a hash join into nested
+ *                         loops); the duplicated statement keeps the original plan. SQL in
+ *                         cursor declarations and cursor FOR loops is not switched.
  *
  * A is the package constant plmut$a in package bodies (read once per instantiation,
  * so the worker resets package state when it switches mutants), plmut_ctl.active()
@@ -46,6 +50,8 @@ interface Node {
   kids: Node[];
   loop: number;
   order: number;
+  /** A statement duplicated for the clause points in it (their mutants are in ms). */
+  dup?: { points: Point[] };
 }
 
 /**
@@ -74,9 +80,29 @@ export function buildSchema(ms: Mutant[], dropped: Set<number> = new Set(), naiv
     };
     const nodes: Node[] = [];
     let order = 0;
+    const dups = new Map<string, Node>();
     for (const [p, pm] of points) {
+      if (p.scope && switchable(p) && !naive.has(p)) {
+        // one node per statement; it comes before an SBR point with the same range
+        const key = p.scope.join(':');
+        let g = dups.get(key);
+        if (!g) {
+          const gp: Point = { ...p, op: '', kind: 'clause', ctx: 'plsql', start: p.scope[0], end: p.scope[1], orig: '', mutants: [] };
+          g = { p: gp, ms: [], kids: [], loop: 0, order: -1 - dups.size, dup: { points: [] } };
+          dups.set(key, g);
+          nodes.push(g);
+        }
+        g.dup!.points.push(p);
+        for (const m of pm) {
+          if (!dropped.has(m.id)) {
+            g.ms.push(m);
+            su.mutants.push(m);
+          }
+        }
+        continue;
+      }
       const n: Node = { p, ms: [], kids: [], loop: 0, order: order++ };
-      if (!naive.has(p)) {
+      if (!naive.has(p) && switchable(p)) {
         for (const m of pm) {
           if (!dropped.has(m.id)) {
             n.ms.push(m);
@@ -160,6 +186,32 @@ class Renderer {
     this.su.regions.push({ start, end: this.b.length, point, mutantId });
   }
 
+  /** Clause points: the statement once per variant, the original (with its own switches) last. */
+  dup(n: Node) {
+    const a = this.active;
+    const p = n.p;
+    if (identChar(this.b.slice(-1))) this.write(' ');
+    const start = this.b.length;
+    this.write(`IF ${a} = -1 THEN`);
+    for (const q of n.dup!.points) {
+      const ids = n.ms.filter((m) => m.point === q).map((m) => m.id);
+      if (ids.length) this.write(` ${this.ctl}.reach(${ids[0]}, ${ids[ids.length - 1] - ids[0] + 1});`);
+    }
+    this.write(' END IF;');
+    let first = true;
+    for (const m of [...n.ms].sort((x, y) => x.id - y.id)) {
+      this.write(` ${first ? 'IF' : 'ELSIF'} ${a} = ${m.id} THEN `);
+      first = false;
+      const vs = this.b.length;
+      this.write(this.src.subarray(p.start, m.point.start).toString('utf8') + m.mutated + this.src.subarray(m.point.end, p.end).toString('utf8'));
+      this.region(vs, m.point, m.id);
+    }
+    this.write(' ELSE ');
+    this.orig(n);
+    this.write(' END IF;');
+    this.region(start, n.dup!.points[0], 0);
+  }
+
   point(n: Node) {
     const a = this.active;
     if (n.loop > 0) {
@@ -170,6 +222,10 @@ class Renderer {
     }
     if (!n.ms.length) {
       this.orig(n);
+      return;
+    }
+    if (n.dup) {
+      this.dup(n);
       return;
     }
     const p = n.p;
@@ -195,21 +251,6 @@ class Renderer {
           this.region(vs, p, m.id);
           this.write(' END IF;');
         }
-        break;
-      }
-      case p.kind === 'bool' && p.ctx === 'sql': {
-        this.write(`(CASE CASE ${a} WHEN -1 THEN ${this.ctl}.hit(${base}, ${count}) ELSE ${a} END`);
-        for (const m of n.ms) {
-          this.write(` WHEN ${m.id} THEN `);
-          const vs = this.b.length;
-          this.write(`CASE WHEN (${m.mutated}) THEN 1 WHEN NOT (${m.mutated}) THEN 0 END`);
-          this.region(vs, p, m.id);
-        }
-        this.write(' ELSE CASE WHEN (');
-        this.orig(n);
-        this.write(') THEN 1 WHEN NOT (');
-        this.orig(n);
-        this.write(') THEN 0 END END = 1)');
         break;
       }
       default: {
@@ -238,8 +279,11 @@ export function switchable(p: Point): boolean {
       return p.mutants.length === 1 && p.mutants[0] === 'NULL;';
     case 'bool':
     case 'value':
+      return p.ctx !== 'sql' || !!p.scope;
     case 'insert':
       return true;
+    case 'clause':
+      return !!p.scope;
   }
   return false;
 }
