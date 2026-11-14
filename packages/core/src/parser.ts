@@ -109,8 +109,13 @@ const SQL_CLAUSE_END = new Set([
   'WITH', 'LIMIT', 'DELETE', 'UPDATE', 'INSERT',
 ]);
 
-export function parse(src: string): ParsedSource {
+/**
+ * Parses a file. With `views`, CREATE VIEW statements are units too (op VIEW, one query
+ * node as kid, `at` = the AS token); the unit ends before the terminating semicolon.
+ */
+export function parse(src: string, opts: { views?: boolean } = {}): ParsedSource {
   const p = new Parser(src, true);
+  p.views = !!opts.views;
   p.file();
   return { src, tokens: p.t, units: p.units, errors: p.errors };
 }
@@ -130,6 +135,7 @@ class Parser {
   lim: number;
   units: Node[] = [];
   errors: ParseErrorEntry[] = [];
+  views = false;
   private match: Int32Array;
 
   constructor(private src: string, tolerant = false) {
@@ -284,8 +290,9 @@ class Parser {
     if (this.upAt(k) !== 'CREATE') return false;
     k++;
     if (this.upAt(k) === 'OR' && this.upAt(k + 1) === 'REPLACE') k += 2;
-    while (['EDITIONABLE', 'NONEDITIONABLE', 'EDITIONING'].includes(this.upAt(k))) k++;
+    while (['EDITIONABLE', 'NONEDITIONABLE', 'EDITIONING', 'FORCE', 'NO'].includes(this.upAt(k))) k++;
     const u = this.upAt(k);
+    if (u === 'VIEW') return this.views;
     if (u === 'PACKAGE' || u === 'TYPE') return this.upAt(k + 1) === 'BODY';
     return u === 'PROCEDURE' || u === 'FUNCTION' || u === 'TRIGGER';
   }
@@ -294,10 +301,11 @@ class Parser {
 
   unitAt(): Node {
     const a = this.i;
-    while (this.at('CREATE', 'OR', 'REPLACE', 'EDITIONABLE', 'NONEDITIONABLE', 'EDITIONING')) this.i++;
+    while (this.at('CREATE', 'OR', 'REPLACE', 'EDITIONABLE', 'NONEDITIONABLE', 'EDITIONING', 'FORCE', 'NO')) this.i++;
     const kw = this.up();
     let type: string;
     let n: Node;
+    if (kw === 'VIEW') return this.view(a);
     if (kw === 'PACKAGE' || kw === 'TYPE') {
       type = kw === 'PACKAGE' ? 'PACKAGE BODY' : 'TYPE BODY';
       this.i++;
@@ -349,7 +357,7 @@ class Parser {
   /** The unit name as written: the tokens before IS/AS/(/RETURN/... (plmut's rule). */
   private unitName(): string {
     const skip = new Set(['CREATE', 'OR', 'REPLACE', 'EDITIONABLE', 'NONEDITIONABLE', 'PACKAGE', 'BODY', 'PROCEDURE', 'FUNCTION', 'TYPE', 'TRIGGER', 'IF', 'NOT', 'EXISTS']);
-    const stop = new Set(['IS', 'AS', '(', 'RETURN', 'AUTHID', 'BEFORE', 'AFTER', 'INSTEAD', 'FOR', 'SHARING', 'ACCESSIBLE', 'DEFAULT']);
+    const stop = new Set(['IS', 'AS', '(', 'RETURN', 'AUTHID', 'BEFORE', 'AFTER', 'INSTEAD', 'FOR', 'SHARING', 'ACCESSIBLE', 'DEFAULT', 'BEQUEATH', 'OF']);
     let k = this.i;
     while (skip.has(this.upAt(k))) k++;
     let name = '';
@@ -359,6 +367,45 @@ class Parser {
       k++;
     }
     return name;
+  }
+
+  /**
+   * CREATE VIEW name [(columns)] [options] AS query [WITH READ ONLY | WITH CHECK OPTION
+   * [CONSTRAINT c]] ; — the query ends at a semicolon of depth 0, a slash line or the
+   * next CREATE at the start of a line.
+   */
+  private view(a: number): Node {
+    this.i++;
+    const name = this.unitName();
+    let as = -1;
+    for (let k = this.i; k < this.t.length; k++) {
+      if (this.isOp(k, '(')) {
+        k = this.close(k);
+        continue;
+      }
+      if (this.isOp(k, ';')) break;
+      if (this.isWord(k, 'AS') && (['SELECT', 'WITH'].includes(this.upAt(k + 1)) || this.isOp(k + 1, '('))) {
+        as = k;
+        break;
+      }
+    }
+    if (as < 0) this.fail('AS der View nicht gefunden', a);
+    let end = as + 1;
+    while (end < this.t.length && !this.isOp(end, ';') && !this.isSlash(end) && !(this.t[end].up === 'CREATE' && this.t[end].kind === 'ident' && this.firstOnLine(end))) {
+      end = this.isOp(end, '(') ? this.close(end) + 1 : end + 1;
+    }
+    // trailing view constraints are not part of the query
+    let qb = end;
+    const w = (k: number, ...ws: string[]) => k > as && this.isWord(k, ...ws);
+    if (w(qb - 3, 'WITH') && w(qb - 2, 'READ') && w(qb - 1, 'ONLY')) qb -= 3;
+    else if (w(qb - 3, 'WITH') && w(qb - 2, 'CHECK') && w(qb - 1, 'OPTION')) qb -= 3;
+    else if (w(qb - 5, 'WITH') && w(qb - 4, 'CHECK') && w(qb - 3, 'OPTION') && w(qb - 2, 'CONSTRAINT')) qb -= 5;
+    if (qb <= as + 1) this.fail('Abfrage der View fehlt', as);
+    const q = this.query(as + 1, qb);
+    this.i = end;
+    const n = node('unit', a, end, [q], { op: 'VIEW', name, at: as });
+    if (this.isOp(this.i, ';')) this.i++;
+    return n;
   }
 
   private trigger(a: number, name: string): Node {

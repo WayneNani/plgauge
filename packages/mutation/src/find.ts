@@ -121,6 +121,10 @@ interface Env {
   scope?: [number, number];
   /** Index variable of the enclosing FORALL (upper case). */
   forall?: string;
+  /** Inside a view's query. */
+  view?: boolean;
+  /** In a select list (of the innermost query): a switch there cannot change the plan. */
+  proj?: boolean;
 }
 
 /** Statements the schema rewriter may duplicate to switch a clause point. */
@@ -162,7 +166,7 @@ class Finder {
   run(): Omit<SourceFile, 'src'> {
     let parsed;
     try {
-      parsed = parse(this.src);
+      parsed = parse(this.src, { views: true });
     } catch (e) {
       return { path: this.path, errors: [(e as Error).message], units: [], points: [], loops: [], skipped: 0 };
     }
@@ -173,7 +177,14 @@ class Finder {
         type: u.op!, name: u.name!, start: this.sb(u.a), end: this.eb(u.b - 1),
         decl: u.op === 'PACKAGE BODY' && u.at! >= 0 ? this.eb(u.at!) : -1,
       });
-      const env: Env = { sub: u.op === 'PROCEDURE' || u.op === 'FUNCTION' ? '' : '', ctx: 'plsql', guard: false };
+      const env: Env = { sub: '', ctx: 'plsql', guard: false };
+      // a view's query is its own scope: the schema switches it with one UNION ALL branch per variant
+      if (u.op === 'VIEW') {
+        env.view = true;
+        const ins = this.inlineHints(u);
+        if (ins.length) this.units[this.unit].inserts = ins;
+        this.units[this.unit].main = this.blockRange(u.kids[0]);
+      }
       for (const k of u.kids) this.walk(k, null, env);
     }
     return {
@@ -209,6 +220,7 @@ class Finder {
     const p: Point = { unit: this.unit, op, kind, sub: env.sub, ctx, cat, start: this.sb(a), end: this.eb(last), orig, mutants };
     // SQL inside a PL/SQL statement: the schema switches it by duplicating the statement
     if ((kind === 'clause' || ctx === 'sql') && env.scope) p.scope = env.scope;
+    if (env.view && env.proj && ctx === 'sql' && (kind === 'bool' || kind === 'value')) p.inline = true;
     this.points.push(p);
   }
 
@@ -226,6 +238,11 @@ class Finder {
       }
       case 'cursor': case 'query': case 'sql':
         env = { ...env, ctx: 'sql' };
+        if (env.view && n.k === 'query') {
+          if (this.viewBlock(n, parent)) env.scope = this.blockRange(n);
+          // a recursive WITH element is no block, and it lies outside the main query's block
+          else if (env.scope && !(env.scope[0] <= this.sb(n.a) && this.eb(n.b - 1) <= env.scope[1])) env.scope = undefined;
+        }
         if (n.k !== 'cursor') this.sqlClauses(n, parent, env);
         break;
       case 'stmt':
@@ -277,8 +294,120 @@ class Finder {
         this.curAttribute(n, env);
         break;
     }
+    if (n.k === 'sql' || n.k === 'query') {
+      const lists = this.selectLists(n);
+      for (const k of n.kids) this.walk(k, n, { ...env, proj: lists.some(([a, b]) => a <= k.a && k.b <= b) });
+      this.whr(n, { ...env, proj: false });
+      return;
+    }
     for (const k of n.kids) this.walk(k, n, env);
-    if (n.k === 'sql' || n.k === 'query') this.whr(n, env);
+  }
+
+  /**
+   * Views: the query blocks the schema switches with UNION ALL — the view's query, WITH
+   * elements and inline views in FROM. Subqueries in conditions and select lists stay
+   * inside their block: wrapped they could no longer be unnested into joins.
+   */
+  private viewBlock(q: Node, parent: Node | null): boolean {
+    if (!parent) return true;
+    if (!['SELECT', 'WITH'].includes(this.t[q.a].up) || this.t[q.a - 1]?.text !== '(') return false;
+    // a WITH element with a column list may be recursive: anchor UNION ALL recursive member
+    // must stay its top level (ORA-32040)
+    if (this.t[q.a - 2]?.up === 'AS' && this.t[q.a - 3]?.text === ')') return false;
+    return ['FROM', 'JOIN', ',', 'AS'].includes(this.t[q.a - 2]?.up ?? '');
+  }
+
+  /**
+   * Views: INLINE hints for the WITH elements the view references once (see Unit.inserts).
+   * An element with a column list may be recursive and is never inlined; a hint of the
+   * author's own (INLINE, MATERIALIZE) wins.
+   */
+  private inlineHints(u: Node): { at: number; text: string; block: number }[] {
+    const out: { at: number; text: string; block: number }[] = [];
+    for (let k = u.a; k < u.b; k++) {
+      if (this.t[k].up !== 'WITH' || this.t[k].kind !== 'ident') continue;
+      // elements: name AS ( query ) [, …]
+      let e = k + 1;
+      while (this.t[e]?.kind === 'ident') {
+        const name = this.t[e].up;
+        const cols = this.t[e + 1]?.text === '(';
+        const as = cols ? this.close(e + 1) + 1 : e + 1;
+        if (this.t[as]?.up !== 'AS' || this.t[as + 1]?.text !== '(') break;
+        const open = as + 1;
+        const close = this.close(open);
+        const sel = open + 1;
+        let refs = 0;
+        for (let j = close + 1; j < u.b; j++) {
+          // d in FROM d, not d.x (a column of d) or f(…)
+          if (this.t[j].up === name && this.t[j].kind === 'ident' && this.t[j - 1]?.text !== '.' && !['(', '.'].includes(this.t[j + 1]?.text)) refs++;
+        }
+        if (!cols && refs === 1 && this.t[sel].up === 'SELECT') {
+          const after = this.src.slice(this.t[sel].end, this.t[sel + 1]?.start ?? this.t[sel].end);
+          const hint = /^\s*(\/\*\+|--\+)/.exec(after);
+          if (!/\b(INLINE|MATERIALIZE)\b/i.test(after)) {
+            if (!hint) out.push({ at: this.eb(sel), text: ' /*+ INLINE */', block: this.sb(sel) });
+            else if (hint[1] === '/*+') out.push({ at: this.byteAt[this.t[sel].end + hint[0].length], text: ' INLINE', block: this.sb(sel) });
+          }
+        }
+        // SEARCH … SET … and CYCLE … of a recursive element come before the comma
+        const element = (c: number) => {
+          if (this.t[c + 1]?.kind !== 'ident') return false;
+          const a = this.t[c + 2]?.text === '(' ? this.close(c + 2) + 1 : c + 2;
+          return this.t[a]?.up === 'AS' && this.t[a + 1]?.text === '(';
+        };
+        let j = close + 1;
+        while (j < u.b && !(this.t[j].text === ',' && element(j)) && this.t[j].up !== 'SELECT') j = this.t[j].text === '(' ? this.close(j) + 1 : j + 1;
+        if (this.t[j]?.text !== ',') break;
+        e = j + 1;
+      }
+    }
+    return out;
+  }
+
+  /** Byte range of a view block: without enclosing parentheses, a WITH query from its main SELECT on. */
+  private blockRange(q: Node): [number, number] {
+    let a = q.a;
+    let last = q.b - 1;
+    if (this.t[a].text === '(' && this.close(a) === last) {
+      a++;
+      last--;
+    }
+    if (this.t[a].up === 'WITH') {
+      for (let k = a + 1; k <= last; k++) {
+        if (this.t[k].text === '(') k = this.close(k);
+        else if (this.t[k].up === 'SELECT') {
+          a = k;
+          break;
+        }
+      }
+    }
+    return [this.sb(a), this.eb(last)];
+  }
+
+  /** Token ranges [a, b) of the select lists of a query (its own, not those of nested queries). */
+  private selectLists(q: Node): [number, number][] {
+    const nested = q.kids.filter((k) => k.k === 'query' || k.k === 'sql');
+    const out: [number, number][] = [];
+    let d = 0;
+    let start = -1;
+    for (let k = q.a; k < q.b; k++) {
+      const r = nested.find((x) => x.a <= k && k < x.b);
+      if (r) {
+        k = r.b - 1;
+        continue;
+      }
+      const x = this.t[k];
+      if (x.kind === 'op' && x.text === '(') d++;
+      else if (x.kind === 'op' && x.text === ')') d--;
+      else if (x.kind === 'ident' && d === (this.t[q.a].text === '(' ? 1 : 0)) {
+        if (x.up === 'SELECT') start = k + 1;
+        else if (start >= 0 && ['FROM', 'INTO', 'BULK'].includes(x.up)) {
+          out.push([start, k]);
+          start = -1;
+        }
+      }
+    }
+    return out;
   }
 
   private stmt(n: Node, env: Env) {

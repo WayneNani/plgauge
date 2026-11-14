@@ -59,7 +59,8 @@ Alle Phasen des Umsetzungsplans sind abgeschlossen, dazu aus der Ausbaustufe: CI
 (A1, A2), größerer Korpus mit 898 Bodies (A5), Compound-Trigger, einfache CASE-Ausdrücke und FOR-Filter (A6),
 Diff-Modus (A7), Treffer aus Scheduler-Jobs (A8), unzuverlässige Tests in der Coverage (A9) und mehrere Schemas (A4).
 Dazu SQL-Operatoren als Stufe 2 der Mutation (A10: DISTINCT, Joins, ORDER BY, Mengenoperatoren, Aggregate,
-Unterabfragen, WHERE, DML-Spalten). Zurückgestellt: die Versionsmatrix mit 19c (A3). Auswertungen an echtem Code:
+Unterabfragen, WHERE, DML-Spalten), auch in Views (`CREATE VIEW` wird mutiert, im Schema blockweise per
+`UNION ALL` geschaltet). Zurückgestellt: die Versionsmatrix mit 19c (A3). Auswertungen an echtem Code:
 `eval/console/EVAL.md` (A11) und `eval/plscope-utils/EVAL.md` (A10).
 
 ## Wiederherstellungs-Journal

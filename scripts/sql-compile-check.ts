@@ -1,5 +1,5 @@
 /**
- * Compile check for SQL mutants (stage 2 and stage-1 mutants inside SQL) on the public corpus: every unit whose
+ * Compile check for SQL mutants (stage 2 and stage-1 mutants inside SQL, views included) on the public corpus: every unit whose
  * original compiles gets each SQL mutant compiled on its own (oracle rewriter) and all of
  * them together as a schema (statement duplication, rounds as in a run). Reports how many
  * mutants do not compile, by operator, with samples.
@@ -22,7 +22,7 @@ const jsonOut = jsonAt >= 0 ? args.splice(jsonAt, 2)[1] : undefined;
 const [cfgPath, ...dirs] = args;
 const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'));
 const EXT = /\.(sql|pks|pkb|pkg|tps|tpb|typ|prc|fnc|trg|bdy|spc|plb|pls)$/i;
-const BODY = /^(PACKAGE BODY|TYPE BODY|PROCEDURE|FUNCTION|TRIGGER)$/;
+const BODY = /^(PACKAGE BODY|TYPE BODY|PROCEDURE|FUNCTION|TRIGGER|VIEW)$/;
 const UNIT = /^\s*create\s+(?:or\s+replace\s+)?(?:(?:editionable|noneditionable)\s+)?(package\s+body|type\s+body|package|type|procedure|function|trigger)\s+((?:"[^"]+"|[\w$#]+)(?:\s*\.\s*(?:"[^"]+"|[\w$#]+))?)/i;
 
 const walk = (d: string, out: string[] = []): string[] => {
@@ -41,12 +41,19 @@ const dictName = (n: string) => {
   const last = n.split('.').pop()!.trim();
   return /^".*"$/.test(last) ? last.replace(/"/g, '') : last.toUpperCase();
 };
-async function compile(type: string, name: string, text: string): Promise<{ line: number; col: number; text: string }[]> {
+async function compile(type: string, name: string, text: string, skip = 0): Promise<{ line: number; col: number; text: string }[]> {
+  const stmt = unqualified(text).replace(/\s*$/, '');
   try {
-    await conn.execute(unqualified(text).replace(/\s*$/, ''));
+    await conn.execute(stmt);
   } catch (e) {
     const msg = (e as Error).message;
-    if (!msg.includes('ORA-24344')) return [{ line: 0, col: 0, text: msg.split('\n')[0] }];
+    const off = (e as { offset?: number }).offset;
+    if (!msg.includes('ORA-24344')) {
+      // views are rejected at once: position from the server's offset (skip: the CREATE in front of the schema text)
+      if (typeof off !== 'number' || off < skip) return [{ line: 0, col: 0, text: msg.split('\n')[0] }];
+      const before = stmt.slice(skip, off);
+      return [{ line: before.split('\n').length, col: [...before.slice(before.lastIndexOf('\n') + 1)].length + 1, text: msg.split('\n')[0] }];
+    }
   }
   const r = await conn.execute<[number, number, string]>(
     `select line, position, text from user_errors where name = :n and type = :t and attribute = 'ERROR' order by sequence`,
@@ -100,12 +107,12 @@ for (const path of files) {
     for (let round = 1; round <= 20; round++) {
       res.schema.rounds++;
       const su = buildSchema(ums, dropped, naive)[0];
-      const errs = await compile(u.type, u.name, `CREATE OR REPLACE ${su.text}`);
+      const errs = await compile(u.type, u.name, `CREATE OR REPLACE ${su.text}`, 'CREATE OR REPLACE '.length);
       if (!errs.length) break;
       for (const e of errs) {
         const rg = e.line > 0 ? locate(su, e.line, e.col) : undefined;
         if (rg?.mutantId) dropped.add(rg.mutantId);
-        else if (rg) naive.add(rg.point);
+        else if (rg) for (const q of rg.points ?? [rg.point]) naive.add(q);
         else {
           res.schema.unassigned.push(`${path} ${u.name}: ${e.line}:${e.col} ${e.text}`);
           for (const m of ums) naive.add(m.point);

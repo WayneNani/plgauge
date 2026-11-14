@@ -109,6 +109,7 @@ danach jeder Mutant einzeln und alle zusammen als Schema übersetzt, mit Zuordnu
 | --- | --- | --- | --- | --- |
 | utPLSQL 3.2.2 (`source`, in eigenem Schema installiert), beide Stufen | 19 | 1 193 | 1 190 | 1 142 / 3 / 0 |
 | übriger Korpus (nur Stufe 2, nur Einheiten ohne fehlende Objekte) | 18 | 111 | 111 | 72 / 0 / 0 |
+| Views von plscope-utils ohne `plscope_col_usage`, beide Stufen | 6 | 1 007 | 1 007 | 748 / 0 / 0 |
 
 Die 3 Fehler gehören zu Stufe 1 und gab es schon vorher; im Lauf werden sie als nicht kompilierbar verworfen. Es sind
 `FALSE` für die Bedingung mit dem Bulk-Bind eines `FORALL` (PLS-00435) und zwei LCR-Vergleiche `(a) = (b)` auf
@@ -142,8 +143,66 @@ Geschäftslogik in statischem SQL hält, hat einen höheren Anteil. Dort lohnt S
   erreicht, als überlebt (in console 20 Mutanten einer Cursor-Deklaration).
 - **Zeitgrenze als Urteil:** Fällt ein Filter auf einer Dictionary-Abfrage weg, explodiert das Ergebnis. 2 SQL-Mutanten
   enden so; sie zählen wie in Stufe 1 als erkannt.
-- **Views** mutiert das Werkzeug nicht. In plscope-utils steckt viel SQL in Views, die getestet werden. Das ist ein
-  möglicher nächster Schritt.
+- **Views** mutiert das Werkzeug seit dem Nachtrag unten; dort stehen auch ihre eigenen Grenzen.
+
+## Nachtrag: Views
+
+In plscope-utils stehen mehr SQL-Zeilen in den 7 Views (1 411) als in den 7 Package Bodies (908). Seit dem Nachtrag
+mutiert das Werkzeug auch `CREATE VIEW`, mit beiden Stufen (Umschaltung: `packages/mutation/README.md`). Die Views
+kommen per Glob in `pltest.json` dazu.
+
+| | |
+| --- | --- |
+| Mutanten | 1 634 (504 in den Packages wie oben, 1 130 in den Views; 677 davon in Select-Listen, an Ort und Stelle geschaltet) |
+| Laufzeit | 611 s mit drei Workern, Baseline 1,4 s mit 35 Tests (wie oben: nur der PL/Scope-Modelltest fehlt) |
+| Schema | 2 Runden, 0 Mutanten verworfen; 382 Stellen einzeln kompiliert (Cursor-Deklarationen, Views über der Zweig-Grenze und die zwei Views unten) |
+
+| Teil | Mutanten | erkannt | überlebt | nicht erreicht | Score |
+| --- | --- | --- | --- | --- | --- |
+| Packages, PL/SQL | 274 | 187 | 65 | 22 | 68,2 % |
+| Packages, SQL | 230 | 127 | 103 | 0 | 55,2 % |
+| `plscope_identifiers` | 408 | 72 | 336 | 0 | 17,6 % |
+| `source_view` (Demo) | 12 | 9 | 3 | 0 | 75,0 % |
+| 5 Views ohne Test (`plscope_naming`, `_col_usage`, `_tab_usage`, `_statements`, `_ins_lineage`) | 710 | 0 | 0 | 710 | – |
+
+Die Packages haben dieselben Urteile wie ohne Views (68,2 % und 54,8 % oben, ein Mutant Unterschied). Kein Test fragt
+5 der 7 Views ab. Das zeigt der Aufzeichnungslauf, der auch in Views notiert, welcher Test welchen Block erreicht.
+`plscope_identifiers` prüfen 2 Tests direkt (der dritte ist ausgeschlossen, s. o.), dazu Tests von `dd_util`. Sie vergleichen nur wenige Spalten. Deshalb überleben dort 336
+Mutanten, die meisten in den Ausdrücken, aus denen die View Pfade, Namen und Ebenen berechnet.
+
+Die 13 überlebenden SQL-Mutanten (Stufe 2) in getesteten Views, vorläufig eingeordnet:
+
+| Klasse | Anzahl | Beispiel |
+| --- | --- | --- |
+| Fall fehlt | 12 | Filter `owner like coalesce(sys_context('PLSCOPE', 'OWNER'), user)` entfällt (kein zweites Schema im Test); Outer Join ohne Partnerzeile (3); `ORDER BY` in analytischen Funktionen, die nur kaputte Hierarchien reparieren (4); berechnete Spalten `count(…) over`, `max(line) over`, die kein Test vergleicht (2); kein Datensatz vor der Datumsgrenze in `source_view` |
+| äquivalent | 1 | `UNION ALL` → `UNION` zwischen PL/SQL- und SQL-Bezeichnern: die Zweige sind über `is_sql_stmt` disjunkt, die Zeilen über `usage_id` eindeutig |
+
+**Gegenprobe der Umschaltung:** In einem Lauf ohne die Zuordnung unten lief `plscope_identifiers` im Schema (259
+Mutanten geschaltet, 149 einzeln), in einem zweiten vollständig einzeln. Alle 408 Urteile stimmen überein (71 erkannt,
+337 überlebt).
+
+Was die Views am Werkzeug gezeigt haben:
+
+- **Zweige sind teuer, aber anders als gedacht.** Mit 116 `UNION ALL`-Zweigen brauchte `CREATE VIEW` für
+  `plscope_col_usage` Minuten. `EXPLAIN PLAN` zeigte: Das Planen selbst ist billig (0,4 s ohne, 0,8 s mit 10
+  Zweigen), teuer ist die Ausführung. Oracle materialisiert `WITH`-Klauseln, die die Kopien mehrfach referenzieren,
+  und zieht sie vor alle Zweige. Sie laufen also bei jeder Abfrage, auch für abgeschaltete Zweige (120 statt 13
+  `LOAD AS SELECT`). Abhilfe: `/*+ INLINE */` für `WITH`-Elemente, die das Original einmal referenziert (damit gleicht
+  der Plan ohne Zweige dem Original), und höchstens 20 Zweige pro View. Die übrigen Stellen laufen einzeln, aber nur
+  gegen die Tests, die ihren Block erreichen.
+- **Rekursive `WITH`-Elemente** lassen sich nicht einpacken (ORA-32040). Ihre Stellen laufen einzeln, ihre Testauswahl
+  kommt vom Hauptblock der View.
+- **Tests, die den Text einer View lesen,** sahen die Kopien. `test_get_view_source` liest `PLSCOPE_IDENTIFIERS` in eine
+  Variable (zu lang: ORA-06502), drei Lineage-Tests zählen die Spalten von `SOURCE_VIEW` doppelt. Ohne Gegenmaßnahme
+  fehlten diese 4 Tests allen Mutanten (Packages 49 % statt 68 %). Jetzt sucht der Lauf die View, an der es liegt, und
+  lässt sie im Original.
+
+Grenzen bei Views:
+
+- **Zweig-Grenze:** Views mit vielen Bedingungen über Dictionary-Views laufen großteils einzeln, die Laufzeit steigt.
+- **Views, die ihr eigener Code liest,** laufen ganz einzeln und mit allen Tests (hier 420 Mutanten).
+- **Kein Planvergleich:** Wie stark die Kopien eine View in einem fremden Projekt bremsen, misst das Werkzeug nicht.
+  Die Zeitgrenze aus der Baseline fängt nur grobe Fälle ab.
 
 ## Wiederholen
 

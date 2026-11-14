@@ -8,6 +8,17 @@
  *   survives package state resets), records reached points per test (UT3_INFO) and
  *   counts loop iterations for the loop guards.
  */
+import { createHash } from 'node:crypto';
+
+/**
+ * A context name is global in the database: one per schema, so that runs of several users
+ * in one database do not take each other's context away. PLMUT_CTX for a user called PLMUT
+ * (as before), else PLMUT_CTX_<hash of the schema>.
+ */
+export function contextName(schema: string): string {
+  if (schema.toUpperCase() === 'PLMUT') return 'PLMUT_CTX';
+  return `PLMUT_CTX_${createHash('sha256').update(schema.toUpperCase()).digest('hex').slice(0, 12).toUpperCase()}`;
+}
 
 export const RT_SPEC = "CREATE OR REPLACE PACKAGE plmut_rt AUTHID CURRENT_USER AS\n  PROCEDURE run_tests(p_paths VARCHAR2, p_out OUT CLOB);\nEND plmut_rt;";
 

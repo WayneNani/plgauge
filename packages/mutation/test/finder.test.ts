@@ -198,3 +198,60 @@ test('finder: SQL operators leave out what Oracle rejects (bulk bind in FORALL, 
 `;
   assert.deepEqual(mutants(src, ['WHR', 'UNI']), ['UNI: UNION ALL → UNION', 'WHR: n < 3 → TRUE']);
 });
+
+test('finder: views are units; blocks are the query, WITH elements and inline views; select lists switch in place', () => {
+  const src = `create or replace force editionable view v (a, b) as
+  with w as (select x, y from t where y > 0)
+  select x + 1 as a, (select max(z) from u where u.x = w.x) as b
+    from w
+    left join (select x from s where s.k = 1) s2 on s2.x = w.x
+   where exists (select 1 from r where r.x = w.x)
+  with read only;
+create table t2 (a number);
+create or replace view v2 as select a from t2 where a < 3
+/
+`;
+  const f = points(src, 'v.sql')[0];
+  assert.deepEqual(f.errors, []);
+  assert.deepEqual(f.units.map((u) => `${u.type} ${u.name}`), ['VIEW v', 'VIEW v2']);
+  const text = f.src.toString();
+  assert.ok(text.slice(f.units[0].start, f.units[0].end).endsWith('with read only'), 'the unit ends before the semicolon');
+  const block = (p: (typeof f.points)[number]) => text.slice(p.scope![0], p.scope![1]).split('\n')[0];
+  const got = expand([f]).map((m) => `${m.op} ${m.original} → ${m.mutated}${m.point.inline ? ' [inline]' : ''} @ ${block(m.point)}`);
+  const has = (s: string) => assert.ok(got.includes(s), `${s}\n${got.join('\n')}`);
+  has('ROR y > 0 → y >= 0 @ select x, y from t where y > 0');
+  has('AOR x + 1 → x - 1 [inline] @ select x + 1 as a, (select max(z) from u where u.x = w.x) as b');
+  // a scalar subquery in the select list is part of its block; its condition is not in a select list
+  has('AGR max(z) → MIN(z) [inline] @ select x + 1 as a, (select max(z) from u where u.x = w.x) as b');
+  has('ROR u.x = w.x → FALSE @ select x + 1 as a, (select max(z) from u where u.x = w.x) as b');
+  has('ROR s.k = 1 → FALSE @ select x from s where s.k = 1');
+  has('JOI left join → JOIN @ select x + 1 as a, (select max(z) from u where u.x = w.x) as b');
+  has('SUB exists (select 1 from r where r.x = w.x) → NOT exists (select 1 from r where r.x = w.x) @ select x + 1 as a, (select max(z) from u where u.x = w.x) as b');
+  has('ROR a < 3 → a <= 3 @ select a from t2 where a < 3');
+});
+
+test('finder: a recursive WITH element of a view is no block; its points are not switched', () => {
+  const src = `create view r as
+  with h (n) as (select 1 from dual union all select n + 1 from h where n < 3)
+  select n from h where n > 1;
+`;
+  const ms = expand(points(src, 'r.sql'));
+  const scoped = (o: string) => ms.filter((m) => m.original === o).every((m) => !!m.point.scope);
+  assert.ok(!scoped('n < 3') && !scoped('n + 1'), 'recursive element: oracle rewriter');
+  assert.ok(scoped('n > 1'), 'main query: switched');
+});
+
+test('finder: views get INLINE hints for WITH elements referenced once (copies must not materialize them)', () => {
+  const src = `create view h as
+  with a as (select 1 x from dual),
+       m as (select /*+ materialize */ 2 x from dual),
+       r (n) as (select 1 from dual union all select n + 1 from r where n < 3) cycle n set c to 'Y' default 'N',
+       d as (select /*+ ordered */ x from a),
+       e as (select x from dual)
+  select d.x from d, m, r, e, e e2;
+`;
+  const f = points(src, 'h.sql')[0];
+  const t = f.src.toString();
+  const got = (f.units[0].inserts ?? []).map((i) => `${t.slice(i.block, i.at)}|${i.text}`);
+  assert.deepEqual(got, ['select| /*+ INLINE */', 'select /*+| INLINE']);
+});

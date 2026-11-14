@@ -16,7 +16,7 @@ export interface ConnectConfig {
   connectString: string;
 }
 
-/** A PL/SQL unit as stored in the database. */
+/** A PL/SQL unit (or a view: original from DBMS_METADATA, no settings) as stored in the database. */
 export interface SourceObject {
   owner: string;
   name: string;
@@ -93,6 +93,13 @@ export async function loadObjects(conn: oracledb.Connection, schema: string, fil
 }
 
 export async function loadObject(conn: oracledb.Connection, owner: string, name: string, type: string): Promise<SourceObject> {
+  if (type === 'VIEW') {
+    // the complete statement (column list, FORCE, options) without CREATE OR REPLACE
+    const r = await conn.execute<[string]>(`select dbms_metadata.get_ddl('VIEW', :n, :o) ddl from dual`, { n: name, o: owner }, { fetchInfo: { DDL: { type: oracledb.STRING } } });
+    const original = String(r.rows?.[0]?.[0] ?? '').replace(/^\s*create\s+or\s+replace\s+/i, '').trim();
+    if (!original) throw new Error(`View ${owner}.${name} nicht gefunden`);
+    return { owner, name, type, original, processed: original, settings: {} };
+  }
   const src = await conn.execute<[string]>(
     `select text from all_source where owner = :o and name = :n and type = :t order by line`, { o: owner, n: name, t: type },
   );
@@ -126,6 +133,20 @@ export async function loadObject(conn: oracledb.Connection, owner: string, name:
  * schemas need CREATE ANY PROCEDURE / TYPE / TRIGGER). Returns error text or null.
  */
 export async function compile(conn: oracledb.Connection, obj: SourceObject, source: string): Promise<string | null> {
+  return (await compileDetailed(conn, obj, source)).error;
+}
+
+export interface CompileOutcome {
+  /** Error text, or null if the object is valid. */
+  error: string | null;
+  /**
+   * Statements rejected at once (views): character offset of the error in source, as
+   * the server reports it.
+   */
+  offset?: number;
+}
+
+export async function compileDetailed(conn: oracledb.Connection, obj: SourceObject, source: string): Promise<CompileOutcome> {
   const cur = (await conn.execute<[string]>(`select sys_context('USERENV', 'CURRENT_SCHEMA') from dual`)).rows![0][0];
   if (cur === obj.owner) return compileHere(conn, obj, source);
   await conn.execute(`alter session set current_schema = ${dbIdent(obj.owner)}`);
@@ -136,7 +157,7 @@ export async function compile(conn: oracledb.Connection, obj: SourceObject, sour
   }
 }
 
-async function compileHere(conn: oracledb.Connection, obj: SourceObject, source: string): Promise<string | null> {
+async function compileHere(conn: oracledb.Connection, obj: SourceObject, source: string): Promise<CompileOutcome> {
   const st = obj.settings;
   if (st.plsql_optimize_level) await conn.execute(`alter session set plsql_optimize_level = ${Number(st.plsql_optimize_level)}`);
   if (st.plsql_code_type) await conn.execute(`alter session set plsql_code_type = '${st.plsql_code_type.replace(/'/g, '')}'`);
@@ -144,18 +165,23 @@ async function compileHere(conn: oracledb.Connection, obj: SourceObject, source:
   if (st.nls_length_semantics) await conn.execute(`alter session set nls_length_semantics = ${st.nls_length_semantics === 'CHAR' ? 'CHAR' : 'BYTE'}`);
   // PL/Scope data of the unit stays as it was (code that inspects PL/Scope, e.g. plscope-utils)
   if (st.plscope_settings) await conn.execute(`alter session set plscope_settings = '${st.plscope_settings.replace(/'/g, '')}'`);
+  const prefix = 'create or replace ';
   try {
-    await conn.execute(`create or replace ${source.replace(/\s*$/, '')}`);
+    await conn.execute(prefix + source.replace(/\s*$/, ''));
   } catch (e) {
     // ORA-24344: success with compilation error -> read the errors below
-    if (!(e as Error).message.includes('ORA-24344')) return (e as Error).message.split('\n')[0];
+    const msg = (e as Error).message;
+    if (!msg.includes('ORA-24344')) {
+      const off = (e as { offset?: number }).offset;
+      return { error: msg.split('\n')[0], offset: typeof off === 'number' && off >= prefix.length ? off - prefix.length : undefined };
+    }
   }
   const err = await conn.execute<[number, string]>(
     `select line, text from all_errors where owner = :o and name = :n and type = :t and attribute = 'ERROR' order by sequence`,
     { o: obj.owner, n: obj.name, t: obj.type },
   );
-  if (err.rows?.length) return err.rows.slice(0, 3).map((r) => `Zeile ${r[0]}: ${r[1].trim()}`).join('; ');
-  return null;
+  if (err.rows?.length) return { error: err.rows.slice(0, 3).map((r) => `Zeile ${r[0]}: ${r[1].trim()}`).join('; ') };
+  return { error: null };
 }
 
 /**
@@ -163,8 +189,12 @@ async function compileHere(conn: oracledb.Connection, obj: SourceObject, source:
  * restore journal before the first change, so it survives a crashed run.
  */
 export async function replaceSource(conn: oracledb.Connection, obj: SourceObject, source: string, tool: string): Promise<string | null> {
+  return (await replaceSourceDetailed(conn, obj, source, tool)).error;
+}
+
+export async function replaceSourceDetailed(conn: oracledb.Connection, obj: SourceObject, source: string, tool: string): Promise<CompileOutcome> {
   await journalRemember(conn, obj, tool);
-  return compile(conn, obj, source);
+  return compileDetailed(conn, obj, source);
 }
 
 /** Compiles the originals again and clears their journal entries. */

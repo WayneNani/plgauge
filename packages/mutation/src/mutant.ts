@@ -5,12 +5,21 @@
 
 /** A compilation unit (CREATE … statement) in a source file. Offsets are UTF-8 bytes, end exclusive. */
 export interface Unit {
-  type: string; // PACKAGE BODY, PROCEDURE, FUNCTION, TYPE BODY, TRIGGER
+  type: string; // PACKAGE BODY, PROCEDURE, FUNCTION, TYPE BODY, TRIGGER, VIEW
   name: string;
   start: number;
   end: number;
   /** Package bodies: offset right after IS/AS, where declarations may go; else -1. */
   decl: number;
+  /**
+   * Views: text the schema inserts into every copy (INLINE hints for WITH elements that
+   * the original references once: copies would reference them more often, and Oracle
+   * would then materialize them in front of every branch). block: start of the element's
+   * query, whose UNION ALL wrapper takes the hint.
+   */
+  inserts?: { at: number; text: string; block: number }[];
+  /** Views: byte range of the main query block (the scope of its points). */
+  main?: [number, number];
 }
 
 /** One place in the source with one or more mutants. */
@@ -33,6 +42,11 @@ export interface Point {
    * cursor FOR loops) run with the oracle rewriter.
    */
   scope?: [number, number];
+  /**
+   * Views: the point is in a select list, where an in-place switch (CASE on the active
+   * ID) cannot change the execution plan. Other view points get a UNION ALL branch each.
+   */
+  inline?: boolean;
 }
 
 /** Position right after a LOOP keyword, where the schema puts a loop guard. */

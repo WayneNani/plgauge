@@ -13,11 +13,21 @@
  *                         (a CASE around a join condition turns a hash join into nested
  *                         loops); the duplicated statement keeps the original plan. SQL in
  *                         cursor declarations and cursor FOR loops is not switched.
+ *   views:                every query block (the view's query, WITH elements, inline views
+ *                         in FROM) with mutants becomes
+ *                           SELECT * FROM (block) WHERE NVL(V, '0') NOT IN (ids of branches)
+ *                             AND (NVL(V, '0') <> '-1' OR (SELECT plmut_ctl.hit(b, n) FROM dual) = 0)
+ *                           UNION ALL SELECT * FROM (block') WHERE V = 'id' …
+ *                         with V = SYS_CONTEXT(<context of the runtime schema>, 'ACTIVE'). Every branch but one is
+ *                         cut off by a filter on a constant. Points in select lists cannot
+ *                         change the plan and are switched in place, (CASE V WHEN 'id' THEN
+ *                         (m) … ELSE (orig) END), also conditions (23ai has SQL booleans).
  *
  * A is the package constant plmut$a in package bodies (read once per instantiation,
  * so the worker resets package state when it switches mutants), plmut_ctl.active()
  * elsewhere. ID -1 is the recording run.
  */
+import { contextName } from './ddl.js';
 import { objectName, objectOwner, withoutCreate, type Mutant, type Point, type SourceFile, type Unit } from './mutant.js';
 
 export interface Region {
@@ -26,6 +36,8 @@ export interface Region {
   point: Point;
   /** Set when the region is one branch (variant) of the point. */
   mutantId: number;
+  /** View blocks: every point of the block, all of them unswitchable if the wrapper fails. */
+  points?: Point[];
 }
 
 export interface SchemaUnit {
@@ -42,6 +54,11 @@ export interface SchemaUnit {
   regions: Region[];
   mutants: Mutant[];
   loops: number;
+  /**
+   * Views: IDs whose reach the recording run notes although they are not switched (points
+   * left to the oracle rewriter inside a switched block): their covering tests are known.
+   */
+  recorded: number[];
 }
 
 interface Node {
@@ -51,7 +68,7 @@ interface Node {
   loop: number;
   order: number;
   /** A statement duplicated for the clause points in it (their mutants are in ms). */
-  dup?: { points: Point[] };
+  dup?: { points: Point[]; /** views: all mutants of the block, for the recording run */ reach: Mutant[]; all: Point[] };
 }
 
 /**
@@ -76,11 +93,12 @@ export function buildSchema(ms: Mutant[], dropped: Set<number> = new Set(), naiv
     const fullOriginal = f.src.subarray(u.start, u.end).toString('utf8');
     const su: SchemaUnit = {
       key: `${f.path}#${u.type} ${u.name}`, type: u.type, name: objectName(u.name), owner: objectOwner(u.name),
-      text: '', original: withoutCreate(fullOriginal), regions: [], mutants: [], loops: 0,
+      text: '', original: withoutCreate(fullOriginal), regions: [], mutants: [], loops: 0, recorded: [],
     };
     const nodes: Node[] = [];
     let order = 0;
     const dups = new Map<string, Node>();
+    const unrecorded: Mutant[] = [];
     for (const [p, pm] of points) {
       if (p.scope && switchable(p) && !naive.has(p)) {
         // one node per statement; it comes before an SBR point with the same range
@@ -88,9 +106,18 @@ export function buildSchema(ms: Mutant[], dropped: Set<number> = new Set(), naiv
         let g = dups.get(key);
         if (!g) {
           const gp: Point = { ...p, op: '', kind: 'clause', ctx: 'plsql', start: p.scope[0], end: p.scope[1], orig: '', mutants: [] };
-          g = { p: gp, ms: [], kids: [], loop: 0, order: -1 - dups.size, dup: { points: [] } };
+          g = { p: gp, ms: [], kids: [], loop: 0, order: -1 - dups.size, dup: { points: [], reach: [], all: [] } };
           dups.set(key, g);
           nodes.push(g);
+        }
+        const live = pm.filter((m) => !dropped.has(m.id));
+        g.dup!.reach.push(...live);
+        g.dup!.all.push(p);
+        if (u.type === 'VIEW' && p.inline) {
+          // switched in place, inside the block's original branch
+          nodes.push({ p, ms: live, kids: [], loop: 0, order: order++ });
+          su.mutants.push(...live);
+          continue;
         }
         g.dup!.points.push(p);
         for (const m of pm) {
@@ -102,6 +129,7 @@ export function buildSchema(ms: Mutant[], dropped: Set<number> = new Set(), naiv
         continue;
       }
       const n: Node = { p, ms: [], kids: [], loop: 0, order: order++ };
+      if (u.type === 'VIEW') unrecorded.push(...pm);
       if (!naive.has(p) && switchable(p)) {
         for (const m of pm) {
           if (!dropped.has(m.id)) {
@@ -113,6 +141,24 @@ export function buildSchema(ms: Mutant[], dropped: Set<number> = new Set(), naiv
       nodes.push(n);
     }
     su.mutants.sort((a, b) => a.id - b.id);
+    // view points left out of a switched block: the block's recording notes their reach too.
+    // Without one (a recursive WITH element, a block left out), the view's main block: a test
+    // that never runs it never queries the view.
+    // the main block records even without switched points of its own, if anything in the view is switched
+    if (u.type === 'VIEW' && u.main && su.mutants.length && unrecorded.length && !dups.has(u.main.join(':'))) {
+      const all = [...points.keys()];
+      const gp: Point = { ...all[0], op: '', kind: 'clause', ctx: 'sql', start: u.main[0], end: u.main[1], orig: '', mutants: [], scope: u.main };
+      const g: Node = { p: gp, ms: [], kids: [], loop: 0, order: -1 - dups.size, dup: { points: [], reach: [], all } };
+      dups.set(u.main.join(':'), g);
+      nodes.push(g);
+    }
+    const top = u.main && dups.get(u.main.join(':'));
+    for (const m of unrecorded) {
+      const g = (m.point.scope && dups.get(m.point.scope.join(':'))) || top;
+      if (!g) continue;
+      g.dup!.reach.push(m);
+      su.recorded.push(m.id);
+    }
     for (const l of f.loops) {
       if (f.units[l.unit] === u) {
         loopId++;
@@ -122,7 +168,7 @@ export function buildSchema(ms: Mutant[], dropped: Set<number> = new Set(), naiv
     }
     const roots = nest(nodes);
     const ctl = su.owner && runtimeOwner && su.owner !== runtimeOwner.toUpperCase() ? `${runtimeOwner.toLowerCase()}.plmut_ctl` : 'plmut_ctl';
-    const r = new Renderer(f.src, su, `${ctl}.active()`, ctl);
+    const r = new Renderer(f.src, su, `${ctl}.active()`, ctl, runtimeOwner ? contextName(runtimeOwner) : 'PLMUT_CTX', [...(u.inserts ?? [])].sort((a, b) => a.at - b.at));
     let start = u.start;
     if (u.decl >= 0) {
       r.active = 'plmut$a';
@@ -162,20 +208,33 @@ const identChar = (s: string) => s.length > 0 && identByte(s.charCodeAt(0));
 
 class Renderer {
   b = '';
-  constructor(private src: Buffer, private su: SchemaUnit, public active: string, private ctl = 'plmut_ctl') {}
+  constructor(private src: Buffer, private su: SchemaUnit, public active: string, private ctl = 'plmut_ctl', private ctx = 'PLMUT_CTX', private inserts: NonNullable<Unit['inserts']> = []) {}
 
   write(s: string) {
     this.b += s;
   }
 
+  /** Source text of [a, b), with the unit's inserts (views). */
+  raw(a: number, b: number): string {
+    const ins = this.inserts.filter((i) => a <= i.at && i.at < b);
+    if (!ins.length) return this.src.subarray(a, b).toString('utf8');
+    let out = '';
+    let cur = a;
+    for (const i of ins) {
+      out += this.src.subarray(cur, i.at).toString('utf8') + i.text;
+      cur = i.at;
+    }
+    return out + this.src.subarray(cur, b).toString('utf8');
+  }
+
   rangeWith(start: number, end: number, kids: Node[]) {
     let cur = start;
     for (const k of kids) {
-      this.write(this.src.subarray(cur, k.p.start).toString('utf8'));
+      this.write(this.raw(cur, k.p.start));
       this.point(k);
       cur = k.p.end;
     }
-    this.write(this.src.subarray(cur, end).toString('utf8'));
+    this.write(this.raw(cur, end));
   }
 
   orig(n: Node) {
@@ -212,8 +271,71 @@ class Renderer {
     this.region(start, n.dup!.points[0], 0);
   }
 
+  /** Views: one UNION ALL branch per variant of the block; see the header. */
+  viewDup(n: Node) {
+    const V = `SYS_CONTEXT('${this.ctx}', 'ACTIVE')`;
+    const p = n.p;
+    if (identChar(this.b.slice(-1))) this.write(' ');
+    const start = this.b.length;
+    const branches = [...n.ms].sort((x, y) => x.id - y.id);
+    const conds: string[] = [];
+    for (let i = 0; i < branches.length; i += 900) {
+      conds.push(`NVL(${V}, '0') NOT IN (${branches.slice(i, i + 900).map((m) => `'${m.id}'`).join(', ')})`);
+    }
+    const ids = [...new Set(n.dup!.reach.map((m) => m.id))].sort((x, y) => x - y);
+    const hits: string[] = [];
+    for (let i = 0; i < ids.length;) {
+      let j = i;
+      while (j + 1 < ids.length && ids[j + 1] === ids[j] + 1) j++;
+      hits.push(`${this.ctl}.hit(${ids[i]}, ${j - i + 1})`);
+      i = j + 1;
+    }
+    conds.push(`(NVL(${V}, '0') <> '-1' OR (SELECT ${hits.join(' + ')} FROM dual) = 0)`);
+    // the block is a WITH element: its query is now the wrapper, which takes the INLINE hint
+    this.write(this.inserts.some((i) => i.block === p.start) ? 'SELECT /*+ INLINE */ * FROM (' : 'SELECT * FROM (');
+    this.orig(n);
+    this.write(`) WHERE ${conds.join(' AND ')}`);
+    for (const m of branches) {
+      this.write(' UNION ALL SELECT * FROM (');
+      const vs = this.b.length;
+      this.write(this.raw(p.start, m.point.start) + m.mutated + this.raw(m.point.end, p.end));
+      this.region(vs, m.point, m.id);
+      this.write(`) WHERE ${V} = '${m.id}'`);
+    }
+    this.su.regions.push({ start, end: this.b.length, point: n.dup!.all[0], mutantId: 0, points: n.dup!.all });
+    if (p.end < this.src.length && identByte(this.src[p.end])) this.write(' ');
+  }
+
+  /** Views: a point in a select list, switched in place. */
+  viewInline(n: Node) {
+    const p = n.p;
+    if (identChar(this.b.slice(-1))) this.write(' ');
+    const start = this.b.length;
+    this.write(`(CASE SYS_CONTEXT('${this.ctx}', 'ACTIVE')`);
+    for (const m of n.ms) {
+      this.write(` WHEN '${m.id}' THEN `);
+      const vs = this.b.length;
+      this.write(`(${m.mutated})`);
+      this.region(vs, p, m.id);
+    }
+    this.write(' ELSE (');
+    this.orig(n);
+    this.write(') END)');
+    this.region(start, p, 0);
+    if (p.end < this.src.length && identByte(this.src[p.end])) this.write(' ');
+  }
+
   point(n: Node) {
     const a = this.active;
+    if (this.su.type === 'VIEW' && n.dup) {
+      if (n.dup.reach.length) this.viewDup(n);
+      else this.orig(n);
+      return;
+    }
+    if (this.su.type === 'VIEW' && n.ms.length && n.p.inline) {
+      this.viewInline(n);
+      return;
+    }
     if (n.loop > 0) {
       // Counts iterations in the recording run and while a mutant is active; beyond
       // the recorded maximum ×10 the guard aborts (deterministic timeout).

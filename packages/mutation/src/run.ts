@@ -18,7 +18,7 @@ import { promisify } from 'node:util';
 import { join } from 'node:path';
 import oracledb from 'oracledb';
 import {
-  dbIdent, ensureJournal, journalEntries, loadObject, objectErrors, replaceSource, restoreAll, runScript, sha256, splitScript, touches,
+  dbIdent, ensureJournal, journalEntries, loadObject, objectErrors, replaceSourceDetailed, restoreAll, runScript, sha256, splitScript, touches,
   type ChangedLines, type SourceObject,
 } from '@pltest/core';
 import type { CoverageExport } from '@pltest/coverage';
@@ -246,10 +246,16 @@ class Worker {
   async compileUnit(key: string, type: string, name: string, text: string) {
     const obj = await this.object(key, type, name);
     this.changed.set(key, obj);
-    const summary = await replaceSource(this.deploy, obj, text, 'mutation');
-    if (!summary) return [];
+    const out = await replaceSourceDetailed(this.deploy, obj, text, 'mutation');
+    if (!out.error) return [];
+    if (out.offset !== undefined) {
+      // a view statement rejected at once: the server's offset into the text
+      const before = text.slice(0, out.offset);
+      const line = before.split('\n').length;
+      return [{ line, position: [...before.slice(before.lastIndexOf('\n') + 1)].length + 1, text: out.error }];
+    }
     const errs = await objectErrors(this.deploy, obj);
-    return errs.length ? errs : [{ line: 0, position: 0, text: summary }];
+    return errs.length ? errs : [{ line: 0, position: 0, text: out.error }];
   }
 
   async restore(key: string): Promise<void> {
@@ -461,6 +467,10 @@ class Run {
 
   private covIndex?: CoverageIndex;
   private covUsable = new Map<string, boolean>();
+  /** Schema mode: covering tests per mutant from the recording run. */
+  covering = new Map<number, string[]>();
+  /** Unswitched mutants whose reach the recording run noted (view blocks): covering is complete for them. */
+  recorded = new Set<number>();
 
   /**
    * Oracle mode with coverage: the test paths that executed the statement around the
@@ -468,6 +478,7 @@ class Run {
    * database must be the one that was measured (same ALL_SOURCE hash).
    */
   async selection(w: Worker, m: Mutant): Promise<string[] | null> {
+    if (this.recorded.has(m.id)) return this.covering.get(m.id) ?? [];
     if (!this.opt.coverage) return null;
     this.covIndex ??= new CoverageIndex(this.opt.coverage);
     const obj = this.covIndex.object(m.unit);
@@ -679,7 +690,9 @@ async function runSchema(run: Run, ms: Mutant[], stop: () => boolean): Promise<R
   const dropped = new Map<number, string>();
   const t0 = performance.now();
   await installControl(w.deploy);
-  const rounds = await compileSchema(run, ms, dropped, naive);
+  await capViews(run, ms, naive);
+  let rounds = await compileSchema(run, ms, dropped, naive);
+  if (await isolateViews(run, ms, dropped, naive)) rounds += await compileSchema(run, ms, dropped, naive);
   const units = buildSchema(ms, new Set(dropped.keys()), naive, await w.currentSchema());
   w.schema = units;
   await Promise.all(run.workers.slice(1).map(async (h) => {
@@ -694,6 +707,8 @@ async function runSchema(run: Run, ms: Mutant[], stop: () => boolean): Promise<R
   run.logf(`Baseline mit Schema: ${base.tests.length} Tests in ${Math.round(base.ms)}ms, Zeitgrenze ${Math.round(w.limitMs)}ms`);
 
   const covering = await record(run, base.tests);
+  run.covering = covering;
+  run.recorded = new Set(units.flatMap((u) => u.recorded));
   rep.tests = w.passing.length;
   rep.excludedTests = w.excluded;
   for (const h of run.workers.slice(1)) {
@@ -726,6 +741,99 @@ async function runSchema(run: Run, ms: Mutant[], stop: () => boolean): Promise<R
 }
 
 /**
+ * Branch variants per view: each branch is a copy of its block, which the optimizer plans
+ * again; WITH clauses inside the dictionary views a copy uses are materialized in front of
+ * all branches, at every execution. At most VIEW_BRANCHES per view, fewer when planning the
+ * original takes long (VIEW_PLAN_BUDGET_MS / EXPLAIN PLAN time).
+ */
+const VIEW_BRANCHES = 20;
+const VIEW_PLAN_BUDGET_MS = 10_000;
+
+/**
+ * Views: how many branch variants go into the schema (see VIEW_BRANCHES), in ID order. The
+ * other points run with the oracle rewriter, their tests still selected by the recording of
+ * their block.
+ */
+async function capViews(run: Run, ms: Mutant[], naive: Set<Point>): Promise<void> {
+  const w = run.primary;
+  const byUnit = new Map<string, Mutant[]>();
+  for (const m of ms) {
+    if (m.unitRef.type !== 'VIEW' || naive.has(m.point) || m.point.inline || !switchable(m.point)) continue;
+    byUnit.set(unitKey(m), [...(byUnit.get(unitKey(m)) ?? []), m]);
+  }
+  for (const [key, bms] of byUnit) {
+    const u = bms[0].unitRef;
+    const owner = objectOwner(u.name) ?? (await w.currentSchema());
+    const t0 = performance.now();
+    try {
+      // EXPLAIN PLAN always optimizes and never executes (a query with ROWNUM < 0 may skip both)
+      await w.deploy.execute(`explain plan set statement_id = 'pltest' for select * from "${owner}"."${objectName(u.name)}"`);
+    } catch (e) {
+      run.logf(`Messprobe ${key}: ${firstLine(e as Error)}`);
+      continue;
+    }
+    const probe = performance.now() - t0;
+    const cap = Math.min(VIEW_BRANCHES, Math.floor(VIEW_PLAN_BUDGET_MS / Math.max(probe, 1)));
+    if (bms.length <= cap) continue;
+    let kept = 0;
+    let points = 0;
+    for (const p of new Set(bms.map((m) => m.point))) {
+      const n = bms.filter((x) => x.point === p).length;
+      if (kept + n <= cap) kept += n;
+      else {
+        naive.add(p);
+        points++;
+      }
+    }
+    run.logf(`${key}: Parsen ${Math.round(probe)}ms, ${kept} von ${bms.length} Varianten als Zweige, ${points} Stellen einzeln`);
+  }
+}
+
+/** Names of the tests that fail in one run on the primary (the current code, no mutant active). */
+async function failingTests(run: Run, paths: string[]): Promise<Set<string>> {
+  const w = run.primary;
+  await activate(w.test, 0);
+  await resetPackages(w.test);
+  const r = await w.runTests(paths, 10 * 60_000);
+  if (r.err) throw new Error(`Baseline: ${firstLine(r.err)}`);
+  return new Set(r.tests.filter((t) => t.failed).map((t) => t.name));
+}
+
+/**
+ * Views in the schema change the view's text, and code that reads it (a view's source, a
+ * lineage analysis) sees the copies: such tests would fail in the baseline and be lost for
+ * every mutant. Tests failing with the switched views but not with the original ones are
+ * traced to single views; those views stay original, their mutants run one by one (naive).
+ * Returns whether points were moved, so that the schema has to be compiled again.
+ */
+async function isolateViews(run: Run, ms: Mutant[], dropped: Map<number, string>, naive: Set<Point>): Promise<boolean> {
+  const w = run.primary;
+  const views = buildSchema(ms, new Set(dropped.keys()), naive, await w.currentSchema()).filter((u) => u.type === 'VIEW' && u.mutants.length);
+  if (!views.length) return false;
+  const withViews = await failingTests(run, run.cfg.tests);
+  if (!withViews.size) return false;
+  for (const v of views) await w.restore(v.key);
+  const without = await failingTests(run, run.cfg.tests);
+  const extra = [...withViews].filter((t) => !without.has(t));
+  if (!extra.length) return true; // the views come back with the next compile
+  const culprits = new Map<SchemaUnit, string[]>();
+  for (const v of views) {
+    await w.compileUnit(v.key, v.type, v.owner ? `"${v.owner}"."${v.name}"` : v.name, v.text);
+    const f = await failingTests(run, extra);
+    const hit = extra.filter((t) => f.has(t));
+    if (hit.length) culprits.set(v, hit);
+    await w.restore(v.key);
+  }
+  // no single view: they fail together
+  if (!culprits.size) for (const v of views) culprits.set(v, extra);
+  for (const [v, tests] of culprits) {
+    for (const m of ms) if (unitKey(m) === v.key) naive.add(m.point);
+    run.logf(`${v.key}: ohne Schema (scheitern damit: ${tests.map((t) => t.split('.').pop()).join(', ')}), Mutanten einzeln`);
+  }
+  return true;
+}
+
+/**
  * Compiles the schema units on the primary, charges compile errors to the branch or
  * point they occur in and repeats until every unit is valid.
  */
@@ -741,7 +849,7 @@ async function compileSchema(run: Run, ms: Mutant[], dropped: Map<number, string
         if (isCompanion(e.text)) continue;
         const rg = e.line > 0 ? locate(su, e.line, e.position) : undefined;
         if (rg && rg.mutantId) dropped.set(rg.mutantId, `${e.line}:${e.position} ${e.text}`);
-        else if (rg) naive.add(rg.point);
+        else if (rg) for (const q of rg.points ?? [rg.point]) naive.add(q);
         else {
           run.logf(`Fehler ohne Zuordnung in ${su.key}: ${e.line}:${e.position} ${e.text}`);
           for (const m of su.mutants) naive.add(m.point);

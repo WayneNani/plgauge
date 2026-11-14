@@ -3,7 +3,8 @@
   "mutate": [
     "src/utils/package/dd_util.pkb", "src/utils/package/type_util.pkb", "src/utils/package/plscope_context.pkb",
     "src/utils/package/parse_util.pkb", "src/utils/package/lineage_util.pkb",
-    "src/demo/package/etl.pkb", "src/demo/package/example.pkb"
+    "src/demo/package/etl.pkb", "src/demo/package/example.pkb",
+    "src/utils/view/*.sql", "src/demo/view/*.sql"
   ],
   "tests": ["test_dd_util", "test_type_util", "test_plscope_context", "test_parse_util", "test_lineage_util",
             "test_etl", "test_plscope_identifiers"]

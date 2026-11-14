@@ -1,7 +1,10 @@
 /** Schema rewriter and oracle rewriter, offline (ported from plmut's schema_test.go). */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildSchema, expand, locate, mutatedUnit, type SourceFile } from '@pltest/mutation';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { buildSchema, expand, findPoints, locate, mutatedUnit, type SourceFile } from '@pltest/mutation';
 
 function testFile(): SourceFile {
   const src =
@@ -110,4 +113,45 @@ test('schema: SQL points duplicate their statement; errors in a copy drop that v
   delete f.points[2].scope;
   const plain = buildSchema(expand([f]))[0].text;
   assert.ok(!plain.includes('ELSIF') && plain.includes('THEN UPDATE t SET a = 1, b = 2 WHERE id = 3; END IF;'));
+});
+
+test('schema: a view block gets one UNION ALL branch per variant; select lists switch in place', () => {
+  const path = join(mkdtempSync(join(tmpdir(), 'pltest-')), 'v.sql');
+  writeFileSync(path, 'create or replace view v as\n  select a + 1 as b from t where a < 3;\n');
+  const ms = expand(findPoints([path]));
+  assert.deepEqual(ms.map((m) => `${m.id} ${m.op} ${m.mutated}`), ['1 AOR a - 1', '2 ROR a <= 3', '3 ROR a <> 3', '4 ROR FALSE', '5 WHR TRUE']);
+  const su = buildSchema(ms, new Set(), new Set(), 'DEMO')[0];
+  const V = "SYS_CONTEXT('PLMUT_CTX_", c = (s: string) => s.replaceAll("SYS_CONTEXT('PLMUT_CTX_4FF006CA6B88', 'ACTIVE')", 'V');
+  assert.ok(su.text.includes(V), su.text);
+  assert.equal(c(su.text), 'view v as\n  SELECT * FROM (select (CASE V WHEN \'1\' THEN (a - 1) ELSE (a + 1) END) as b from t where a < 3)' +
+    " WHERE NVL(V, '0') NOT IN ('2', '3', '4', '5') AND (NVL(V, '0') <> '-1' OR (SELECT plmut_ctl.hit(1, 5) FROM dual) = 0)" +
+    " UNION ALL SELECT * FROM (select a + 1 as b from t where a <= 3) WHERE V = '2'" +
+    " UNION ALL SELECT * FROM (select a + 1 as b from t where a <> 3) WHERE V = '3'" +
+    " UNION ALL SELECT * FROM (select a + 1 as b from t where FALSE) WHERE V = '4'" +
+    " UNION ALL SELECT * FROM (select a + 1 as b from t where TRUE) WHERE V = '5'");
+  // an error in a branch drops that variant; one in the wrapper takes the whole block out of the schema
+  const pos = (s: string) => {
+    const i = su.text.indexOf(s);
+    return [1 + (su.text.slice(0, i).match(/\n/g)?.length ?? 0), i - su.text.lastIndexOf('\n', i - 1)] as const;
+  };
+  assert.equal(locate(su, ...pos('a <> 3'))?.mutantId, 3);
+  const w = locate(su, ...pos('SELECT * FROM (select ('));
+  assert.equal(w?.mutantId, 0);
+  assert.equal(w?.points?.length, 3);
+  // dropped and unswitched points are not switched; the block still records the unswitched ones
+  const part = buildSchema(ms, new Set([2, 3, 4]), new Set([ms[0].point]), 'DEMO')[0];
+  const rest = c(part.text);
+  assert.ok(rest.startsWith("view v as\n  SELECT * FROM (select a + 1 as b from t where a < 3) WHERE NVL(V, '0') NOT IN ('5') AND (NVL(V, '0') <> '-1' OR (SELECT plmut_ctl.hit(1, 1) + plmut_ctl.hit(5, 1) FROM dual) = 0) UNION ALL"), rest);
+  assert.deepEqual(part.recorded, [1]);
+});
+
+test('schema: view points without a block are recorded by the main block (no test that skips it queries the view)', () => {
+  const path = join(mkdtempSync(join(tmpdir(), 'pltest-')), 'r.sql');
+  writeFileSync(path, 'create view r as\n  with h (n) as (select 1 from dual union all select n + 1 from h where n < 3)\n  select n from h where n > 1;\n');
+  const ms = expand(findPoints([path]));
+  const loose = ms.filter((m) => !m.point.scope);
+  assert.ok(loose.length > 0);
+  const su = buildSchema(ms, new Set(), new Set(loose.map((m) => m.point)), 'DEMO')[0];
+  assert.deepEqual(su.recorded, loose.map((m) => m.id));
+  assert.ok(su.text.includes(`plmut_ctl.hit(${Math.min(...ms.map((m) => m.id))}`), su.text);
 });

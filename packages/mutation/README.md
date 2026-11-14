@@ -55,6 +55,33 @@ Für sie gibt es
 keine Aufzeichnung, welche Tests sie erreichen: Sie laufen gegen alle Tests, und ein Mutant, den kein Test erreicht, erscheint als überlebt statt als nicht erreicht. `--ops` wählt
 Operatoren aus, z. B. `--ops ROR,LCR,AOR,SBR,RET,EXC,NUL,CUR` für nur Stufe 1.
 
+Views: `CREATE VIEW` in einer Datei unter `mutate` wird mutiert wie das SQL in PL/SQL, mit beiden Stufen. Das Schema
+schaltet sie blockweise; Blöcke sind die Abfrage der View, `WITH`-Elemente und Inline-Views in `FROM` (Unterabfragen in
+Bedingungen bleiben in ihrem Block, damit der Optimizer sie weiter in Joins auflösen kann; rekursive `WITH`-Elemente
+sind kein Block). Ein Block mit Mutanten wird zu
+
+```sql
+SELECT * FROM (<Block>) WHERE NVL(V, '0') NOT IN ('<IDs der Zweige>')
+                          AND (NVL(V, '0') <> '-1' OR (SELECT plmut_ctl.hit(<IDs>) FROM dual) = 0)
+UNION ALL SELECT * FROM (<Block mit Mutant 17>) WHERE V = '17' …
+```
+
+mit `V = SYS_CONTEXT(<Kontext des Laufs>, 'ACTIVE')`: Ein Filter auf eine Konstante schneidet alle Zweige bis auf
+einen ab, und der Aufzeichnungslauf (`-1`) notiert, welcher Test den Block erreicht. Stellen in Select-Listen
+ändern keinen Plan und werden an Ort und Stelle geschaltet (`CASE V WHEN '17' THEN (…) ELSE (…) END`, Bedingungen
+dank SQL-Booleans von 23ai ebenso). Jeder Zweig ist eine Kopie, die der Optimizer neu plant, und `WITH`-Klauseln
+in den Dictionary-Views einer Kopie werden vor allen Zweigen materialisiert, bei jeder Ausführung: Eine View bekommt
+höchstens 20 Zweige (weniger, wenn `EXPLAIN PLAN` des Originals lange dauert), die übrigen Stellen laufen einzeln
+kompiliert, aber nur gegen die Tests, die ihren Block laut Aufzeichnung erreichen. `WITH`-Elemente, die das Original
+einmal referenziert, bekommen im Schema `/*+ INLINE */`, sonst würden die Kopien sie materialisieren. Stellen ohne eigenen
+Block (rekursive `WITH`-Elemente) zeichnet der Hauptblock auf: Ein Test, der ihn nie ausführt, fragt die View nicht ab.
+Das Original einer View kommt aus `DBMS_METADATA` und steht im Restore-Journal wie jede Einheit; Fehler beim
+`CREATE VIEW` ordnet der Lauf über die Fehlerposition des Servers einem Zweig zu.
+
+Tests, die den Text einer View lesen (Quelltext, Lineage-Analysen), sehen im Schema die Kopien. Scheitern Tests mit
+den geschalteten Views, aber nicht mit den Originalen, sucht der Lauf die View, an der es liegt; sie bleibt im
+Original, ihre Mutanten laufen einzeln mit allen Tests. So geht kein Test für die übrigen Mutanten verloren.
+
 ## Benutzung
 
 ```bash
