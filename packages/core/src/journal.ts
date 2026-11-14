@@ -66,3 +66,32 @@ export async function journalEntries(conn: oracledb.Connection): Promise<Journal
     object: { owner, name, type, original: source, processed: source, settings: settings ? JSON.parse(settings) : {} },
   }));
 }
+
+/**
+ * Holds a row lock for the rest of the session: a second run of the same tool on the same
+ * schema fails at once instead of restoring the first run's changed objects from the journal
+ * (they look like leftovers of a crashed run) and measuring against them. The connection must
+ * stay open and never commit; the lock goes with the session, also when the process dies.
+ */
+export async function lockRun(conn: oracledb.Connection, tool: string): Promise<void> {
+  try {
+    await conn.execute(`create table pltest_lock (tool varchar2(30) primary key)`);
+  } catch (e) {
+    if (!(e as Error).message.includes('ORA-00955')) throw e;
+  }
+  try {
+    await conn.execute(`insert into pltest_lock (tool) select :t from dual where not exists (select 1 from pltest_lock where tool = :t)`, { t: tool });
+    await conn.commit();
+  } catch (e) {
+    if (!(e as Error).message.includes('ORA-00001')) throw e;
+    await conn.rollback();
+  }
+  try {
+    await conn.execute(`select tool from pltest_lock where tool = :t for update nowait`, { t: tool });
+  } catch (e) {
+    if ((e as Error).message.includes('ORA-00054')) {
+      throw new Error(`Auf diesem Schema läuft gerade ein anderer pltest-Lauf (${tool}); zwei Läufe würden sich gegenseitig den Code zurücksetzen`);
+    }
+    throw e;
+  }
+}

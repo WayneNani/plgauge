@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import oracledb from 'oracledb';
-import { journalEntries, loadObject, replaceSource } from '@pltest/core';
+import { journalEntries, loadObject, lockRun, replaceSource } from '@pltest/core';
 import { CoverageIndex, crossCheck, parseDbUrl, projectCoverageConfig, runMutation, type Result } from '@pltest/mutation';
 import { runCoverage, toCoverageExport } from '@pltest/coverage';
 
@@ -213,4 +213,18 @@ test('a run first puts back what a crashed run left in the journal', { skip: !db
   } finally {
     await conn.close();
   }
+});
+
+test('a second run on the same schema stops at once instead of restoring the first run’s code', { skip: !db && 'PLMUT_DB nicht gesetzt', timeout: 600_000 }, async () => {
+  const conn = await oracledb.getConnection(parseDbUrl(db!));
+  try {
+    // the lock as a running run holds it
+    await lockRun(conn, 'mutation');
+    await assert.rejects(runMutation({ dir, dbUrls: [db!], mode: 'schema', skipInstall: true, sample: 1, seed: 1 }), /anderer pltest-Lauf/);
+  } finally {
+    await conn.close();
+  }
+  // gone with the session
+  const rep = await runMutation({ dir, dbUrls: [db!], mode: 'schema', skipInstall: true, sample: 1, seed: 1 });
+  assert.equal(rep.results.length, 1);
 });

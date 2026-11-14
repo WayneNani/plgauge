@@ -288,6 +288,30 @@ kann sie so nicht erklären. Gemessen wurde die Laufzeit. Das erste Ausführen p
 statt 0,3 s), danach laufen die Tests so schnell wie im Original. Ohne Aufwärmlauf ging das in die Baseline ein, und
 die Zeitgrenze stieg von 9 auf 53 s.
 
+## Nachtrag 3: Korrekturen nach dem Review
+
+Ein Review von Nachtrag 2 fand zehn Schwächen, ein zweites Review der Korrekturen fünf weitere. Behoben:
+
+- **Dynamisches SQL über Variablen:** Ein Literal zählt nur, wenn die Variable im Unterprogramm deklariert ist und ihr
+  Wert nie aus ihr selbst gebaut (`v := v || …`, `replace(v, …)`), in eine andere Anweisung eingebaut, an eine
+  Prozedur übergeben oder per `INTO` gefüllt wird. Sonst wäre das Literal nur ein Stück, und Mutanten, die erst mit
+  dem Rest ungültig werden, zählten als erkannt. Varianten, die länger als `VARCHAR2(n)` würden, entfallen (ORA-06502).
+  Im Korpus sind es jetzt 51 statt 57 Literale; heraus fallen die Vorlagen von PLEX, deren Platzhalter `replace`
+  ersetzt.
+- **Daten zurückschreiben im Orakel-Modus** auch dann, wenn alle Tests laufen, und vor der Gegenprobe (danach wird
+  der Mutant neu kompiliert). Hier stieg die Zahl der Reparaturläufe von 271 auf 967, die Laufzeit um 27 s.
+- **Isolation der Views** prüft auch Views, die nur den Aufzeichnungs-Wrapper tragen. Das fand in Lauf 17
+  `plscope_identifiers`: `test_get_view_source` liest ihren Text.
+- Eigene `statement_id` für `EXPLAIN PLAN`, Schleifenwächter in verdoppelten Schleifen, 256-KB-Grenze für die Kopien
+  eines Literals, Aufwärmlauf nur bei Zweigen.
+- **Laufsperre:** Jeder Lauf hält eine Zeilensperre in `PLTEST_LOCK`; ein zweiter Lauf auf demselben Schema bricht ab,
+  statt den Code des ersten als Rest eines Absturzes zurückzuspielen.
+
+Lauf 17 (alles andere wie Lauf 16): 1 062 s, Score 24,1 % (Lauf 16: 24,0 %). Vier Urteile weichen ab, alle an
+bekannten Stellen: die Join-Abschwächung im Cursor von `dd_util` (Zeile 19), der ROR/WHR in `lineage_util` Zeile 283
+und eine Zeitüberschreitung in `plscope_identifiers`. Die Gegenprobe markiert 6 Urteile (`set_attr` zweimal, vier
+knappe Zeitgrenzen).
+
 ## Wiederholen
 
 ```bash

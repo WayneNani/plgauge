@@ -224,8 +224,8 @@ END k;
   assert.ok(t.includes("UNION ALL SELECT * FROM (SELECT a + 1 AS b FROM t WHERE TRUE) WHERE V = '5';"), t);
   assert.ok(t.includes("l_sql VARCHAR2(100) := (CASE CASE plmut$a WHEN -1 THEN plmut_ctl.hit(6, 2) ELSE plmut$a END" +
     " WHEN 6 THEN 'delete from t where TRUE' WHEN 7 THEN 'delete from t where FALSE' ELSE 'delete from t where x = ''y''' END);"), t);
-  assert.match(t, /IF plmut\$a = -1 THEN plmut_ctl\.reach\(10, 3\); plmut_ctl\.reach\(13, 1\); END IF; IF plmut\$a = 10 THEN FOR r IN \(SELECT a FROM t WHERE a <= 5\) LOOP\s+NULL;\s+END LOOP; ELSIF/);
-  // the original loop keeps its guard, the copies run only under their mutant
+  // the copies keep the loop guard: a mutant must not make a copied loop run away
+  assert.match(t, /IF plmut\$a = -1 THEN plmut_ctl\.reach\(10, 3\); plmut_ctl\.reach\(13, 1\); END IF; IF plmut\$a = 10 THEN FOR r IN \(SELECT a FROM t WHERE a <= 5\) LOOP IF plmut\$a <> 0 THEN plmut_ctl\.tick\(1\); END IF;\s+NULL;\s+END LOOP; ELSIF/);
   assert.match(t, /ELSE FOR r IN \(SELECT a FROM t WHERE a < 5\) LOOP IF plmut\$a <> 0 THEN plmut_ctl\.tick\(1\); END IF;\s+NULL;\s+END LOOP; END IF;/);
   // the oracle rewriter changes only the inside of the literal
   assert.ok(mutatedUnit(ms[5]).includes("l_sql VARCHAR2(100) := 'delete from t where TRUE';"));
@@ -233,6 +233,9 @@ END k;
   const wrapper = su.regions.find((r) => r.block)!;
   const again = buildSchema(ms, new Set(), new Set(wrapper.points), 'DEMO', new Set([wrapper.block!]))[0];
   assert.ok(again.text.includes('CURSOR c IS SELECT a + 1 AS b FROM t WHERE a > 2;') && again.text.includes('WHEN 6 THEN'), again.text);
+  // only branches need the warm-up before the baseline
+  assert.equal(su.branched, true);
+  assert.equal(again.branched, undefined);
 });
 
 test('livePlan: dead branches and the schema scaffold drop out; a changed plan shows', () => {

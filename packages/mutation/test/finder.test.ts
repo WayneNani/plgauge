@@ -369,3 +369,49 @@ END d;
     assert.equal(text.slice(m.point.start, m.point.end), m.original);
   }
 });
+
+test('finder: dynamic SQL through a variable only when it holds nothing but whole literals', () => {
+  const src = `CREATE OR REPLACE PACKAGE BODY d AS
+  PROCEDURE p(x BOOLEAN) IS
+    l_a VARCHAR2(4000);
+    l_b VARCHAR2(4000) := 'select a from t where b > 1';
+    l_c VARCHAR2(4000) := 'select a from t where c > 1';
+    l_d VARCHAR2(27) := 'select a from t where d > 1';
+    l_e VARCHAR2(4000);
+    l_f VARCHAR2(4000) := 'select a from t where f > 1';
+    l_g VARCHAR2(4000);
+    c SYS_REFCURSOR;
+  BEGIN
+    IF x THEN l_a := 'delete from t where a > 1'; ELSE l_a := 'delete from t where a < 9'; END IF;
+    EXECUTE IMMEDIATE l_a;
+    IF x THEN l_b := l_b || ' and e = 2'; END IF;
+    EXECUTE IMMEDIATE l_b;
+    log(l_c);
+    EXECUTE IMMEDIATE l_c;
+    EXECUTE IMMEDIATE l_d;
+    l_e := 'delete from t where e > 1';
+    EXECUTE IMMEDIATE (l_e);
+    l_e := lower('drop table t');
+    EXECUTE IMMEDIATE l_e;
+    EXECUTE IMMEDIATE l_f;
+    l_g := l_f || ' and h = 1';
+    OPEN c FOR l_g;
+  END;
+END d;
+/
+`;
+  const f = points(src)[0];
+  assert.deepEqual(f.errors, []);
+  const got = expand([f]).filter((m) => m.point.dyn).map((m) => `${m.op} ${m.original} → ${m.mutated}`);
+  const has = (s: string) => assert.ok(got.includes(s), `${s}\n${got.join('\n')}`);
+  // both assignments of l_a
+  has('ROR a > 1 → a >= 1');
+  has('ROR a < 9 → a <= 9');
+  // l_e gets another statement later (a value of its own, not built from l_e); the sink may be in parentheses
+  has('ROR e > 1 → e >= 1');
+  // l_b is concatenated to, l_c passed to a procedure (perhaps OUT), l_f part of another statement: fragments
+  assert.ok(!got.some((g) => g.includes('b > 1') || g.includes('c > 1') || g.includes('f > 1')), got.join('\n'));
+  // l_d is exactly as long as its literal: a variant one character longer would fail with ORA-06502
+  has('ROR d > 1 → FALSE');
+  assert.ok(!got.includes('ROR d > 1 → d >= 1') && !got.includes('ROR d > 1 → d <> 1'), got.join('\n'));
+});

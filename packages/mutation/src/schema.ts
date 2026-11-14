@@ -67,6 +67,11 @@ export interface SchemaUnit {
    * left to the oracle rewriter inside a switched block): their covering tests are known.
    */
   recorded: number[];
+  /**
+   * Has UNION ALL branches (views, cursor declarations): the first query parses all of them
+   * at once, which the run takes out of the baseline with a warm-up.
+   */
+  branched?: boolean;
 }
 
 interface Node {
@@ -307,13 +312,46 @@ class Renderer {
       this.write(` ${first ? 'IF' : 'ELSIF'} ${a} = ${m.id} THEN `);
       first = false;
       const vs = this.b.length;
-      this.write(this.src.subarray(p.start, m.point.start).toString('utf8') + m.mutated + this.src.subarray(m.point.end, p.end).toString('utf8'));
+      this.write(this.variant(n, m));
       this.region(vs, m.point, m.id);
     }
     this.write(' ELSE ');
     this.orig(n);
     this.write(' END IF;');
     this.su.regions.push({ start, end: this.b.length, point: n.dup!.points[0], mutantId: 0, points: n.dup!.all });
+  }
+
+  /**
+   * A copy of a duplicated statement with one mutant in place. Other switches stay out (only
+   * this mutant is active in it), loop guards stay in: a copied cursor FOR loop and the loops
+   * in its body must still stop when the mutant makes them run away.
+   */
+  variant(n: Node, m: Mutant): string {
+    const guards: Node[] = [];
+    const walk = (k: Node) => {
+      for (const c of k.kids) {
+        if (c.loop > 0) guards.push(c);
+        else walk(c);
+      }
+    };
+    walk(n);
+    const edits = guards
+      .filter((g) => g.p.start <= m.point.start || g.p.start >= m.point.end)
+      .map((g) => ({ at: g.p.start, end: g.p.start, text: this.guard(g) }));
+    edits.push({ at: m.point.start, end: m.point.end, text: m.mutated });
+    edits.sort((x, y) => x.at - y.at || x.end - y.end);
+    let out = '';
+    let cur = n.p.start;
+    for (const e of edits) {
+      out += this.raw(cur, e.at) + e.text;
+      cur = e.end;
+    }
+    return out + this.raw(cur, n.p.end);
+  }
+
+  /** Counts iterations in the recording run and while a mutant is active; beyond the recorded maximum ×10 it aborts. */
+  guard(n: Node): string {
+    return ` IF ${this.active} <> 0 THEN ${this.ctl}.tick(${n.loop}); END IF;`;
   }
 
   /** hit() calls for a set of IDs: one per run of consecutive IDs, summed (each returns 0). */
@@ -362,6 +400,7 @@ class Renderer {
       conds.push(`NVL(${V}, '0') NOT IN (${branches.slice(i, i + 900).map((m) => `'${m.id}'`).join(', ')})`);
     }
     conds.push(`(NVL(${V}, '0') <> '-1' OR (SELECT ${this.hits(n.dup!.reach.map((m) => m.id))} FROM dual) = 0)`);
+    if (branches.length) this.su.branched = true;
     // the block is a WITH element: its query is now the wrapper, which takes the INLINE hint
     this.write(this.inserts.some((i) => i.block === p.start) ? 'SELECT /*+ INLINE */ * FROM (' : 'SELECT * FROM (');
     this.orig(n);
@@ -414,9 +453,8 @@ class Renderer {
       return;
     }
     if (n.loop > 0) {
-      // Counts iterations in the recording run and while a mutant is active; beyond
-      // the recorded maximum ×10 the guard aborts (deterministic timeout).
-      this.write(` IF ${a} <> 0 THEN ${this.ctl}.tick(${n.loop}); END IF;`);
+      // deterministic timeout instead of the wall clock
+      this.write(this.guard(n));
       return;
     }
     if (!n.ms.length) {

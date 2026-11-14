@@ -381,37 +381,123 @@ class Finder {
       while (b < close && this.t[b].text !== ',') b = this.t[b].text === '(' ? this.close(b) + 1 : b + 1;
       if (this.t[a]?.text.startsWith('=')) return; // named notation: not worth the trouble
     }
+    // (x) is x
+    while (a >= 0 && b - a > 2 && this.t[a].text === '(' && this.close(a) === b - 1) {
+      a++;
+      b--;
+    }
     if (a < 0 || b !== a + 1) return; // a single token: a literal or a variable
     if (this.t[a].kind === 'string' || this.t[a].kind === 'ident') this.sinks.push({ tok: a, sub: env.sub, range: this.range });
   }
 
   /**
-   * Dynamic SQL: string literals that reach a sink, directly or as the only value a variable
-   * of the subprogram gets (declaration default or assignment). The literal's text is parsed
-   * as SQL and mutated like static SQL; a mutant is the literal with one change (quotes
-   * doubled again). The schema switches the whole literal in place (point.dyn): every variant
-   * is its own statement, parsed when executed, so no plan suffers.
+   * Dynamic SQL: string literals that reach a sink, directly or through a variable declared
+   * in the subprogram that only ever holds whole literals (see varLiterals). The literal's
+   * text is parsed as SQL and mutated like static SQL; a mutant is the literal with one change
+   * (quotes doubled again). The schema switches the whole literal in place (point.dyn): every
+   * variant is its own statement, parsed when executed, so no plan suffers.
    */
   private dynamicSql() {
-    const lits = new Map<number, string>();
+    const lits = new Map<number, { sub: string; max?: number }>();
+    const sinks = new Set(this.sinks.map((s) => s.tok));
     for (const s of this.sinks) {
       if (this.t[s.tok].kind === 'string') {
-        lits.set(s.tok, s.sub);
+        lits.set(s.tok, { sub: s.sub });
         continue;
       }
-      const name = this.t[s.tok].up;
-      for (let k = s.range[0]; k < s.range[1]; k++) {
-        if (this.t[k].kind !== 'string' || this.t[k + 1]?.text !== ';' || !(this.t[k - 1]?.text === ':=' || this.t[k - 1]?.up === 'DEFAULT')) continue;
-        // start of the declaration or assignment
-        let j = k - 2;
-        while (j > s.range[0] && this.t[j].text !== ';' && !['IS', 'AS', 'BEGIN', 'THEN', 'ELSE', 'LOOP', 'DECLARE'].includes(this.t[j].up)) j--;
-        if (this.t[j + 1]?.up === name) lits.set(k, s.sub);
+      const v = this.varLiterals(this.t[s.tok].up, s.range, sinks);
+      if (!v) continue;
+      for (const k of v.lits) {
+        const max = Math.min(lits.get(k)?.max ?? Infinity, v.max ?? Infinity);
+        lits.set(k, { sub: s.sub, max: Number.isFinite(max) ? max : undefined });
       }
     }
-    for (const [k, sub] of [...lits].sort((x, y) => x[0] - y[0])) this.literal(k, sub);
+    for (const [k, l] of [...lits].sort((x, y) => x[0] - y[0])) this.literal(k, l.sub, l.max);
   }
 
-  private literal(k: number, sub: string) {
+  /**
+   * The literals a variable holds as whole statements: declared in the range, every other
+   * occurrence an assignment (name := …; a literal is noted, any other value replaces it), a
+   * sink or a read in a concatenation. A variable built from itself (l_sql := l_sql || …,
+   * replace(l_sql, …)), passed to a procedure (an OUT parameter) or fetched into holds a
+   * statement the literal is only part of: mutated alone, a fragment would break where the
+   * whole statement does not. max: the declared length (VARCHAR2(n)), which a variant must not exceed.
+   */
+  private varLiterals(name: string, range: [number, number], sinks: Set<number>): { lits: number[]; max?: number } | undefined {
+    const lits: number[] = [];
+    let declared = false;
+    let max: number | undefined;
+    const starts = new Set(['IS', 'AS', 'BEGIN', 'THEN', 'ELSE', 'LOOP', 'DECLARE']);
+    for (let k = range[0]; k < range[1]; k++) {
+      const t = this.t[k];
+      if (t.kind !== 'ident' || t.up !== name || this.t[k - 1]?.text === '.') continue;
+      if (this.t[k + 1]?.text === '.' || this.t[k + 1]?.text === '(') return undefined; // a record, a collection
+      if (sinks.has(k)) continue;
+      const prev = this.t[k - 1];
+      const atStart = !prev || prev.text === ';' || starts.has(prev.up);
+      if (atStart && this.t[k + 1]?.text === ':=') {
+        if (this.t[k + 2]?.kind === 'string' && this.t[k + 3]?.text === ';') {
+          lits.push(k + 2);
+          k += 3;
+          continue;
+        }
+        // another value replaces the literal; one built from the variable itself (v := v || …, replace(v, …)) does not
+        const e = this.rhsEnd(k + 2, range[1]);
+        if (this.mentions(name, k + 2, e)) return undefined;
+        k = e;
+        continue;
+      }
+      if (atStart && !declared && this.t[k + 1]?.kind === 'ident') {
+        // name [CONSTANT] type[(n [BYTE|CHAR])] [NOT NULL] [:= | DEFAULT literal];
+        let e = k + 1;
+        if (this.t[e].up === 'CONSTANT') e++;
+        // other types (a subtype, %TYPE) give no length to check
+        if (['VARCHAR2', 'VARCHAR', 'NVARCHAR2'].includes(this.t[e]?.up) && this.t[e + 1]?.text === '(' && this.t[e + 2]?.kind === 'number') {
+          const n = Number(this.t[e + 2].text);
+          // BYTE (the default semantics) is checked in bytes, CHAR and NVARCHAR2 in characters
+          const chars = this.t[e + 3]?.up === 'CHAR' || this.t[e].up === 'NVARCHAR2';
+          max = chars ? -n : n;
+        }
+        while (e < range[1] && this.t[e].text !== ';' && this.t[e].text !== ':=' && this.t[e].up !== 'DEFAULT') e = this.t[e].text === '(' ? this.close(e) + 1 : e + 1;
+        declared = true;
+        if (this.t[e]?.text === ';') {
+          k = e;
+          continue;
+        }
+        if (this.t[e + 1]?.kind === 'string' && this.t[e + 2]?.text === ';') {
+          lits.push(e + 1);
+          k = e + 2;
+        } else k = this.rhsEnd(e + 1, range[1]);
+        continue;
+      }
+      // read in a concatenation for a call (logging); one that builds another statement would
+      // carry the literal as a fragment (other := name || ' where …')
+      if (prev?.text === '||' || this.t[k + 1]?.text === '||') {
+        let j = k - 1;
+        while (j > range[0] && this.t[j].text !== ';' && !starts.has(this.t[j].up)) j--;
+        if (this.t[j + 2]?.text === ':=' || this.t[j + 1]?.up === 'RETURN') return undefined;
+        continue;
+      }
+      return undefined;
+    }
+    return declared && lits.length ? { lits, max } : undefined;
+  }
+
+  /** The semicolon that ends an expression starting at a. */
+  private rhsEnd(a: number, end: number): number {
+    let e = a;
+    while (e < end && this.t[e].text !== ';') e = this.t[e].text === '(' ? this.close(e) + 1 : e + 1;
+    return e;
+  }
+
+  /** Whether the variable name occurs in [a, b) (not as a member: x.name). */
+  private mentions(name: string, a: number, b: number): boolean {
+    for (let k = a; k < b; k++) if (this.t[k].kind === 'ident' && this.t[k].up === name && this.t[k - 1]?.text !== '.') return true;
+    return false;
+  }
+
+  /** max: the variable's declared length; bytes if positive, characters if negative (see varLiterals). */
+  private literal(k: number, sub: string, max?: number) {
     const tok = this.t[k];
     if (this.inConditional(tok.start)) return;
     const s = this.src.slice(tok.start, tok.end);
@@ -458,7 +544,11 @@ class Finder {
       if (p.start < from || p.end > to || p.kind === 'insert' || p.kind === 'stmt') continue;
       const a = at(p.start);
       const b = at(p.end);
-      const mutants = p.mutants.map(escape).filter((m) => !q || !m.includes(`${closing}'`));
+      const orig = buf.subarray(p.start, p.end).toString('utf8');
+      // a variant longer than the variable would fail with ORA-06502 before reaching SQL
+      const fits = (m: string) => max === undefined
+        || (max > 0 ? Buffer.byteLength(content) - (p.end - p.start) + Buffer.byteLength(m) <= max : content.length - orig.length + m.length <= -max);
+      const mutants = p.mutants.filter(fits).map(escape).filter((m) => !q || !m.includes(`${closing}'`));
       if (!mutants.length) continue;
       this.points.push({
         unit: this.unit, op: p.op, kind: p.kind, sub, ctx: 'sql', cat: p.cat,

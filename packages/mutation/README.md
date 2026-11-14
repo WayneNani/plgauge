@@ -20,7 +20,9 @@ Portierung von plmut (Go) nach TypeScript. Abgeglichen gegen die Go-Fassung auf 
 
 Jede Änderung am Code läuft über das Wiederherstellungs-Journal des Kerns (`pltest restore`). Hat ein abgebrochener
 Lauf Einheiten verändert zurückgelassen, stellt der nächste Lauf sie beim Start aus dem Journal wieder her, bevor er
-installiert oder Originale liest.
+installiert oder Originale liest. Damit das nicht einen noch laufenden Lauf trifft, hält jeder Lauf für seine Dauer
+eine Zeilensperre in `PLTEST_LOCK` (eigene Verbindung, nie committet); ein zweiter Lauf auf demselben Schema bricht
+sofort ab. Die Sperre endet mit der Sitzung, auch wenn der Prozess stirbt.
 
 ## Operatoren
 
@@ -55,18 +57,24 @@ eine Join-Bedingung nimmt dem Optimizer den Join (gemessen an plscope-utils: Min
 `DBA_IDENTIFIERS`). Stattdessen steht die PL/SQL-Anweisung (statisches SQL, `FORALL`, `OPEN … FOR`) einmal pro Variante
 im Schema (`IF aktiv = id THEN <Variante> ELSIF … ELSE <Original> END IF;`); das Original behält seinen Plan. Eine
 Cursor-FOR-Schleife über eine Abfrage wird als Ganzes verdoppelt, mit Rumpf; die Kopien einer Anweisung zusammen
-dürfen 256 KB groß sein, darüber laufen die übrigen Stellen einzeln. Die Abfrage einer Cursor-Deklaration wird wie
+dürfen 256 KB groß sein, darüber laufen die übrigen Stellen einzeln. Die Kopien behalten die Schleifenwächter der
+Schleife und ihres Rumpfs. Die Abfrage einer Cursor-Deklaration wird wie
 ein Block einer View geschaltet (`UNION ALL`, unten), mit höchstens 20 Zweigen pro Cursor. Das erste Ausführen
-parst alle Kopien (bei Cursorn über Dictionary-Views Sekunden); ein Aufwärmlauf auf allen Workern vor der Baseline
-hält das aus der Zeitgrenze heraus. Ausgenommen sind Cursor
+parst alle Zweige (bei Cursorn über Dictionary-Views Sekunden); gibt es Zweige, hält ein Aufwärmlauf auf allen
+Workern vor der Baseline das aus der Zeitgrenze heraus. Ausgenommen sind Cursor
 mit `ORDER BY` (eingepackt wäre ihre Reihenfolge nicht mehr garantiert), mit `FOR UPDATE` und mit `WITH`; ihre
 Mutanten werden einzeln kompiliert. Für sie gibt es keine Aufzeichnung, welche Tests sie erreichen: Sie laufen gegen
 alle Tests, und ein Mutant, den kein Test erreicht, erscheint als überlebt statt als nicht erreicht. `--ops` wählt
 Operatoren aus, z. B. `--ops ROR,LCR,AOR,SBR,RET,EXC,NUL,CUR` für nur Stufe 1.
 
 Dynamisches SQL: Ein String-Literal, das `EXECUTE IMMEDIATE`, `OPEN … FOR` oder `DBMS_SQL.PARSE` erreicht, direkt
-oder als einziger Wert einer Variablen des Unterprogramms (Vorbelegung oder Zuweisung), wird als SQL geparst und mit
-beiden Stufen mutiert. Der Mutant ist das Literal mit einer Änderung (Anführungszeichen wieder verdoppelt, bei
+oder über eine im Unterprogramm deklarierte Variable (Vorbelegung oder `v := '…';`), wird als SQL geparst und mit
+beiden Stufen mutiert, auch in Klammern (`EXECUTE IMMEDIATE (v)`). Andere Werte der Variablen ersetzen das Literal und
+stören nicht. Wird der Wert aber aus der Variablen selbst gebaut (`v := v || …`, `replace(v, …)`), in eine andere
+Anweisung eingebaut (`w := v || ' where …'`), wird die Variable an eine Prozedur übergeben (vielleicht als OUT; Lesen
+in einer Verkettung für einen Aufruf, etwa zum Protokollieren, ist erlaubt) oder in sie gefetcht, ist das Literal nur
+ein Stück einer Anweisung und bleibt außen vor. Varianten, die länger würden als die deklarierte Länge (`VARCHAR2(n)`), entfallen:
+Sie scheiterten mit ORA-06502, bevor das SQL läuft. Die Kopien eines Literals zusammen dürfen 256 KB groß sein. Der Mutant ist das Literal mit einer Änderung (Anführungszeichen wieder verdoppelt, bei
 `q'[…]'` unverändert). Das Schema schaltet das ganze Literal an Ort und Stelle (`CASE aktiv WHEN 17 THEN '<Variante>'
 … ELSE '<Original>' END`); jede Variante ist eine eigene Anweisung, die erst beim Ausführen geparst wird, also leidet
 kein Plan. Zusammengesetzte Strings (`'select … ' || x`) bleiben außen vor.
@@ -123,12 +131,13 @@ vom Plan abhängt. Zwei Maßnahmen:
 
 - **Daten zurückschreiben:** Committen die Tests schon ohne Mutanten, stellt die Baseline fest, welche Tests das tun
   (jeder einmal allein). Nach jedem Mutanten, unter dem committet wurde, laufen von seinen Tests die committenden noch
-  einmal auf dem Original (im Orakel-Modus nach dem Zurückspielen der Einheit, und nur, wenn nicht ohnehin alle Tests
-  liefen). So beginnt kein Mutant mit Daten, die ein anderer Mutant geschrieben hat.
+  einmal auf dem Original (im Orakel-Modus nach dem Zurückspielen der Einheit). So beginnt kein Mutant mit Daten, die
+  ein anderer Mutant geschrieben hat.
 - **Zweiter Versuch:** Jeder erkannte Mutant läuft noch einmal mit dem erkennenden Test allein. Im Schema-Modus geschieht
   das nach dem Lauf auf dem nächsten Worker (mit nur einem Worker auf demselben), im Orakel-Modus gleich nach dem
   Urteil, solange der Mutant noch kompiliert ist (ein anderer Worker müsste ihn neu kompilieren; gemessen an
-  plscope-utils kostete das mehr als der Lauf selbst). Besteht der Test, bleibt der Mutant erkannt, wird aber als
+  plscope-utils kostete das mehr als der Lauf selbst). Hat der erste Lauf committet, werden vorher die Daten
+  zurückgeschrieben und der Mutant neu kompiliert: Auch der zweite Versuch beginnt mit Daten wie ohne Mutanten. Besteht der Test, bleibt der Mutant erkannt, wird aber als
   unsicher markiert: Die Erkennung hing an der Reihenfolge der Tests, an Daten oder (nur im Schema-Modus prüfbar) an
   der Datenbank. Eine Zeitüberschreitung (nicht die des Schleifenwächters) läuft mit doppelter Zeit noch einmal.
   Endet sie dann, gilt das neue Urteil, ebenfalls markiert.
