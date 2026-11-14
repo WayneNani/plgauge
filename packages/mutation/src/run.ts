@@ -25,7 +25,7 @@ import type { CoverageExport } from '@pltest/coverage';
 import { CoverageIndex, unitLineOf } from './link.js';
 import { expand, mutatedUnit, objectName, objectOwner, unitKey, withoutCreate, type Mutant, type Point, type SourceFile } from './mutant.js';
 import { findPoints } from './find.js';
-import { buildSchema, locate, switchable, type SchemaUnit } from './schema.js';
+import { buildSchema, locate, positionOf, switchable, type SchemaUnit } from './schema.js';
 import {
   activate, aborted, failed, firstFailure, firstFailureMessage, firstLine, hits, installControl, installRuntime, isMemory,
   loops, newSession, parseDbUrl, resetPackages, runTests, setLoopLimits,
@@ -250,18 +250,17 @@ class Worker {
     if (!out.error) return [];
     if (out.offset !== undefined) {
       // a view statement rejected at once: the server's offset into the text
-      const before = text.slice(0, out.offset);
-      const line = before.split('\n').length;
-      return [{ line, position: [...before.slice(before.lastIndexOf('\n') + 1)].length + 1, text: out.error }];
+      const { line, col } = positionOf(text, out.offset);
+      return [{ line, position: col, text: out.error }];
     }
     const errs = await objectErrors(this.deploy, obj);
     return errs.length ? errs : [{ line: 0, position: 0, text: out.error }];
   }
 
-  async restore(key: string): Promise<void> {
+  async restore(key: string, recompile = true): Promise<void> {
     const obj = this.changed.get(key);
     if (!obj) return;
-    await restoreAll(this.deploy, [obj], (m) => (m.includes('✗') ? this.logf(`WARNUNG${this.name}: ${m.trim()}`) : undefined));
+    await restoreAll(this.deploy, [obj], (m) => (m.includes('✗') ? this.logf(`WARNUNG${this.name}: ${m.trim()}`) : undefined), recompile);
     this.changed.delete(key);
   }
 
@@ -691,9 +690,10 @@ async function runSchema(run: Run, ms: Mutant[], stop: () => boolean): Promise<R
   const t0 = performance.now();
   await installControl(w.deploy);
   await capViews(run, ms, naive);
-  let rounds = await compileSchema(run, ms, dropped, naive);
-  if (await isolateViews(run, ms, dropped, naive)) rounds += await compileSchema(run, ms, dropped, naive);
-  const units = buildSchema(ms, new Set(dropped.keys()), naive, await w.currentSchema());
+  const broken = new Set<string>();
+  let rounds = await compileSchema(run, ms, dropped, naive, broken);
+  rounds += await isolateViews(run, ms, dropped, naive, broken);
+  const units = buildSchema(ms, new Set(dropped.keys()), naive, await w.currentSchema(), broken);
   w.schema = units;
   await Promise.all(run.workers.slice(1).map(async (h) => {
     h.schema = units;
@@ -804,44 +804,47 @@ async function failingTests(run: Run, paths: string[]): Promise<Set<string>> {
  * lineage analysis) sees the copies: such tests would fail in the baseline and be lost for
  * every mutant. Tests failing with the switched views but not with the original ones are
  * traced to single views; those views stay original, their mutants run one by one (naive).
- * Returns whether points were moved, so that the schema has to be compiled again.
+ * Returns the compile rounds spent putting the views back.
  */
-async function isolateViews(run: Run, ms: Mutant[], dropped: Map<number, string>, naive: Set<Point>): Promise<boolean> {
+async function isolateViews(run: Run, ms: Mutant[], dropped: Map<number, string>, naive: Set<Point>, broken: Set<string>): Promise<number> {
   const w = run.primary;
-  const views = buildSchema(ms, new Set(dropped.keys()), naive, await w.currentSchema()).filter((u) => u.type === 'VIEW' && u.mutants.length);
-  if (!views.length) return false;
+  const views = buildSchema(ms, new Set(dropped.keys()), naive, await w.currentSchema(), broken).filter((u) => u.type === 'VIEW' && u.mutants.length);
+  if (!views.length) return 0;
   const withViews = await failingTests(run, run.cfg.tests);
-  if (!withViews.size) return false;
-  for (const v of views) await w.restore(v.key);
+  if (!withViews.size) return 0;
+  // dependents of the views recompile on first use: no compile_schema per view
+  for (const v of views) await w.restore(v.key, false);
   const without = await failingTests(run, run.cfg.tests);
   const extra = [...withViews].filter((t) => !without.has(t));
-  if (!extra.length) return true; // the views come back with the next compile
-  const culprits = new Map<SchemaUnit, string[]>();
-  for (const v of views) {
-    await w.compileUnit(v.key, v.type, v.owner ? `"${v.owner}"."${v.name}"` : v.name, v.text);
-    const f = await failingTests(run, extra);
-    const hit = extra.filter((t) => f.has(t));
-    if (hit.length) culprits.set(v, hit);
-    await w.restore(v.key);
+  if (extra.length) {
+    const culprits = new Map<SchemaUnit, string[]>();
+    for (const v of views) {
+      await w.compileUnit(v.key, v.type, v.owner ? `"${v.owner}"."${v.name}"` : v.name, v.text);
+      const f = await failingTests(run, extra);
+      const hit = extra.filter((t) => f.has(t));
+      if (hit.length) culprits.set(v, hit);
+      await w.restore(v.key, false);
+    }
+    // no single view: they fail together
+    if (!culprits.size) for (const v of views) culprits.set(v, extra);
+    for (const [v, tests] of culprits) {
+      for (const m of ms) if (unitKey(m) === v.key) naive.add(m.point);
+      run.logf(`${v.key}: ohne Schema (scheitern damit: ${tests.map((t) => t.split('.').pop()).join(', ')}), Mutanten einzeln`);
+    }
   }
-  // no single view: they fail together
-  if (!culprits.size) for (const v of views) culprits.set(v, extra);
-  for (const [v, tests] of culprits) {
-    for (const m of ms) if (unitKey(m) === v.key) naive.add(m.point);
-    run.logf(`${v.key}: ohne Schema (scheitern damit: ${tests.map((t) => t.split('.').pop()).join(', ')}), Mutanten einzeln`);
-  }
-  return true;
+  // the views back into the schema (those to blame as originals); the other units are unchanged
+  return compileSchema(run, ms, dropped, naive, broken, (su) => su.type === 'VIEW');
 }
 
 /**
- * Compiles the schema units on the primary, charges compile errors to the branch or
+ * Compiles the schema units (those passing only) on the primary, charges compile errors to the branch or
  * point they occur in and repeats until every unit is valid.
  */
-async function compileSchema(run: Run, ms: Mutant[], dropped: Map<number, string>, naive: Set<Point>): Promise<number> {
+async function compileSchema(run: Run, ms: Mutant[], dropped: Map<number, string>, naive: Set<Point>, broken: Set<string>, only: (su: SchemaUnit) => boolean = () => true): Promise<number> {
   const w = run.primary;
   for (let round = 1; round <= 20; round++) {
     let bad = false;
-    for (const su of buildSchema(ms, new Set(dropped.keys()), naive, await w.currentSchema())) {
+    for (const su of buildSchema(ms, new Set(dropped.keys()), naive, await w.currentSchema(), broken).filter(only)) {
       const errs = await w.compileUnit(su.key, su.type, su.owner ? `"${su.owner}"."${su.name}"` : su.name, su.text);
       if (!errs.length) continue;
       bad = true;
@@ -849,8 +852,10 @@ async function compileSchema(run: Run, ms: Mutant[], dropped: Map<number, string
         if (isCompanion(e.text)) continue;
         const rg = e.line > 0 ? locate(su, e.line, e.position) : undefined;
         if (rg && rg.mutantId) dropped.set(rg.mutantId, `${e.line}:${e.position} ${e.text}`);
-        else if (rg) for (const q of rg.points ?? [rg.point]) naive.add(q);
-        else {
+        else if (rg) {
+          for (const q of rg.points ?? [rg.point]) naive.add(q);
+          if (rg.block) broken.add(rg.block);
+        } else {
           run.logf(`Fehler ohne Zuordnung in ${su.key}: ${e.line}:${e.position} ${e.text}`);
           for (const m of su.mutants) naive.add(m.point);
         }

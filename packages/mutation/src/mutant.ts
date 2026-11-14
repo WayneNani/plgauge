@@ -20,6 +20,11 @@ export interface Unit {
   inserts?: { at: number; text: string; block: number }[];
   /** Views: byte range of the main query block (the scope of its points). */
   main?: [number, number];
+  /**
+   * Views: the main block ends in ORDER BY. Wrapped in UNION ALL its order would no longer be
+   * guaranteed, so it gets no wrapper; its points run with the oracle rewriter.
+   */
+  ordered?: boolean;
 }
 
 /** One place in the source with one or more mutants. */

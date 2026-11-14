@@ -75,8 +75,13 @@ höchstens 20 Zweige (weniger, wenn `EXPLAIN PLAN` des Originals lange dauert), 
 kompiliert, aber nur gegen die Tests, die ihren Block laut Aufzeichnung erreichen. `WITH`-Elemente, die das Original
 einmal referenziert, bekommen im Schema `/*+ INLINE */`, sonst würden die Kopien sie materialisieren. Stellen ohne eigenen
 Block (rekursive `WITH`-Elemente) zeichnet der Hauptblock auf: Ein Test, der ihn nie ausführt, fragt die View nicht ab.
-Das Original einer View kommt aus `DBMS_METADATA` und steht im Restore-Journal wie jede Einheit; Fehler beim
-`CREATE VIEW` ordnet der Lauf über die Fehlerposition des Servers einem Zweig zu.
+Abfragen mit eigenem `ORDER BY` bekommen keinen Wrapper, denn
+sonst wäre ihre Reihenfolge nicht mehr garantiert (Top-N mit `ROWNUM`). Eine solche Inline-View gehört zum umgebenden
+Block. Die Stellen einer sortierten Hauptabfrage laufen einzeln. Views mit `WITH FUNCTION` meldet der Finder als nicht
+unterstützt. Das Original einer View kommt aus `DBMS_METADATA`, bei Views anderer Schemas ohne `SELECT_CATALOG_ROLE` aus
+`ALL_VIEWS` und `ALL_TAB_COLUMNS`. Es steht im Restore-Journal wie jede Einheit. Fehler beim `CREATE VIEW` ordnet der Lauf
+über die Fehlerposition des Servers einem Zweig zu. Scheitert der Wrapper eines Blocks, laufen dessen Stellen einzeln,
+und der Block wird nicht noch einmal eingepackt.
 
 Tests, die den Text einer View lesen (Quelltext, Lineage-Analysen), sehen im Schema die Kopien. Scheitern Tests mit
 den geschalteten Views, aber nicht mit den Originalen, sucht der Lauf die View, an der es liegt; sie bleibt im

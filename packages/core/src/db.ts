@@ -94,10 +94,7 @@ export async function loadObjects(conn: oracledb.Connection, schema: string, fil
 
 export async function loadObject(conn: oracledb.Connection, owner: string, name: string, type: string): Promise<SourceObject> {
   if (type === 'VIEW') {
-    // the complete statement (column list, FORCE, options) without CREATE OR REPLACE
-    const r = await conn.execute<[string]>(`select dbms_metadata.get_ddl('VIEW', :n, :o) ddl from dual`, { n: name, o: owner }, { fetchInfo: { DDL: { type: oracledb.STRING } } });
-    const original = String(r.rows?.[0]?.[0] ?? '').replace(/^\s*create\s+or\s+replace\s+/i, '').trim();
-    if (!original) throw new Error(`View ${owner}.${name} nicht gefunden`);
+    const original = await viewDdl(conn, owner, name);
     return { owner, name, type, original, processed: original, settings: {} };
   }
   const src = await conn.execute<[string]>(
@@ -125,6 +122,35 @@ export async function loadObject(conn: oracledb.Connection, owner: string, name:
       ? { plsql_optimize_level: String(s[0]), plsql_code_type: s[1], plsql_ccflags: s[2] ?? '', nls_length_semantics: s[3], plscope_settings: s[4] ?? '' }
       : {},
   };
+}
+
+/**
+ * A view's statement without CREATE OR REPLACE. DBMS_METADATA keeps everything (FORCE, BEQUEATH,
+ * collation), but shows other schemas' objects only with SELECT_CATALOG_ROLE (ORA-31603);
+ * then the dictionary gives column list, query and read-only/check constraint.
+ */
+async function viewDdl(conn: oracledb.Connection, owner: string, name: string): Promise<string> {
+  try {
+    const r = await conn.execute<[string]>(`select dbms_metadata.get_ddl('VIEW', :n, :o) ddl from dual`, { n: name, o: owner }, { fetchInfo: { DDL: { type: oracledb.STRING } } });
+    const ddl = String(r.rows?.[0]?.[0] ?? '').replace(/^\s*create\s+or\s+replace\s+/i, '').trim();
+    if (ddl) return ddl;
+  } catch (e) {
+    if (!/ORA-31603/.test((e as Error).message)) throw e;
+  }
+  return viewFromDictionary(conn, owner, name);
+}
+
+/** A view's statement from ALL_VIEWS, ALL_TAB_COLUMNS and ALL_CONSTRAINTS (FORCE VIEW … AS …). */
+export async function viewFromDictionary(conn: oracledb.Connection, owner: string, name: string): Promise<string> {
+  const v = await conn.execute<[string]>(`select text from all_views where owner = :o and view_name = :n`, { o: owner, n: name });
+  const text = v.rows?.[0]?.[0];
+  if (text === undefined) throw new Error(`View ${owner}.${name} nicht gefunden`);
+  const cols = await conn.execute<[string]>(`select column_name from all_tab_columns where owner = :o and table_name = :n order by column_id`, { o: owner, n: name });
+  const cons = await conn.execute<[string]>(`select constraint_type from all_constraints where owner = :o and table_name = :n and constraint_type in ('O', 'V')`, { o: owner, n: name });
+  const q = (x: string) => `"${x.replace(/"/g, '""')}"`;
+  const types = new Set((cons.rows ?? []).map((r) => r[0]));
+  const tail = types.has('O') ? ' WITH READ ONLY' : types.has('V') ? ' WITH CHECK OPTION' : '';
+  return `FORCE VIEW ${q(owner)}.${q(name)} (${(cols.rows ?? []).map((r) => q(r[0])).join(', ')}) AS ${text.trim()}${tail}`;
 }
 
 /**
@@ -197,8 +223,12 @@ export async function replaceSourceDetailed(conn: oracledb.Connection, obj: Sour
   return compileDetailed(conn, obj, source);
 }
 
-/** Compiles the originals again and clears their journal entries. */
-export async function restoreAll(conn: oracledb.Connection, objs: SourceObject[], say: (m: string) => void): Promise<void> {
+/**
+ * Compiles the originals again and clears their journal entries. recompile: then compile
+ * what became invalid in their schemas (dependents of a view, say); without it they
+ * recompile on first use.
+ */
+export async function restoreAll(conn: oracledb.Connection, objs: SourceObject[], say: (m: string) => void, recompile = true): Promise<void> {
   const schemas = new Set<string>();
   for (const obj of objs) {
     const err = await compile(conn, obj, obj.original);
@@ -209,7 +239,7 @@ export async function restoreAll(conn: oracledb.Connection, objs: SourceObject[]
     await journalForget(conn, obj);
     schemas.add(obj.owner);
   }
-  for (const s of schemas) await conn.execute(`begin dbms_utility.compile_schema(:s, compile_all => false); end;`, { s });
+  if (recompile) for (const s of schemas) await conn.execute(`begin dbms_utility.compile_schema(:s, compile_all => false); end;`, { s });
   say(`Originalcode von ${objs.length} Objekten wiederhergestellt`);
 }
 

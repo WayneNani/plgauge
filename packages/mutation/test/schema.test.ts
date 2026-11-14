@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { buildSchema, expand, findPoints, locate, mutatedUnit, type SourceFile } from '@pltest/mutation';
+import { buildSchema, expand, findPoints, locate, mutatedUnit, positionOf, type SourceFile } from '@pltest/mutation';
 
 function testFile(): SourceFile {
   const src =
@@ -154,4 +154,44 @@ test('schema: view points without a block are recorded by the main block (no tes
   const su = buildSchema(ms, new Set(), new Set(loose.map((m) => m.point)), 'DEMO')[0];
   assert.deepEqual(su.recorded, loose.map((m) => m.id));
   assert.ok(su.text.includes(`plmut_ctl.hit(${Math.min(...ms.map((m) => m.id))}`), su.text);
+});
+
+test('schema: an ordered view keeps its main query unwrapped; a failing wrapper marks its block broken', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pltest-'));
+  writeFileSync(join(dir, 'o.sql'), 'create view o as\n  with w as (select a from t where a > 1)\n  select a from w where a < 9 order by a;\n');
+  const ms = expand(findPoints([join(dir, 'o.sql')]));
+  const su = buildSchema(ms, new Set(), new Set(), 'DEMO')[0];
+  assert.ok(su.text.includes('select a from w where a < 9 order by a;') || su.text.endsWith('select a from w where a < 9 order by a'), su.text);
+  assert.equal((su.text.match(/UNION ALL/g) ?? []).length, 4, 'only the WITH element is switched');
+  const wrapper = su.regions.find((r) => r.mutantId === 0 && r.block);
+  assert.ok(wrapper && wrapper.points!.length > 0);
+  // the WITH element's wrapper failed: no wrapper next time, its points with the oracle rewriter
+  const again = buildSchema(ms, new Set(), new Set(wrapper.points), 'DEMO', new Set([wrapper.block!]))[0];
+  assert.ok(!again.text.includes('UNION ALL'), again.text);
+});
+
+test('schema: a duplicated PL/SQL statement charges an error in its scaffold to all its points', () => {
+  const src = 'CREATE OR REPLACE PROCEDURE q IS\nBEGIN\n  UPDATE t SET a = 1, b = 2 WHERE id = 3;\nEND;';
+  const stmt = 'UPDATE t SET a = 1, b = 2 WHERE id = 3;';
+  const s = src.indexOf(stmt);
+  const pt = (o: object) => ({ unit: 0, sub: 'q', ctx: 'sql', cat: '', ...o }) as SourceFile['points'][number];
+  const f: SourceFile = {
+    path: 'q.prc', errors: [], skipped: 0, src: Buffer.from(src), loops: [],
+    units: [{ type: 'PROCEDURE', name: 'q', start: 0, end: src.length, decl: -1 }],
+    points: [
+      pt({ op: 'COL', kind: 'clause', start: src.indexOf('a = 1'), end: src.indexOf(' WHERE'), orig: 'a = 1, b = 2', mutants: ['b = 2'], scope: [s, s + stmt.length] }),
+      pt({ op: 'ROR', kind: 'bool', start: src.indexOf('id = 3'), end: src.indexOf('id = 3') + 6, orig: 'id = 3', mutants: ['FALSE'], scope: [s, s + stmt.length] }),
+    ],
+  };
+  const su = buildSchema(expand([f]))[0];
+  const i = su.text.indexOf('IF plmut_ctl.active() = -1');
+  const line = 1 + (su.text.slice(0, i).match(/\n/g)?.length ?? 0);
+  const rg = locate(su, line, i - su.text.lastIndexOf('\n', i - 1) + 1);
+  assert.equal(rg?.mutantId, 0);
+  assert.equal(rg?.points?.length, 2);
+});
+
+test('positionOf: offset to line and column in code points', () => {
+  assert.deepEqual(positionOf('ab\ncä€d', 6), { line: 2, col: 4 });
+  assert.deepEqual(positionOf('abc', 0), { line: 1, col: 1 });
 });

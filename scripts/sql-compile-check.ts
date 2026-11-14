@@ -11,7 +11,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import oracledb from 'oracledb';
 import { extractUnits } from '../packages/coverage/src/corpus.ts';
-import { buildSchema, expand, findInFile, locate, mutatedUnit, SQL_OPERATORS, switchable, type Mutant, type Point } from '../packages/mutation/src/index.ts';
+import { buildSchema, expand, findInFile, locate, mutatedUnit, positionOf, SQL_OPERATORS, switchable, type Mutant, type Point } from '../packages/mutation/src/index.ts';
 import { CTL_SPEC } from '../packages/mutation/src/ddl.ts';
 import { readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -43,6 +43,8 @@ const dictName = (n: string) => {
 };
 async function compile(type: string, name: string, text: string, skip = 0): Promise<{ line: number; col: number; text: string }[]> {
   const stmt = unqualified(text).replace(/\s*$/, '');
+  // unqualified drops "schema." from the header: offsets behind it are that much shorter than in text
+  const shift = text.replace(/\s*$/, '').length - stmt.length;
   try {
     await conn.execute(stmt);
   } catch (e) {
@@ -50,9 +52,9 @@ async function compile(type: string, name: string, text: string, skip = 0): Prom
     const off = (e as { offset?: number }).offset;
     if (!msg.includes('ORA-24344')) {
       // views are rejected at once: position from the server's offset (skip: the CREATE in front of the schema text)
-      if (typeof off !== 'number' || off < skip) return [{ line: 0, col: 0, text: msg.split('\n')[0] }];
-      const before = stmt.slice(skip, off);
-      return [{ line: before.split('\n').length, col: [...before.slice(before.lastIndexOf('\n') + 1)].length + 1, text: msg.split('\n')[0] }];
+      if (typeof off !== 'number' || off + shift < skip) return [{ line: 0, col: 0, text: msg.split('\n')[0] }];
+      const { line, col } = positionOf(text.slice(skip), off + shift - skip);
+      return [{ line, col, text: msg.split('\n')[0] }];
     }
   }
   const r = await conn.execute<[number, number, string]>(
@@ -104,15 +106,19 @@ for (const path of files) {
     res.schema.units++;
     const dropped = new Set<number>();
     const naive = new Set<Point>(ums.filter((m) => !switchable(m.point)).map((m) => m.point));
+    const broken = new Set<string>();
     for (let round = 1; round <= 20; round++) {
       res.schema.rounds++;
-      const su = buildSchema(ums, dropped, naive)[0];
+      const su = buildSchema(ums, dropped, naive, undefined, broken)[0];
       const errs = await compile(u.type, u.name, `CREATE OR REPLACE ${su.text}`, 'CREATE OR REPLACE '.length);
       if (!errs.length) break;
       for (const e of errs) {
         const rg = e.line > 0 ? locate(su, e.line, e.col) : undefined;
         if (rg?.mutantId) dropped.add(rg.mutantId);
-        else if (rg) for (const q of rg.points ?? [rg.point]) naive.add(q);
+        else if (rg) {
+          for (const q of rg.points ?? [rg.point]) naive.add(q);
+          if (rg.block) broken.add(rg.block);
+        }
         else {
           res.schema.unassigned.push(`${path} ${u.name}: ${e.line}:${e.col} ${e.text}`);
           for (const m of ums) naive.add(m.point);

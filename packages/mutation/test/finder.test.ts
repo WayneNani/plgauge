@@ -186,6 +186,16 @@ END s;
   assert.deepEqual([...new Set(ps.map((p) => `${p.op}${p.scope ? '*' : ''}`))].sort(), ['COL*', 'JOI*', 'ORD', 'ORD*', 'SEL', 'UNI']);
 });
 
+test('finder: a JOIN stays a LEFT JOIN candidate when WHERE lets the NULL rows through', () => {
+  const q = (cond: string) => `CREATE OR REPLACE PROCEDURE j IS n NUMBER; BEGIN SELECT 1 INTO n FROM t JOIN u x ON x.id = t.id WHERE ${cond}; END;\n/\n`;
+  const joi = (cond: string) => mutants(q(cond), ['JOI']);
+  assert.deepEqual(joi('x.k = 1'), []);
+  assert.deepEqual(joi('x.k IN (1, 2)'), []);
+  assert.deepEqual(joi("x.k IS DISTINCT FROM 'N'"), ['JOI: JOIN → LEFT JOIN']);
+  assert.deepEqual(joi('x.flag IS NOT TRUE'), ['JOI: JOIN → LEFT JOIN']);
+  assert.deepEqual(joi('x.k IS NULL'), ['JOI: JOIN → LEFT JOIN']);
+});
+
 test('finder: SQL operators leave out what Oracle rejects (bulk bind in FORALL, recursive WITH)', () => {
   const src = `CREATE OR REPLACE PROCEDURE r(ids sys.odcinumberlist) IS
   BEGIN
@@ -254,4 +264,29 @@ test('finder: views get INLINE hints for WITH elements referenced once (copies m
   const t = f.src.toString();
   const got = (f.units[0].inserts ?? []).map((i) => `${t.slice(i.block, i.at)}|${i.text}`);
   assert.deepEqual(got, ['select| /*+ INLINE */', 'select /*+| INLINE']);
+});
+
+test('finder: a view with WITH FUNCTION is reported, not cut at the semicolon of the function; the next unit stays', () => {
+  const src = `create or replace view wf as
+  with function f return number is begin return 1; end;
+  select f() x from dual
+/
+create or replace view ok as select a from t where a < 3;
+`;
+  const f = points(src, 'wf.sql')[0];
+  assert.equal(f.errors.length, 1);
+  assert.match(f.errors[0], /WITH FUNCTION/);
+  assert.deepEqual(f.units.map((u) => u.name), ['ok']);
+});
+
+test('finder: ordered queries of a view get no wrapper (their order must hold)', () => {
+  const src = `create view top3 as
+  select a from (select a, b from t where b > 0 order by b desc) where rownum <= 3 and a > 1 order by a;
+`;
+  const f = points(src, 'top3.sql')[0];
+  assert.equal(f.units[0].ordered, true);
+  const t = f.src.toString();
+  const scopes = [...new Set(f.points.map((p) => p.scope && t.slice(p.scope[0], p.scope[1])))];
+  // b > 0 belongs to the main block (the ordered inline view is none), which buildSchema leaves unwrapped
+  assert.deepEqual(scopes, ['select a from (select a, b from t where b > 0 order by b desc) where rownum <= 3 and a > 1 order by a']);
 });

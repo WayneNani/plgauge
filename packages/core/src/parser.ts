@@ -390,6 +390,8 @@ class Parser {
       }
     }
     if (as < 0) this.fail('AS der View nicht gefunden', a);
+    // PL/SQL in WITH: its semicolons do not end the view, and the query scan cannot read it
+    if (this.upAt(as + 1) === 'WITH' && ['FUNCTION', 'PROCEDURE'].includes(this.upAt(as + 2))) this.fail('View mit WITH FUNCTION wird nicht unterstützt', as + 1);
     let end = as + 1;
     while (end < this.t.length && !this.isOp(end, ';') && !this.isSlash(end) && !(this.t[end].up === 'CREATE' && this.t[end].kind === 'ident' && this.firstOnLine(end))) {
       end = this.isOp(end, '(') ? this.close(end) + 1 : end + 1;

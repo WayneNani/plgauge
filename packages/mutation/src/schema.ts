@@ -36,9 +36,14 @@ export interface Region {
   point: Point;
   /** Set when the region is one branch (variant) of the point. */
   mutantId: number;
-  /** View blocks: every point of the block, all of them unswitchable if the wrapper fails. */
+  /** Duplicated statements, view blocks: every point in it, all of them unswitchable if the scaffold fails. */
   points?: Point[];
+  /** View blocks: key of the block (see blockKey); a block whose wrapper failed is not wrapped again. */
+  block?: string;
 }
+
+/** Key of a view block for the broken set of buildSchema. */
+export const blockKey = (unitKey: string, scope: [number, number]) => `${unitKey}@${scope[0]}:${scope[1]}`;
 
 export interface SchemaUnit {
   key: string;
@@ -77,8 +82,10 @@ interface Node {
  */
 /**
  * runtimeOwner: the schema of plmut_ctl. Units of other schemas call it qualified (A4).
+ * broken: view blocks (blockKey) whose wrapper did not compile; they get none, not even
+ * the one that only records.
  */
-export function buildSchema(ms: Mutant[], dropped: Set<number> = new Set(), naive: Set<Point> = new Set(), runtimeOwner?: string): SchemaUnit[] {
+export function buildSchema(ms: Mutant[], dropped: Set<number> = new Set(), naive: Set<Point> = new Set(), runtimeOwner?: string, broken: Set<string> = new Set()): SchemaUnit[] {
   const byUnit = new Map<Unit, { f: SourceFile; points: Map<Point, Mutant[]> }>();
   for (const m of ms) {
     let e = byUnit.get(m.unitRef);
@@ -98,9 +105,12 @@ export function buildSchema(ms: Mutant[], dropped: Set<number> = new Set(), naiv
     const nodes: Node[] = [];
     let order = 0;
     const dups = new Map<string, Node>();
+    // blocks without wrapper: failed before, or the view's ordered main block
+    const isBroken = (scope: [number, number]) =>
+      broken.has(blockKey(su.key, scope)) || (!!u.ordered && !!u.main && scope[0] === u.main[0] && scope[1] === u.main[1]);
     const unrecorded: Mutant[] = [];
     for (const [p, pm] of points) {
-      if (p.scope && switchable(p) && !naive.has(p)) {
+      if (p.scope && switchable(p) && !naive.has(p) && !isBroken(p.scope)) {
         // one node per statement; it comes before an SBR point with the same range
         const key = p.scope.join(':');
         let g = dups.get(key);
@@ -130,7 +140,7 @@ export function buildSchema(ms: Mutant[], dropped: Set<number> = new Set(), naiv
       }
       const n: Node = { p, ms: [], kids: [], loop: 0, order: order++ };
       if (u.type === 'VIEW') unrecorded.push(...pm);
-      if (!naive.has(p) && switchable(p)) {
+      if (!naive.has(p) && switchable(p) && !(u.type === 'VIEW' && p.scope && isBroken(p.scope))) {
         for (const m of pm) {
           if (!dropped.has(m.id)) {
             n.ms.push(m);
@@ -145,10 +155,10 @@ export function buildSchema(ms: Mutant[], dropped: Set<number> = new Set(), naiv
     // Without one (a recursive WITH element, a block left out), the view's main block: a test
     // that never runs it never queries the view.
     // the main block records even without switched points of its own, if anything in the view is switched
-    if (u.type === 'VIEW' && u.main && su.mutants.length && unrecorded.length && !dups.has(u.main.join(':'))) {
-      const all = [...points.keys()];
-      const gp: Point = { ...all[0], op: '', kind: 'clause', ctx: 'sql', start: u.main[0], end: u.main[1], orig: '', mutants: [], scope: u.main };
-      const g: Node = { p: gp, ms: [], kids: [], loop: 0, order: -1 - dups.size, dup: { points: [], reach: [], all } };
+    if (u.type === 'VIEW' && u.main && su.mutants.length && unrecorded.length && !dups.has(u.main.join(':')) && !isBroken(u.main)) {
+      const gp: Point = { ...points.keys().next().value!, op: '', kind: 'clause', ctx: 'sql', start: u.main[0], end: u.main[1], orig: '', mutants: [], scope: u.main };
+      // no points of its own: if it fails, only the block is marked broken
+      const g: Node = { p: gp, ms: [], kids: [], loop: 0, order: -1 - dups.size, dup: { points: [], reach: [], all: [] } };
       dups.set(u.main.join(':'), g);
       nodes.push(g);
     }
@@ -268,7 +278,7 @@ class Renderer {
     this.write(' ELSE ');
     this.orig(n);
     this.write(' END IF;');
-    this.region(start, n.dup!.points[0], 0);
+    this.su.regions.push({ start, end: this.b.length, point: n.dup!.points[0], mutantId: 0, points: n.dup!.all });
   }
 
   /** Views: one UNION ALL branch per variant of the block; see the header. */
@@ -302,7 +312,8 @@ class Renderer {
       this.region(vs, m.point, m.id);
       this.write(`) WHERE ${V} = '${m.id}'`);
     }
-    this.su.regions.push({ start, end: this.b.length, point: n.dup!.all[0], mutantId: 0, points: n.dup!.all });
+    // a failing wrapper takes the block's points out of the schema and marks the block broken
+    this.su.regions.push({ start, end: this.b.length, point: n.dup!.all[0] ?? n.p, mutantId: 0, points: n.dup!.all, block: blockKey(this.su.key, [p.start, p.end]) });
     if (p.end < this.src.length && identByte(this.src[p.end])) this.write(' ');
   }
 
@@ -428,6 +439,15 @@ export function locate(su: SchemaUnit, line: number, col: number): Region | unde
     if (rg.mutantId === 0 && rg.end <= off && rg.end >= lineStart && (!best || rg.end > best.end)) best = rg;
   }
   return best;
+}
+
+/**
+ * Line and column (1-based, column in code points, as in USER_ERRORS) of a character offset:
+ * a statement that Oracle rejects at once (CREATE VIEW) reports only the offset.
+ */
+export function positionOf(text: string, offset: number): { line: number; col: number } {
+  const before = text.slice(0, offset);
+  return { line: before.split('\n').length, col: [...before.slice(before.lastIndexOf('\n') + 1)].length + 1 };
 }
 
 function offsetOf(text: string, line: number, col: number): number | undefined {

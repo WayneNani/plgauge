@@ -184,6 +184,7 @@ class Finder {
         const ins = this.inlineHints(u);
         if (ins.length) this.units[this.unit].inserts = ins;
         this.units[this.unit].main = this.blockRange(u.kids[0]);
+        this.units[this.unit].ordered = this.ordered(u.kids[0]);
       }
       for (const k of u.kids) this.walk(k, null, env);
     }
@@ -239,7 +240,8 @@ class Finder {
       case 'cursor': case 'query': case 'sql':
         env = { ...env, ctx: 'sql' };
         if (env.view && n.k === 'query') {
-          if (this.viewBlock(n, parent)) env.scope = this.blockRange(n);
+          // an ordered subquery stays inside its block: wrapped, its order (ROWNUM top-N) would not hold
+          if (this.viewBlock(n, parent) && (!parent || !this.ordered(n))) env.scope = this.blockRange(n);
           // a recursive WITH element is no block, and it lies outside the main query's block
           else if (env.scope && !(env.scope[0] <= this.sb(n.a) && this.eb(n.b - 1) <= env.scope[1])) env.scope = undefined;
         }
@@ -295,7 +297,8 @@ class Finder {
         break;
     }
     if (n.k === 'sql' || n.k === 'query') {
-      const lists = this.selectLists(n);
+      // only views switch select-list points in place
+      const lists = env.view ? this.selectLists(n) : [];
       for (const k of n.kids) this.walk(k, n, { ...env, proj: lists.some(([a, b]) => a <= k.a && k.b <= b) });
       this.whr(n, { ...env, proj: false });
       return;
@@ -362,6 +365,21 @@ class Finder {
       }
     }
     return out;
+  }
+
+  /** ORDER BY at the top level of a query's main part (not in OVER, subqueries or WITH elements). */
+  private ordered(q: Node): boolean {
+    let a = q.a;
+    let last = q.b - 1;
+    if (this.t[a].text === '(' && this.close(a) === last) {
+      a++;
+      last--;
+    }
+    for (let k = a; k <= last; k++) {
+      if (this.t[k].text === '(') k = this.close(k);
+      else if (this.t[k].up === 'ORDER' && this.t[k].kind === 'ident' && ['BY', 'SIBLINGS'].includes(this.t[k + 1]?.up)) return true;
+    }
+    return false;
   }
 
   /** Byte range of a view block: without enclosing parentheses, a WITH query from its main SELECT on. */
@@ -820,7 +838,7 @@ class Finder {
     }
   }
 
-  /** True if a conjunct of q's WHERE compares a column of alias (a NULL there fails the condition). */
+  /** True if a conjunct of q's WHERE compares a column of alias in a way a NULL fails. */
   private nullRejected(q: Node, alias: string): boolean {
     if (!alias) return false;
     const where = q.kids.find((c) => this.t[c.a - 1]?.up === 'WHERE');
@@ -833,7 +851,10 @@ class Finder {
     };
     flat(where);
     const ofAlias = (x: Node) => x.k === 'name' && x.b - x.a >= 3 && this.t[x.a].up === alias && this.t[x.a + 1].text === '.';
-    return conj.some((c) => (c.k === 'cmp' || (c.k === 'pred' && c.op !== 'EXISTS')) && c.kids.some(ofAlias));
+    // comparisons, LIKE, BETWEEN, IN, = ANY: NULL makes them unknown. Not IS DISTINCT FROM or
+    // IS [NOT] TRUE/UNKNOWN/JSON …, which hold for NULL or test it
+    const rejects = (c: Node) => c.k === 'cmp' || (c.k === 'pred' && (['LIKE', 'BETWEEN', 'IN'].includes(c.op!) || c.op!.endsWith(' ANY')));
+    return conj.some((c) => rejects(c) && c.kids.some(ofAlias));
   }
 
   /** SUB: EXISTS (subquery) gets NOT; x [NOT] IN (subquery) flips. NOT EXISTS is handled at the NOT node. */
