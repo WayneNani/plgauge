@@ -54,6 +54,8 @@ create or replace package cov$ authid definer is
   procedure flush(p_run varchar2);
   /* Runner: makes the run visible to other sessions / ends that. */
   procedure start_run(p_run varchar2);
+  -- 1 while the state of start_run is there (a DBMS_SESSION.RESET_PACKAGE in a test wipes it)
+  function intact return pls_integer;
   procedure stop_run(p_run varchar2);
   /* Other sessions: write their hits (called by the logoff trigger). */
   procedure flush_background;
@@ -335,6 +337,11 @@ create or replace package body cov$ is
     commit;
     g_runner := true;
     g_bg := false;
+  end;
+
+  function intact return pls_integer is
+  begin
+    return case when g_runner then 1 else 0 end;
   end;
 
   procedure stop_run(p_run varchar2) is

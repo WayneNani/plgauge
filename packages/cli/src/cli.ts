@@ -70,12 +70,18 @@ function sqlFiles(dir: string, out: string[] = []): string[] {
   return out;
 }
 
+/** A numeric option: undefined if absent; a value that is no number stops with a message (NaN would pass every check). */
+function numOpt(n: string): number | undefined {
+  const v = opt(n);
+  if (v === undefined) return undefined;
+  const x = Number(v);
+  if (v.trim() === '' || !Number.isFinite(x)) throw new Error(`--${n}: keine Zahl: ${v}`);
+  return x;
+}
+
 /** --min-stmt/--min-branch/--min-cond/--min-mcdc (coverage) and --min-score (mutation). */
 function thresholds() {
-  const num = (n: string) => {
-    const v = opt(n);
-    return v === undefined ? undefined : Number(v);
-  };
+  const num = (n: string) => numOpt(n);
   return {
     cov: { stmt: num('min-stmt'), branch: num('min-branch'), cond: num('min-cond'), mcdc: num('min-mcdc') } as Partial<Record<QuotaKey, number>>,
     score: num('min-score'),
@@ -250,11 +256,12 @@ async function main() {
       const sub = args.shift();
       const ops = opt('ops');
       const opSet = ops && ops !== 'all' ? new Set(ops.split(',').map((o) => o.trim().toUpperCase())) : undefined;
-      const sampleN = Number(opt('sample') ?? 0);
-      const seed = Number(opt('seed') ?? 1);
+      const sampleN = numOpt('sample') ?? 0;
+      const seed = numOpt('seed') ?? 1;
       const db = opt('db') ?? process.env.PLMUT_DB ?? '';
       const mode = (opt('mode') ?? 'schema') as 'schema' | 'naive';
-      const factor = Number(opt('timeout-factor') ?? 5);
+      const factor = numOpt('timeout-factor') ?? 5;
+      if (factor <= 0) throw new Error('--timeout-factor muss größer als 0 sein');
       const jsonOut = opt('json');
       const reportOut = opt('report');
       const resetCmd = opt('reset-cmd');
@@ -295,7 +302,9 @@ async function main() {
       if (rep.aborted) process.exitCode = 1;
       if (jsonOut) writeFileSync(jsonOut, jsonReport(rep));
       if (reportOut) writeFileSync(reportOut, reportOut.endsWith('.html') ? htmlReport(rep, dir) : mutationTestingReport(rep, dir));
-      if (minScore !== undefined && score(rep) + 1e-9 < minScore) enforce([`Mutation Score: ${score(rep).toFixed(1)} % < ${minScore} %`]);
+      // nothing to score (no mutants in the diff, say): nothing fails the gate, as in pltest check
+      const scored = rep.results.some((r) => ['KILLED', 'TIMEOUT', 'MEMORY', 'SURVIVED', 'NOT_COVERED'].includes(r.status));
+      if (minScore !== undefined && scored && score(rep) + 1e-9 < minScore) enforce([`Mutation Score: ${score(rep).toFixed(1)} % < ${minScore} %`]);
       break;
     }
     case 'crosscheck': {

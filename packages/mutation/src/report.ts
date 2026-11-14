@@ -71,7 +71,7 @@ export function jsonReport(rep: Report): string {
 }
 
 const mtStatus: Record<Status, string> = {
-  KILLED: 'Killed', SURVIVED: 'Survived', TIMEOUT: 'Timeout', MEMORY: 'RuntimeError',
+  KILLED: 'Killed', SURVIVED: 'Survived', TIMEOUT: 'Timeout', MEMORY: 'Killed',
   NOT_COVERED: 'NoCoverage', COMPILE_ERROR: 'CompileError', ERROR: 'RuntimeError',
 };
 

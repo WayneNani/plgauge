@@ -124,7 +124,7 @@ test('schema: a view block gets one UNION ALL branch per variant; select lists s
   const V = "SYS_CONTEXT('PLMUT_CTX_", c = (s: string) => s.replaceAll("SYS_CONTEXT('PLMUT_CTX_4FF006CA6B88', 'ACTIVE')", 'V');
   assert.ok(su.text.includes(V), su.text);
   assert.equal(c(su.text), 'view v as\n  SELECT * FROM (select (CASE V WHEN \'1\' THEN (a - 1) ELSE (a + 1) END) as b from t where a < 3)' +
-    " WHERE NVL(V, '0') NOT IN ('2', '3', '4', '5') AND (NVL(V, '0') <> '-1' OR (SELECT plmut_ctl.hit(1, 5) FROM dual) = 0)" +
+    " WHERE NVL(V, '0') NOT IN ('2', '3', '4', '5') AND (NVL(V, '0') <> '-1' OR (SELECT plmut_ctl.hit_sql(1, 5) FROM dual) = 0)" +
     " UNION ALL SELECT * FROM (select a + 1 as b from t where a <= 3) WHERE V = '2'" +
     " UNION ALL SELECT * FROM (select a + 1 as b from t where a <> 3) WHERE V = '3'" +
     " UNION ALL SELECT * FROM (select a + 1 as b from t where FALSE) WHERE V = '4'" +
@@ -141,7 +141,7 @@ test('schema: a view block gets one UNION ALL branch per variant; select lists s
   // dropped and unswitched points are not switched; the block still records the unswitched ones
   const part = buildSchema(ms, new Set([2, 3, 4]), new Set([ms[0].point]), 'DEMO')[0];
   const rest = c(part.text);
-  assert.ok(rest.startsWith("view v as\n  SELECT * FROM (select a + 1 as b from t where a < 3) WHERE NVL(V, '0') NOT IN ('5') AND (NVL(V, '0') <> '-1' OR (SELECT plmut_ctl.hit(1, 1) + plmut_ctl.hit(5, 1) FROM dual) = 0) UNION ALL"), rest);
+  assert.ok(rest.startsWith("view v as\n  SELECT * FROM (select a + 1 as b from t where a < 3) WHERE NVL(V, '0') NOT IN ('5') AND (NVL(V, '0') <> '-1' OR (SELECT plmut_ctl.hit_sql(1, 1) + plmut_ctl.hit_sql(5, 1) FROM dual) = 0) UNION ALL"), rest);
   assert.deepEqual(part.recorded, [1]);
 });
 
@@ -153,7 +153,7 @@ test('schema: view points without a block are recorded by the main block (no tes
   assert.ok(loose.length > 0);
   const su = buildSchema(ms, new Set(), new Set(loose.map((m) => m.point)), 'DEMO')[0];
   assert.deepEqual(su.recorded, loose.map((m) => m.id));
-  assert.ok(su.text.includes(`plmut_ctl.hit(${Math.min(...ms.map((m) => m.id))}`), su.text);
+  assert.ok(su.text.includes(`plmut_ctl.hit_sql(${Math.min(...ms.map((m) => m.id))}`), su.text);
 });
 
 test('schema: an ordered view keeps its main query unwrapped; a failing wrapper marks its block broken', () => {
@@ -337,7 +337,7 @@ test('schema: a view whose points all run one by one keeps a recording wrapper; 
   assert.deepEqual(su.mutants, []);
   assert.deepEqual(su.recorded, ms.map((m) => m.id));
   assert.equal((su.text.match(/UNION ALL/g) ?? []).length, 0);
-  assert.ok(su.text.includes(`(SELECT plmut_ctl.hit(1, ${ms.length}) FROM dual) = 0`), su.text);
+  assert.ok(su.text.includes(`(SELECT plmut_ctl.hit_sql(1, ${ms.length}) FROM dual) = 0`), su.text);
   const plain = buildSchema(ms, new Set(), all, 'DEMO', new Set(), new Set([su.key]))[0];
   assert.equal(plain.text, plain.original);
   assert.deepEqual(plain.recorded, []);

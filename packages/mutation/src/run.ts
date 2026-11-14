@@ -539,6 +539,8 @@ class Worker {
     this.sideEffect(res, run, tests);
     if (run.timedOut) res.status = 'TIMEOUT';
     else if (isMemory(run.err)) Object.assign(res, { status: 'MEMORY', detail: firstLine(run.err!) });
+    // a lost connection says nothing about the mutant (dispatch rebuilds the worker and tries again)
+    else if (lostConnection(run.err)) Object.assign(res, { status: 'ERROR', detail: firstLine(run.err!) });
     else if (run.err && run.err.message.includes('ORA-')) Object.assign(res, { status: 'KILLED', killedBy: '(Abbruch von ut.run)', detail: firstLine(run.err) });
     else if (run.err) Object.assign(res, { status: 'ERROR', detail: firstLine(run.err) });
     else if (failed(run)) Object.assign(res, { status: 'KILLED', killedBy: firstFailure(run) });
@@ -868,6 +870,16 @@ class Run {
           this.logf(`Worker${w.name}: Verbindung verloren (${r.detail ?? 'Verwaltungsverbindung'}), baue neu auf …`);
           if (await w.reopen()) {
             r = await fn(w, ms[i]);
+            // on a fresh connection it broke the server process again: the mutant does it
+            if (broken(r)) {
+              if (!(await w.reopen())) {
+                w.retired = true;
+                again.push(i);
+                this.logf(`Worker${w.name} scheidet aus, die anderen übernehmen seine Mutanten`);
+                return;
+              }
+              Object.assign(r, { status: 'KILLED', killedBy: '(Serverprozess abgestürzt)' });
+            }
           } else {
             w.retired = true;
             again.push(i);
@@ -888,7 +900,11 @@ class Run {
     // all workers retired with work left: nothing more can run, but what ran stays in the report
     if (!stop() && this.workers.every((w) => w.retired)) {
       const left = ms.map((m, i) => (results[i] ? undefined : m)).filter((m): m is Mutant => !!m);
-      if (left.length) this.logf(`alle Worker-Datenbanken ausgefallen: ${left.length} Mutanten ohne Urteil`);
+      if (left.length) {
+        this.logf(`alle Worker-Datenbanken ausgefallen: ${left.length} Mutanten ohne Urteil`);
+        // a partial report: marked, and the CLI ends with an error code
+        this.abort ??= 'alle Worker-Datenbanken ausgefallen';
+      }
       ms.forEach((m, i) => {
         results[i] ??= Object.assign(newResult(m), { detail: 'alle Worker-Datenbanken ausgefallen' });
       });
@@ -1150,6 +1166,9 @@ async function runNaive(run: Run, ms: Mutant[], stop: () => boolean): Promise<Re
 
 async function runSchema(run: Run, ms: Mutant[], stop: () => boolean): Promise<Report> {
   const w = run.primary;
+  if (ms.some((m) => m.point.naiveOnly === 'cache')) {
+    run.logf('Hinweis: RESULT_CACHE-Funktionen laufen einzeln; ihre gecachten Ergebnisse können Mutanten in Code verdecken, den sie aufrufen (dafür --mode naive)');
+  }
   // the main block of an ordered view gets no wrapper (its order must hold): its points run one by one
   const orderedMain = (m: Mutant) => !!m.unitRef.ordered && !!m.unitRef.main && m.point.scope?.[0] === m.unitRef.main[0] && m.point.scope?.[1] === m.unitRef.main[1];
   const naive = new Set<Point>(ms.filter((m) => !switchable(m.point) || orderedMain(m)).map((m) => m.point));

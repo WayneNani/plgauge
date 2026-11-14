@@ -31,28 +31,86 @@ export function findInFile(path: string, buf: Buffer): SourceFile {
 
 // ------------------------------------------------------------ preprocessing
 
-const SQLPLUS = /^\s*(SHOW|SHO|SET|PROMPT|PRO|REM|REMARK|WHENEVER|SPOOL|DEFINE|UNDEFINE|COLUMN|COL|TTITLE|BTITLE|PAUSE|CLEAR|EXEC|EXECUTE|CONNECT|CONN|DISCONNECT|EXIT|QUIT|@)(\b|@|$).*/i;
-const CREATE = /^\s*CREATE\b.*/i;
+/** SQL*Plus commands (at the start of a statement; SET TRANSACTION, ROLE and CONSTRAINTS are SQL). */
+const SQLPLUS = /^\s*(SHOW|SHO|SET(?!\s+(TRANSACTION|ROLE|CONSTRAINTS?)\b)|PROMPT|PRO|REM|REMARK|WHENEVER|SPOOL|DEFINE|DEF|UNDEFINE|COLUMN|COL|TTITLE|BTITLE|PAUSE|CLEAR|EXEC|EXECUTE|CONNECT|CONN|DISCONNECT|EXIT|QUIT|LIST|VAR|VARIABLE|HOST|START|PRINT|ACCEPT|TIMING|BREAK|COMPUTE|STORE|GET|SAVE|EDIT|INPUT|RUN|@@?)(\b|@|$).*/i;
+/** The start of a PL/SQL unit (ends with "/"); other CREATE statements end with ";". */
+const CREATE_UNIT = /^\s*CREATE\s+(OR\s+REPLACE\s+)?((NON)?EDITIONABLE\s+)?(PACKAGE|PROCEDURE|FUNCTION|TRIGGER|TYPE)\b/i;
 
 const utf8Len = (c: number) => (c < 0x80 ? 1 : c < 0x800 ? 2 : 3);
 
 /**
- * SQL*Plus commands outside CREATE statements become spaces. Like all preprocessing
- * here it keeps every offset (one space per UTF-16 unit), so byte offsets can be taken
- * from the original file.
+ * A line without its comments and string literals (for finding a statement's end); open: in
+ * a block comment at the start, quote: in a string literal (both carry over to the next line).
+ */
+function codeOf(line: string, open: boolean, quote: boolean): { code: string; open: boolean; quote: boolean } {
+  let code = '';
+  let i = 0;
+  while (i < line.length) {
+    if (open) {
+      const e = line.indexOf('*/', i);
+      if (e < 0) return { code, open: true, quote };
+      i = e + 2;
+      open = false;
+      continue;
+    }
+    const c = line[i];
+    if (quote) {
+      if (c === "'") quote = false;
+      i++;
+      continue;
+    }
+    if (c === "'") {
+      quote = true;
+      code += "''";
+      i++;
+    } else if (c === '-' && line[i + 1] === '-') break;
+    else if (c === '/' && line[i + 1] === '*') {
+      open = true;
+      i += 2;
+    } else {
+      code += c;
+      i++;
+    }
+  }
+  return { code, open, quote };
+}
+
+/**
+ * SQL*Plus commands between statements become spaces. A statement is a PL/SQL unit
+ * (CREATE PACKAGE … or an anonymous block, up to the "/" line) or SQL up to its semicolon;
+ * block comments and comment lines between statements stay as they are. Like all
+ * preprocessing here it keeps every offset (one space per UTF-16 unit), so byte offsets
+ * can be taken from the original file.
  */
 export function blankSqlPlus(s: string): string {
   let out = '';
-  let inUnit = false;
+  let state: 'between' | 'unit' | 'sql' = 'between';
+  let comment = false;
+  let quote = false;
   for (const line of s.split(/(?<=\n)/)) {
     const body = line.endsWith('\n') ? line.slice(0, -1) : line;
-    if (!inUnit && CREATE.test(body)) inUnit = true;
-    if (body.trim() === '/') {
-      inUnit = false;
-    } else if (!inUnit && SQLPLUS.test(body)) {
-      out += ' '.repeat(body.length) + (line.endsWith('\n') ? '\n' : '');
+    const was = comment || quote;
+    const r = codeOf(body, comment, quote);
+    const code = r.code;
+    comment = r.open;
+    quote = r.quote;
+    // "/" alone on a line (not inside a block comment) ends a unit or a statement
+    if (!was && body.trim() === '/') {
+      state = 'between';
+      out += line;
       continue;
     }
+    if (state === 'between' && !was && code.trim()) {
+      if (SQLPLUS.test(body)) {
+        out += ' '.repeat(body.length) + (line.endsWith('\n') ? '\n' : '');
+        comment = false;
+        quote = false;
+        continue;
+      }
+      // CREATE VIEW, TABLE, … and other SQL end at their semicolon
+      state = CREATE_UNIT.test(code) || /^\s*(DECLARE|BEGIN)\b/i.test(code) ? 'unit' : 'sql';
+    }
+    if (state === 'sql' && /;\s*$/.test(code)) state = 'between';
     out += line;
   }
   return out;
@@ -85,7 +143,27 @@ const ROR: Record<string, string[]> = {
 // x > 0 equals x <> 0 for x >= 0, and so on (gomutant's equivZero tables)
 const EQUIV_ZERO_RIGHT: Record<string, string> = { '<>': '>', '=': '<=', '>': '<>', '<=': '=' };
 const EQUIV_ZERO_LEFT: Record<string, string> = { '<>': '<', '=': '>=', '<': '<>', '>=': '=' };
-const NON_NEGATIVE = /^(LENGTH|LENGTHB|LENGTHC|COUNT|INSTR|INSTRB|ABS|DBMS_LOB\.GETLENGTH|CARDINALITY)\s*\(.*\)$|^[\w$#."]+\.COUNT(\s*\(\s*\))?$|^[\w$#."]+%ROWCOUNT$/is;
+const NON_NEGATIVE_CALL = /^(LENGTH|LENGTHB|LENGTHC|COUNT|INSTR|INSTRB|ABS|DBMS_LOB\.GETLENGTH|CARDINALITY)\s*\(/i;
+const NON_NEGATIVE_NAME = /^[\w$#."]+\.COUNT(\s*\(\s*\))?$|^[\w$#."]+%ROWCOUNT$/is;
+/** One call of a function that never returns a negative number, as the whole expression (not LENGTH(a) - LENGTH(b)). */
+const NON_NEGATIVE = {
+  /** plsql: x.COUNT is a collection method there; in SQL it may be a column named count. */
+  test(e: string, plsql = true): boolean {
+    if (plsql && NON_NEGATIVE_NAME.test(e)) return true;
+    const m = NON_NEGATIVE_CALL.exec(e);
+    if (!m || !e.endsWith(')')) return false;
+    let d = 0;
+    let quote = false;
+    for (let i = m[0].length - 1; i < e.length; i++) {
+      const c = e[i];
+      if (c === "'") quote = !quote;
+      else if (quote) continue;
+      else if (c === '(') d++;
+      else if (c === ')' && --d === 0) return i === e.length - 1;
+    }
+    return false;
+  },
+};
 
 const isStringLiteral = (e: string) =>
   (e.length >= 2 && e.startsWith("'") && e.endsWith("'") && e.indexOf("'", 1) === e.length - 1) || /^'([^']|'')*'$/s.test(e);
@@ -130,6 +208,12 @@ interface Env {
   forallDml?: [number, number];
   /** Inside a view's query. */
   view?: boolean;
+  /**
+   * Points here run only with the oracle rewriter: 'cache' inside a RESULT_CACHE function (its
+   * results are shared by all sessions and survive the switch of the active mutant), 'when' in
+   * a trigger's WHEN condition (no PL/SQL function calls allowed there).
+   */
+  naiveOnly?: 'cache' | 'when';
   /** Inside a query block the schema switches with UNION ALL branches (views, cursor declarations). */
   union?: boolean;
   /** In a select list (of the innermost query): a switch there cannot change the plan. */
@@ -142,6 +226,7 @@ interface Sink {
   sub: string;
   /** The enclosing subprogram (or unit): a variable must be declared in it (see varLiterals). */
   scope: Node;
+  naiveOnly?: Env['naiveOnly'];
 }
 
 /** The bind placeholders of a statement (:name, :1, :"x"), sorted. */
@@ -282,6 +367,7 @@ class Finder {
       if (env.union) p.union = true;
     }
     if (env.union && env.proj && ctx === 'sql' && (kind === 'bool' || kind === 'value')) p.inline = true;
+    if (env.naiveOnly) p.naiveOnly = env.naiveOnly;
     this.points.push(p);
   }
 
@@ -291,7 +377,9 @@ class Finder {
     switch (n.k) {
       case 'subprog': {
         const sub = env.sub ? `${env.sub}.${n.name}` : n.name!;
-        const inner: Env = { sub, ctx: 'plsql', guard: false };
+        const head = n.kids.find((k) => k.k === 'decls' || k.k === 'body');
+        const cached = this.t.slice(n.a, head ? head.a : n.b).some((t) => t.up === 'RESULT_CACHE');
+        const inner: Env = { sub, ctx: 'plsql', guard: false, naiveOnly: cached ? 'cache' : env.naiveOnly };
         const outer = this.scopeNode;
         this.scopeNode = n;
         for (const k of n.kids) this.walk(k, n, inner);
@@ -300,6 +388,10 @@ class Finder {
         if (body) this.ret(body, n, inner);
         return;
       }
+      case 'trigger-when':
+        // a condition in SQL terms, evaluated before the trigger body: no switch can go there
+        for (const k of n.kids) this.walk(k, n, { ...env, ctx: 'sql', scope: undefined, naiveOnly: 'when' });
+        return;
       case 'cursor': {
         // the query of a cursor declaration: one UNION ALL block, if its order and locks allow
         // (parameter defaults are PL/SQL expressions outside it)
@@ -574,7 +666,7 @@ class Finder {
       b--;
     }
     if (a < 0 || b !== a + 1) return; // a single token: a literal or a variable
-    if (['string', 'ident', 'qident'].includes(this.t[a].kind)) this.sinks.push({ tok: a, sub: env.sub, scope: this.scopeNode });
+    if (['string', 'ident', 'qident'].includes(this.t[a].kind)) this.sinks.push({ tok: a, sub: env.sub, scope: this.scopeNode, naiveOnly: env.naiveOnly });
   }
 
   /**
@@ -585,21 +677,21 @@ class Finder {
    * variant is its own statement, parsed when executed, so no plan suffers.
    */
   private dynamicSql() {
-    const lits = new Map<number, { sub: string; max?: number }>();
+    const lits = new Map<number, { sub: string; max?: number; naiveOnly?: Env['naiveOnly'] }>();
     const sinks = new Set(this.sinks.map((s) => s.tok));
     for (const s of this.sinks) {
       if (this.t[s.tok].kind === 'string') {
-        lits.set(s.tok, { sub: s.sub });
+        lits.set(s.tok, { sub: s.sub, naiveOnly: s.naiveOnly });
         continue;
       }
       const v = this.varLiterals(this.norm(s.tok)!, s.scope, sinks);
       if (!v) continue;
       for (const k of v.lits) {
         const max = Math.min(lits.get(k)?.max ?? Infinity, v.max ?? Infinity);
-        lits.set(k, { sub: s.sub, max: Number.isFinite(max) ? max : undefined });
+        lits.set(k, { sub: s.sub, max: Number.isFinite(max) ? max : undefined, naiveOnly: s.naiveOnly });
       }
     }
-    for (const [k, l] of [...lits].sort((x, y) => x[0] - y[0])) this.literal(k, l.sub, l.max);
+    for (const [k, l] of [...lits].sort((x, y) => x[0] - y[0])) this.literal(k, l.sub, l.max, l.naiveOnly);
   }
 
   /** An identifier as Oracle compares it (quoted ones exactly), else undefined. */
@@ -718,7 +810,7 @@ class Finder {
   }
 
   /** max: the variable's declared length; bytes if positive, characters if negative (see varLiterals). */
-  private literal(k: number, sub: string, max?: number) {
+  private literal(k: number, sub: string, max?: number, naiveOnly?: Env['naiveOnly']) {
     const tok = this.t[k];
     if (this.inConditional(tok.start)) return;
     const s = this.src.slice(tok.start, tok.end);
@@ -780,6 +872,7 @@ class Finder {
         unit: this.unit, op: p.op, kind: p.kind, sub, ctx: 'sql', cat: p.cat,
         start: this.byteAt[a], end: this.byteAt[b], orig: this.src.slice(a, b), mutants,
         dyn: [this.sb(k), this.eb(k)],
+        ...(naiveOnly ? { naiveOnly } : {}),
       });
     }
   }
@@ -934,10 +1027,14 @@ class Finder {
     const begin = body.at!;
     if (this.inConditional(this.t[begin].end)) return;
     const at = this.eb(begin);
-    const repl = sp.op === 'FUNCTION' ? 'RETURN NULL;' : 'RETURN;';
+    // a pipelined function and a constructor (RETURN SELF AS RESULT) return without a value
+    const head = this.t.slice(sp.a, body.a).map((t) => t.up);
+    const bare = head.includes('PIPELINED') || head.some((w, i) => w === 'SELF' && head[i + 1] === 'AS' && head[i + 2] === 'RESULT');
+    const repl = sp.op === 'FUNCTION' && !bare ? 'RETURN NULL;' : 'RETURN;';
     this.points.push({
       unit: this.unit, op: 'RET', kind: 'insert', sub: env.sub, ctx: 'plsql', cat: 'funktion', start: at, end: at, orig: '',
       mutants: [` ${repl}`, " RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');"],
+      ...(env.naiveOnly ? { naiveOnly: env.naiveOnly } : {}),
     });
   }
 
@@ -969,14 +1066,21 @@ class Finder {
       this.skipped += repl.length; // constant comparison
       return;
     }
+    // with NULL the comparison is never true: other operators are equivalent, TRUE and FALSE are not
+    if (/^NULL$/i.test(left) || /^NULL$/i.test(right)) {
+      const keep = repl.filter((m) => m === 'TRUE' || m === 'FALSE');
+      this.skipped += repl.length - keep.length;
+      if (!keep.length) return;
+      repl = keep;
+    }
     // codes compared with a string literal are categories, not an order
     if ((op === '=' || op === '<>') && (isStringLiteral(left) || isStringLiteral(right))) {
       this.skipped += 1;
       repl = ['TRUE', 'FALSE'];
     }
     let equivalent: string | undefined;
-    if (right === '0' && NON_NEGATIVE.test(left)) equivalent = EQUIV_ZERO_RIGHT[op];
-    if (left === '0' && NON_NEGATIVE.test(right)) equivalent = EQUIV_ZERO_LEFT[op];
+    if (right === '0' && NON_NEGATIVE.test(left, env.ctx === 'plsql')) equivalent = EQUIV_ZERO_RIGHT[op];
+    if (left === '0' && NON_NEGATIVE.test(right, env.ctx === 'plsql')) equivalent = EQUIV_ZERO_LEFT[op];
     const mutants: string[] = [];
     for (const r of repl) {
       if (r === equivalent) {
@@ -1003,7 +1107,15 @@ class Finder {
   private exclusiveEquals(x: Node, y: Node): boolean {
     const a = this.equalsParts(x);
     const b = this.equalsParts(y);
-    return !!a && !!b && a[0].toUpperCase() === b[0].toUpperCase() && isLiteral(a[1]) && isLiteral(b[1]) && a[1] !== b[1];
+    // the same expression (compared as written: string literals in it keep their case) against two
+    // different non-NULL literals of the same kind (1 and 1.0 are the same number)
+    if (!a || !b || a[0] !== b[0]) return false;
+    const [x1, y1] = [a[1], b[1]];
+    // NULL, and '' which Oracle reads as NULL
+    if (/^(NULL|'')$/i.test(x1) || /^(NULL|'')$/i.test(y1)) return false;
+    const num = (v: string) => (/^-?\d+(\.\d+)?$/.test(v) ? Number(v) : undefined);
+    if (num(x1) !== undefined || num(y1) !== undefined) return num(x1) !== undefined && num(y1) !== undefined && num(x1) !== num(y1);
+    return isLiteral(x1) && isLiteral(y1) && x1 !== y1;
   }
 
   private equalsParts(e: Node): [string, string] | null {
@@ -1418,11 +1530,7 @@ class Finder {
       let x = c;
       while (x.k === 'paren' && x.kids.length === 1) x = x.kids[0];
       if (x.k === 'lit' || (x.k === 'cmp' && x.kids.every((k) => isLiteral(this.text(k).trim())))) continue;
-      // in FORALL the condition may hold the only bulk bind (PLS-00435)
-      if (env.forall && this.t.slice(c.a, c.b).some((t) => t.up === env.forall)) {
-        this.skipped++;
-        continue;
-      }
+      // (in FORALL, pointSpan keeps a mutant only if a bulk bind is left: PLS-00435)
       const s = this.sb(x.a);
       const e = this.eb(x.b - 1);
       if (this.points.some((p) => p.start === s && p.end === e && p.kind === 'bool' && p.mutants.includes('TRUE'))) {

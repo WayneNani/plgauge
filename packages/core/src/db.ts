@@ -38,6 +38,21 @@ export function dbIdent(s: string): string {
   return s.toUpperCase();
 }
 
+/**
+ * The application context in which utPLSQL names the running test: <utPLSQL owner>_INFO
+ * (UT3_INFO for the usual installation in UT3).
+ */
+export async function utInfoContext(conn: oracledb.Connection): Promise<string> {
+  try {
+    const r = await conn.execute(`begin :o := ut_utils.ut_owner(); end;`, { o: { dir: oracledb.BIND_OUT, type: oracledb.STRING } });
+    const o = (r.outBinds as { o: string | null }).o;
+    if (o && /^[A-Za-z][A-Za-z0-9_$#]*$/.test(o)) return `${o.toUpperCase()}_INFO`;
+  } catch {
+    // an older utPLSQL without ut_owner: the usual name
+  }
+  return 'UT3_INFO';
+}
+
 export function sha256(s: string): string {
   return createHash('sha256').update(s, 'utf8').digest('hex');
 }

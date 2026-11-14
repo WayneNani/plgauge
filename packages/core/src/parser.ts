@@ -280,7 +280,7 @@ class Parser {
     if (this.isSlash(s)) return s + 1;
     for (let k = s + 1; k < this.t.length; k++) {
       if (this.isSlash(k)) return k + 1;
-      if (this.t[k].up === 'CREATE' && this.t[k].kind === 'ident' && this.firstOnLine(k)) return k;
+      if (this.t[k].up === 'CREATE' && this.t[k].kind === 'ident' && this.firstOnLine(k) && this.isCreateUnit(k)) return k;
     }
     return this.t.length;
   }
@@ -292,9 +292,11 @@ class Parser {
     if (this.upAt(k) === 'OR' && this.upAt(k + 1) === 'REPLACE') k += 2;
     while (['EDITIONABLE', 'NONEDITIONABLE', 'EDITIONING', 'FORCE', 'NO'].includes(this.upAt(k))) k++;
     const u = this.upAt(k);
-    if (u === 'VIEW') return this.views;
-    if (u === 'PACKAGE' || u === 'TYPE') return this.upAt(k + 1) === 'BODY';
-    return u === 'PROCEDURE' || u === 'FUNCTION' || u === 'TRIGGER';
+    // a name must follow (GRANT CREATE PROCEDURE TO …, CREATE TRIGGER, … are privileges)
+    const named = (j: number) => ['ident', 'qident'].includes(this.t[j]?.kind) && this.upAt(j) !== 'TO';
+    if (u === 'VIEW') return this.views && named(k + 1);
+    if (u === 'PACKAGE' || u === 'TYPE') return this.upAt(k + 1) === 'BODY' && named(k + 2);
+    return (u === 'PROCEDURE' || u === 'FUNCTION' || u === 'TRIGGER') && named(k + 1);
   }
 
   // ---------------------------------------------------------------- units
@@ -429,7 +431,11 @@ class Parser {
       this.i++;
     }
     if (this.at('CALL')) {
-      this.i = this.need(this.i, new Set([';'])) + 1;
+      // CALL proc(…) ends at its semicolon, or (written without one) at the unit's slash: never
+      // in the next unit
+      let k = this.i + 1;
+      while (k < this.lim && this.t[k].text !== ';' && this.t[k].text !== '/') k = this.t[k].text === '(' ? this.close(k) + 1 : k + 1;
+      this.i = k < this.lim && this.t[k].text === ';' ? k + 1 : k;
     } else if (this.at('COMPOUND')) {
       this.i++;
       this.expect('TRIGGER');

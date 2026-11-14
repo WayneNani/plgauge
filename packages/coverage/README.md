@@ -198,4 +198,11 @@ Laufzeit und Objekte liegen in `schema`.
   Auswertungsreihenfolge bleiben) und die `WHEN`/`WHILE`-Filter von FOR-Schleifen (21c) als Entscheidungen.
 - Der Parser (`@pltest/core`) liest Struktur, SQL und Ausdrücke; Unverstandenes wird als undurchsichtiger Bereich behandelt.
   Kann er die Struktur eines Objekts nicht verstehen, wird es übersprungen und im Bericht markiert.
-- Rekursion innerhalb derselben Schleife zählt Iterationen ungenau. Schleifenmetriken sind eine Näherung.
+- Rekursion innerhalb derselben Schleife zählt Iterationen ungenau (der Zähler gilt pro Schleife, nicht pro Aufruf: ein
+  rekursiver Aufruf im Rumpf schließt den äußeren Zählerstand ab). Schleifenmetriken sind eine Näherung. Bei einer
+  expliziten Cursor-Schleife (`LOOP FETCH …; EXIT WHEN c%NOTFOUND; …`) zählt jeder Eintritt in den Rumpf, auch der, der
+  gleich beim ersten `EXIT` endet: „einmal“ heißt dort „keine Zeile“.
+- Funktionen mit `RESULT_CACHE` (und Ergebnisse, die Oracle für `DETERMINISTIC`-Funktionen innerhalb einer Anweisung
+  wiederverwendet): Kommt das Ergebnis aus dem Cache, laufen ihre Sonden nicht; die Treffer fallen zu niedrig aus.
+- Ruft ein Test `DBMS_SESSION.RESET_PACKAGE` auf, sind die bis dahin gesammelten Treffer weg; der Lauf warnt dann.
+- CASE-Ausdrücke in Bedingungen und in Schleifengrenzen werden nicht gemessen (Eintrag unter „Nicht gemessen“).

@@ -355,13 +355,13 @@ class Renderer {
   }
 
   /** hit() calls for a set of IDs: one per run of consecutive IDs, summed (each returns 0). */
-  hits(ids: number[]): string {
+  hits(ids: number[], fn = 'hit'): string {
     ids = [...new Set(ids)].sort((x, y) => x - y);
     const out: string[] = [];
     for (let i = 0; i < ids.length;) {
       let j = i;
       while (j + 1 < ids.length && ids[j + 1] === ids[j] + 1) j++;
-      out.push(`${this.ctl}.hit(${ids[i]}, ${j - i + 1})`);
+      out.push(`${this.ctl}.${fn}(${ids[i]}, ${j - i + 1})`);
       i = j + 1;
     }
     return out.join(' + ');
@@ -399,7 +399,10 @@ class Renderer {
     for (let i = 0; i < branches.length; i += 900) {
       conds.push(`NVL(${V}, '0') NOT IN (${branches.slice(i, i + 900).map((m) => `'${m.id}'`).join(', ')})`);
     }
-    conds.push(`(NVL(${V}, '0') <> '-1' OR (SELECT ${this.hits(n.dup!.reach.map((m) => m.id))} FROM dual) = 0)`);
+    // views: hit_sql, never in parallel slaves (see plmut_ctl); cursor declarations in PL/SQL:
+    // hit, whose purity a subprogram under PRAGMA RESTRICT_REFERENCES may rely on
+    const fn = this.su.type === 'VIEW' ? 'hit_sql' : 'hit';
+    conds.push(`(NVL(${V}, '0') <> '-1' OR (SELECT ${this.hits(n.dup!.reach.map((m) => m.id), fn)} FROM dual) = 0)`);
     if (branches.length) this.su.branched = true;
     // the block is a WITH element: its query is now the wrapper, which takes the INLINE hint
     this.write(this.inserts.some((i) => i.block === p.start) ? 'SELECT /*+ INLINE */ * FROM (' : 'SELECT * FROM (');
@@ -511,6 +514,8 @@ class Renderer {
 
 /** Whether the schema rewriter can switch a point; the others run with the oracle rewriter. */
 export function switchable(p: Point): boolean {
+  // the function result cache is shared by all sessions and outlives the switch of the active mutant
+  if (p.naiveOnly) return false;
   if (p.dyn) return true;
   switch (p.kind) {
     case 'stmt':

@@ -82,7 +82,7 @@ Bind-Platzhalter verlören (`USING` übergibt ihn weiter, sonst ORA-01006). Der 
 (`CASE aktiv WHEN 17 THEN '<Variante>' … ELSE '<Original>' END`, die Kopien eines Literals zusammen höchstens 256 KB);
 jede Variante ist eine eigene Anweisung, die erst beim Ausführen geparst wird, also leidet kein Plan.
 
-Views: `CREATE VIEW` in einer Datei unter `mutate` wird mutiert wie das SQL in PL/SQL, mit beiden Stufen. Ausgenommen sind Views mit INSTEAD-OF-Trigger: `CREATE OR REPLACE VIEW` löscht den Trigger, und das Zurückspielen des Originals bringt ihn nicht wieder. Was `CREATE OR REPLACE` sonst verliert, stellt jedes Kompilieren wieder her: Tabellen- und Spaltenkommentare einer View, den Status DISABLED eines Triggers; Materialized Views auf einer zurückgespielten View werden neu kompiliert. Eine View, die sich ohne DBMS_METADATA nicht originalgetreu nachbauen lässt (Editioning-, Objekt-, BEQUEATH-DEFINER-View), wird nicht angefasst. Das Schema
+Views: `CREATE VIEW` in einer Datei unter `mutate` wird mutiert wie das SQL in PL/SQL, mit beiden Stufen. Ausgenommen sind Views mit INSTEAD-OF-Trigger: `CREATE OR REPLACE VIEW` löscht den Trigger, und das Zurückspielen des Originals bringt ihn nicht wieder. Was `CREATE OR REPLACE` sonst verliert, stellt jedes Kompilieren wieder her: Tabellen- und Spaltenkommentare einer View, den Status DISABLED eines Triggers; Materialized Views auf einer zurückgespielten View werden neu kompiliert. Stellen in RESULT_CACHE-Funktionen laufen einzeln (der Ergebnis-Cache gilt für alle Sitzungen und überdauert das Umschalten); Mutanten in Code, den eine solche Funktion aufruft, kann ihr Cache im Schema-Modus verdecken. `plmut_ctl` trägt `PRAGMA RESTRICT_REFERENCES(… TRUST)`, damit Einheiten mit diesem Pragma geschaltet werden können. Eine View, die sich ohne DBMS_METADATA nicht originalgetreu nachbauen lässt (Editioning-, Objekt-, BEQUEATH-DEFINER-View), wird nicht angefasst. Das Schema
 schaltet sie blockweise; Blöcke sind die Abfrage der View, `WITH`-Elemente und Inline-Views in `FROM` (Unterabfragen in
 Bedingungen bleiben in ihrem Block, damit der Optimizer sie weiter in Joins auflösen kann; rekursive `WITH`-Elemente
 sind kein Block). Ein Block mit Mutanten wird zu
@@ -144,6 +144,8 @@ vom Plan abhängt. Zwei Maßnahmen:
   unsicher markiert: Die Erkennung hing an der Reihenfolge der Tests, an Daten oder (nur im Schema-Modus prüfbar) an
   der Datenbank. Eine Zeitüberschreitung (nicht die des Schleifenwächters) läuft mit doppelter Zeit noch einmal.
   Endet sie dann, gilt das neue Urteil, ebenfalls markiert.
+
+Grenze der Commit-Erkennung: Sie sieht einen Commit an einer Markierungszeile, die vor dem Testlauf eingefügt wird. Rollt ein Test die ganze Transaktion zurück, ist die Zeile weg, und ein späterer Commit im selben Lauf bleibt unerkannt.
 
 Der Textbericht listet die markierten Mutanten mit Grund, das JSON trägt ihn im Feld `unstable`. Überlebende werden
 nicht wiederholt: Das kostete so viel wie der Lauf selbst.

@@ -267,6 +267,9 @@ class Instrumenter {
       this.pendingInsert = null;
     }
     if (s.k !== 'stmt') return null;
+    // a labelled statement: the probe after the label, where a GOTO lands (a loop keeps it in
+    // front: its label must stay on the loop, EXIT and END LOOP name it)
+    if (s.at2 !== undefined && s.at2 !== s.a && s.op !== 'loop' && insertPos === this.t[s.at2].start) insertPos = this.t[s.a].start;
     const first = this.t[s.a];
     const nf = this.nf;
     this.nfPending = false;
@@ -405,7 +408,10 @@ class Instrumenter {
         if (this.t[k].up === 'SELECT' || this.t[k].up === 'WITH') loop.kind = 'cursor-for';
       }
       if (loop.kind === 'cursor-for') this.scanRegion(s.a + 1, loopIdx, 'sql', 'start', s.kids.filter((k) => k.k !== 'seq' && k.k !== 'branch'));
-      else loop.kind = 'for';
+      else {
+        loop.kind = 'for';
+        for (let k = s.a + 1; k < loopIdx; k++) if (this.t[k].up === 'CASE' && this.t[k].kind === 'ident') this.gap(this.t[k].line, 'CASE-Ausdruck in Schleifengrenzen wird nicht gemessen');
+      }
       // 21c: FOR i IN … WHEN cond (skips the iteration) / WHILE cond (ends the loop)
       for (const f of s.kids.filter((k) => k.k === 'branch')) {
         const kw = this.t[f.a];
@@ -459,6 +465,8 @@ class Instrumenter {
       vectors: vectors && conds.length <= MAX_VECTOR_CONDS, nf: this.nf,
     };
     this.map.decisions.push(d);
+    // a CASE inside the condition gets no probes of its own: say so
+    for (let k = a; k < b; k++) if (this.t[k].up === 'CASE' && this.t[k].kind === 'ident') this.gap(this.t[k].line, 'CASE-Ausdruck in einer Bedingung wird nicht gemessen');
     return d;
   }
 
@@ -612,6 +620,14 @@ class Instrumenter {
     let hasGroupBy = false;
     if (ctx === 'sql') {
       for (let k = a; k < b - 1; k++) if (this.t[k].up === 'GROUP' && this.t[k + 1].up === 'BY') hasGroupBy = true;
+      // SELECT DISTINCT … ORDER BY: the order expressions must stay identical to the selected ones (ORA-01791)
+      let distinct = false;
+      let order = false;
+      for (let k = a; k < b - 1; k++) {
+        if (this.t[k].up === 'SELECT' && ['DISTINCT', 'UNIQUE'].includes(this.t[k + 1].up)) distinct = true;
+        if (this.t[k].up === 'ORDER' && this.t[k + 1].up === 'BY') order = true;
+      }
+      if (distinct && order) hasGroupBy = true;
     }
     const stack = [clause];
     for (let k = a; k < b; k++) {
@@ -642,7 +658,7 @@ class Instrumenter {
         continue;
       }
       if (ctx === 'sql' && cl === 'select' && hasGroupBy) {
-        this.gap(tk.line, 'CASE in Abfrage mit GROUP BY nicht gemessen (Ausdrücke müssen identisch bleiben)');
+        this.gap(tk.line, 'CASE in Abfrage mit GROUP BY oder DISTINCT … ORDER BY nicht gemessen (Ausdrücke müssen identisch bleiben)');
         continue;
       }
       const c = cases.get(k);
@@ -692,7 +708,10 @@ class Instrumenter {
     const isNull = (r: Node) => r.b - r.a === 1 && this.t[r.a].up === 'NULL';
     const real = n.kids.flatMap((k) => (k.k === 'when' ? [k.kids[1]] : k.k === 'else' ? [k.kids[0]] : [])).filter((r) => !isNull(r));
     const typed = real.sort((x, y) => x.b - x.a - (y.b - y.a))[0];
-    const copy = typed ? this.t.slice(typed.a, typed.b).map((t) => t.text.replace(/[\r\n]+/g, ' ')).join(' ') : 'null';
+    // tokens joined as in the source (:new.c stays :new.c), a space where the source had any
+    const copy = typed
+      ? this.t.slice(typed.a, typed.b).map((t, i, all) => t.text.replace(/[\r\n]+/g, ' ') + (i < all.length - 1 && all[i + 1].start > t.end ? ' ' : '')).join('')
+      : 'null';
     const probe = (res: Node) => {
       const id = this.ids.branch++;
       this.ins(this.t[res.a].start, `case when ${rt}.bt(${id}) then `);

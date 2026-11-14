@@ -188,3 +188,12 @@ test('keywords glued to parentheses stay separate tokens (found by the corpus co
   assert.match(r.instrumented, /not cov\$\.n\(4,1,\(c\)\)/);
   assert.doesNotMatch(r.instrumented, /[a-z]cov\$/);
 });
+
+test('instrument: a GOTO target keeps its statement probe; a loop label stays on the loop; dead ELSE keeps tokens together', () => {
+  const r = run(proc(`  IF a = 1 THEN GOTO done; END IF;
+  <<done>> NULL;
+  <<outer>> LOOP EXIT outer; END LOOP outer;`));
+  // the probe of NULL; comes after its label: the GOTO reaches it
+  assert.match(r.instrumented, /<<done>>\s*cov\$\.s\(\d+\);\s*NULL;/i);
+  assert.match(r.instrumented, /cov\$\.s\(\d+\);(cov\$\.le\(\d+\);)?\s*<<outer>>\s*LOOP/i);
+});

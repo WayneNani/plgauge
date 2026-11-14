@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { expand, findPoints } from '@pltest/mutation';
+import { expand, findPoints, switchable } from '@pltest/mutation';
 
 function points(src: string, name = 'h.pkb') {
   const path = join(mkdtempSync(join(tmpdir(), 'pltest-')), name);
@@ -757,6 +757,81 @@ END d;
   assert.ok(got.includes('AOR t.e + 1 → t.e - 1'), got.join('\n'));
   // x.i is a column: the DML's bulk bind ids(i) must stay
   no('x.i = 0 AND id = ids(i) → x.i = 0');
+});
+
+test('finder: points inside a RESULT_CACHE function are not switchable', () => {
+  const f = points(`CREATE OR REPLACE PACKAGE BODY pk IS
+  FUNCTION f(a NUMBER) RETURN NUMBER RESULT_CACHE IS BEGIN RETURN a + 1; END;
+  FUNCTION g(a NUMBER) RETURN NUMBER IS BEGIN RETURN a + 2; END;
+END;
+/
+`)[0];
+  const aor = (o: string) => f.points.find((p) => p.op === 'AOR' && p.orig === o)!;
+  assert.equal(switchable(aor('a + 1')), false);
+  assert.equal(switchable(aor('a + 2')), true);
+});
+
+test('finder: review round 12: RET in pipelined functions and constructors, trigger WHEN, non-negative differences, NULL comparisons, CALL triggers', () => {
+  const pk = points(`CREATE OR REPLACE PACKAGE BODY pk IS
+  FUNCTION pf RETURN t_tab PIPELINED IS BEGIN PIPE ROW (1); RETURN; END;
+  FUNCTION f(a VARCHAR2, b VARCHAR2) RETURN NUMBER IS BEGIN
+    IF LENGTH(a) - LENGTH(b) > 0 THEN RETURN 1; END IF;
+    IF a = NULL THEN RETURN 2; END IF;
+    IF a = 'x' OR a = 'X' THEN RETURN 3; END IF;
+    RETURN 0;
+  END;
+END;
+/
+CREATE OR REPLACE TYPE BODY ty AS
+  CONSTRUCTOR FUNCTION ty(a NUMBER) RETURN SELF AS RESULT IS BEGIN SELF.a := a; RETURN; END;
+END;
+/
+CREATE OR REPLACE TRIGGER tc BEFORE INSERT ON t FOR EACH ROW WHEN (new.a + 1 > old.b)
+BEGIN NULL; END;
+/
+CREATE OR REPLACE TRIGGER tcall BEFORE INSERT ON t FOR EACH ROW CALL p_log(1)
+/
+CREATE OR REPLACE PROCEDURE after_call IS BEGIN NULL; END;
+/
+`);
+  const all = pk.flatMap((f) => expand([f]));
+  const got = all.map((m) => `${m.sub} ${m.op} ${m.original} → ${m.mutated.trim()}`);
+  assert.ok(!got.some((g) => g.startsWith('pf RET') && g.includes('RETURN NULL')), got.join('\n'));
+  assert.ok(!got.some((g) => g.startsWith('ty RET') && g.includes('RETURN NULL')), got.join('\n'));
+  // trigger WHEN: mutated, but only one by one
+  const when = pk.flatMap((f) => f.points).filter((p) => p.orig === 'new.a + 1');
+  assert.ok(when.length && when.every((p) => !switchable(p)));
+  // LENGTH(a) - LENGTH(b) can be negative: <> stays
+  assert.ok(got.some((g) => g.includes('LENGTH(a) - LENGTH(b) > 0 → LENGTH(a) - LENGTH(b) <> 0')), got.join('\n'));
+  // with NULL only TRUE and FALSE differ from the original
+  const nul = got.filter((g) => g.includes('ROR a = NULL →')).map((g) => g.split('→ ')[1]).sort();
+  assert.deepEqual(nul, ['FALSE'], got.join('\n'));
+  // 'x' and 'X' are different literals: the exclusive-equals shortcut does not apply... and the OR keeps (l) = (r)? no: case counts
+  assert.ok(got.some((g) => g.startsWith('f LCR')), got.join('\n'));
+  // the unit after a CALL trigger without semicolon is still found
+  assert.ok(pk.some((f) => f.units.some((u) => u.name.toUpperCase() === 'AFTER_CALL')));
+});
+
+test('finder: review round 13: RESULT_CACHE covers RET and dynamic SQL; anonymous blocks and GRANT CREATE do not hide units', () => {
+  const f = points(`CREATE OR REPLACE FUNCTION dc(n NUMBER) RETURN NUMBER RESULT_CACHE IS r NUMBER;
+BEGIN EXECUTE IMMEDIATE 'SELECT COUNT(*) FROM t WHERE a > 1' INTO r; RETURN r; END;
+/
+begin
+  execute immediate '
+    drop table t';
+end;
+/
+GRANT CREATE SESSION,
+      CREATE TRIGGER,
+      CREATE PROCEDURE TO app_user;
+CREATE OR REPLACE PROCEDURE p1 IS BEGIN IF x > 1 THEN NULL; END IF; END;
+/
+`, 'x.sql');
+  const all = f.flatMap((x) => x.points);
+  for (const p of all.filter((x) => x.sub === 'dc')) assert.equal(switchable(p), false, `${p.op} ${p.orig}`);
+  const names = f.flatMap((x) => x.units.map((u) => u.name.toUpperCase()));
+  assert.ok(names.includes('P1') && names.includes('DC'), names.join(','));
+  assert.ok(!names.some((n) => n === 'TO' || n === ','), names.join(','));
 });
 
 test('finder: dynamic SQL through a variable only when it holds nothing but whole literals', () => {

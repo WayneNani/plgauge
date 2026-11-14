@@ -14,7 +14,7 @@ import oracledb from 'oracledb';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import {
-  connect, databaseInfo, dbIdent, ensureJournal, journalEntries, loadObjects, lockRun, replaceSource, restoreAll, RUN_LOCK, runScript, sha256, splitScript,
+  connect, databaseInfo, dbIdent, utInfoContext, ensureJournal, journalEntries, loadObjects, lockRun, replaceSource, restoreAll, RUN_LOCK, runScript, sha256, splitScript,
   runTestsJunit as runTests, sameResults, suiteTests, type SourceObject, type TestCase, type TestRun,
 } from '@pltest/core';
 import { instrument } from './instrument.js';
@@ -201,6 +201,9 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     await conn.execute(`alter session set nls_length_semantics = ${nls === 'CHAR' ? 'CHAR' : 'BYTE'}`);
     try {
       instrumentedRun = await runTests(conn, cfg.tests, null);
+      // a test that reset all package state took the counters with it
+      const intact = (await conn.execute<[number]>(`select cov$.intact from dual`)).rows?.[0]?.[0];
+      if (intact !== 1) say('WARNUNG: Der Zustand von cov$ wurde während der Tests zurückgesetzt (DBMS_SESSION.RESET_PACKAGE in einem Test?): die Coverage dieses Laufs ist unvollständig');
       await conn.execute(`begin cov$.flush(:r); end;`, { r: runId });
       await waitForJobs(conn, say);
     } finally {
@@ -311,7 +314,7 @@ export async function installRuntime(conn: oracledb.Connection) {
     if (!(e as Error).message.includes('ORA-00955')) throw e;
   }
   await conn.execute(RUNTIME_SPEC);
-  await conn.execute(RUNTIME_BODY);
+  await conn.execute(RUNTIME_BODY.replace(/UT3_INFO/g, await utInfoContext(conn)));
   // Native compilation makes the probes cheaper; it does not affect the instrumented code itself.
   await conn.execute(`alter package cov$ compile body plsql_code_type = native plsql_optimize_level = 3`);
   const nativeErr = await conn.execute(`select 1 from user_errors where name = 'COV$'`);

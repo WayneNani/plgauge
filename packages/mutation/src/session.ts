@@ -4,6 +4,7 @@
  * reading recorded hits and loop counts.
  */
 import oracledb from 'oracledb';
+import { utInfoContext } from '@pltest/core';
 import { contextName, CTL_BODY, CTL_SPEC, CTX, MARKER_TABLE, RT_BODY, RT_SPEC } from './ddl.js';
 
 export interface ConnectConfig {
@@ -74,7 +75,7 @@ export async function installControl(conn: oracledb.Connection): Promise<void> {
     throw new Error(`CREATE CONTEXT (Recht CREATE ANY CONTEXT nötig): ${(e as Error).message}`);
   }
   await compileDdl(conn, CTL_SPEC.replace(/PLMUT_CTX/g, ctx), 'PACKAGE', 'PLMUT_CTL');
-  await compileDdl(conn, CTL_BODY.replace(/PLMUT_CTX/g, ctx), 'PACKAGE BODY', 'PLMUT_CTL');
+  await compileDdl(conn, CTL_BODY.replace(/PLMUT_CTX/g, ctx).replace(/UT3_INFO/g, await utInfoContext(conn)), 'PACKAGE BODY', 'PLMUT_CTL');
 }
 
 export interface TestResult {
@@ -152,6 +153,7 @@ export async function runTests(s: Session, monitor: oracledb.Connection, paths: 
     });
     const lob = (r.outBinds as { o: oracledb.Lob | null }).o;
     const out = lob ? String(await lob.getData()) : '';
+    // (a commit after a test that rolled back the whole transaction, marker included, is not seen)
     res.committed = out.includes('##plmut[committed]');
     res.tests = parseTeamCity(out);
     if (!res.tests.length) res.err = new Error('keine Tests im Report (Pfade prüfen)');
