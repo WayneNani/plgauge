@@ -252,12 +252,15 @@ export async function compileDetailed(conn: oracledb.Connection, obj: SourceObje
  * What CREATE OR REPLACE loses and the original object had: a trigger's DISABLED status, a
  * view's table and column comments (from loadObject's settings, kept in the journal too).
  */
-async function keepProperties(conn: oracledb.Connection, obj: SourceObject, disabled: boolean): Promise<string | undefined> {
+async function keepProperties(conn: oracledb.Connection, obj: SourceObject): Promise<string | undefined> {
   const q = (x: string) => `"${x.replace(/"/g, '""')}"`;
   const lit = (x: string) => `'${x.replace(/'/g, "''")}'`;
   const full = `${q(obj.owner)}.${q(obj.name)}`;
-  // (disabled by the statement itself: see withDisable; ALTER only where that found no place)
-  if (obj.type === 'TRIGGER' && obj.settings.trigger_status === 'DISABLED' && !disabled) {
+  // (disabled by the statement itself, see withDisable; ALTER where that did not take)
+  const status = obj.type === 'TRIGGER' && obj.settings.trigger_status === 'DISABLED'
+    ? (await conn.execute<[string]>(`select status from all_triggers where owner = :o and trigger_name = :n`, { o: obj.owner, n: obj.name })).rows?.[0]?.[0]
+    : undefined;
+  if (status !== undefined && status !== 'DISABLED') {
     try {
       await conn.execute(`alter trigger ${full} disable`);
     } catch (e) {
@@ -294,6 +297,8 @@ export function withDisable(source: string): string | undefined {
     const x = t[i];
     if (x.text === '(') depth++;
     else if (x.text === ')') depth--;
+    // the body's label (<<blk>> BEGIN …) belongs to the block: DISABLE goes in front of it
+    else if (depth === 0 && x.text === '<<') return `${source.slice(0, x.start)}DISABLE ${source.slice(x.start)}`;
     else if (depth === 0 && x.kind === 'ident') {
       if (x.up === 'DISABLE') return source;
       if (x.up === 'ENABLE') return source.slice(0, x.start) + 'DISABLE' + source.slice(x.end);
@@ -303,9 +308,10 @@ export function withDisable(source: string): string | undefined {
   return undefined;
 }
 
-async function compileHere(conn: oracledb.Connection, obj: SourceObject, source: string): Promise<CompileOutcome> {
+async function compileHere(conn: oracledb.Connection, obj: SourceObject, source: string, inline = true): Promise<CompileOutcome> {
   const st = obj.settings;
-  const disabled = obj.type === 'TRIGGER' && st.trigger_status === 'DISABLED' ? withDisable(source) : undefined;
+  const plain = source;
+  const disabled = inline && obj.type === 'TRIGGER' && st.trigger_status === 'DISABLED' ? withDisable(source) : undefined;
   if (disabled) source = disabled;
   if (st.plsql_optimize_level) await conn.execute(`alter session set plsql_optimize_level = ${Number(st.plsql_optimize_level)}`);
   if (st.plsql_code_type) await conn.execute(`alter session set plsql_code_type = '${st.plsql_code_type.replace(/'/g, '')}'`);
@@ -326,11 +332,14 @@ async function compileHere(conn: oracledb.Connection, obj: SourceObject, source:
       return { error: msg.split('\n')[0], offset: typeof off === 'number' && off >= prefix.length ? off - prefix.length : undefined };
     }
   }
-  const warning = await keepProperties(conn, obj, !!disabled);
+  const warning = await keepProperties(conn, obj);
   const err = await conn.execute<[number, string]>(
     `select line, text from all_errors where owner = :o and name = :n and type = :t and attribute = 'ERROR' order by sequence`,
     { o: obj.owner, n: obj.name, t: obj.type },
   );
+  // errors with the DISABLE put in (a header withDisable read wrong): once more as written, the
+  // status by ALTER; errors that stay are the code's own
+  if (err.rows?.length && disabled) return compileHere(conn, obj, plain, false);
   if (err.rows?.length) return { error: err.rows.slice(0, 3).map((r) => `Zeile ${r[0]}: ${r[1].trim()}`).join('; '), warning };
   return { error: null, warning };
 }
@@ -358,8 +367,9 @@ export async function replaceSourceDetailed(conn: oracledb.Connection, obj: Sour
       await journalForget(conn, obj);
       out.untouched = true;
     } else await journalUnnote(conn, obj);
-  } else if (obj.type === 'VIEW') {
-    // what the dictionary made of it (SELECT * expanded): a restore compares with that
+  } else if (obj.type === 'VIEW' || obj.type === 'TRIGGER') {
+    // what the dictionary made of it (a view's SELECT * expanded, a trigger's ENABLE/DISABLE
+    // left out): a restore compares with that
     const held = await currentCode(conn, obj).catch(() => undefined);
     if (held) await journalSettle(conn, obj, held.sha);
   }
@@ -390,9 +400,9 @@ async function currentCode(conn: oracledb.Connection, obj: Pick<SourceObject, 'o
 export async function restoreJournal(conn: oracledb.Connection, entries: JournalEntry[], say: (m: string) => void): Promise<number> {
   const todo: SourceObject[] = [];
   for (const e of entries) {
-    // a view noted before its compile, or by an older version (other fingerprints): no comparison
-    // possible, the original goes back
-    const comparable = e.currentSha && (e.type !== 'VIEW' || e.pending === 0);
+    // a view or trigger noted before its compile, or by an older version (other fingerprints): no
+    // comparison possible, the original goes back
+    const comparable = e.currentSha && ((e.type !== 'VIEW' && e.type !== 'TRIGGER') || e.pending === 0);
     if (comparable) {
       // (not readable: restored as before; the compile reports what is wrong)
       const cur = await currentCode(conn, e.object).catch(() => null);

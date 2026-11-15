@@ -181,3 +181,22 @@ select 2 from dual
 
 `), ['create or replace procedure p is\n\nbegin\n  null;\nend;', 'insert into t\nvalues (1)']);
 });
+
+test('withDisable puts DISABLE in front of a label (Oracle refuses one there, but never inside the block)', async () => {
+  const { withDisable } = await import('@pltest/core');
+  assert.equal(withDisable(`trigger t before insert on x for each row\n<<blk>>\nbegin null; end;`), `trigger t before insert on x for each row\nDISABLE <<blk>>\nbegin null; end;`);
+});
+
+test('splitScript: SET SQLBLANKLINES ON keeps blank lines in a statement, OFF ends it again', () => {
+  assert.deepEqual(splitScript(`set sqlblanklines on
+create table t (
+  a number,
+
+  b number
+);
+set feedback off sqlbl off
+select 1 from dual
+
+select 2 from dual;
+`), ['create table t (\n  a number,\n\n  b number\n)', 'select 2 from dual']);
+});

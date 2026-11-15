@@ -187,3 +187,27 @@ test('a compile rejected at once leaves no journal entry when the object was nev
     }
   });
 });
+
+test('a disabled trigger (DISABLE written in its file) stays disabled and valid, a dead run\'s mutant of it is restored', { skip: !m && 'PLCOV_DB not set' }, async () => {
+  await withConn(async (conn, owner) => {
+    const state = async () => (await conn.execute<[string, string]>(`select t.status, o.status from user_triggers t join user_objects o on o.object_name = t.trigger_name and o.object_type = 'TRIGGER' where t.trigger_name = 'PLTEST_JT'`)).rows![0];
+    const mine = async () => (await journalEntries(conn)).filter((e) => e.name === 'PLTEST_JT');
+    try {
+      await conn.execute(`create table pltest_jt_t (n number)`).catch(() => {});
+      await conn.execute(`create or replace trigger pltest_jt before insert on pltest_jt_t for each row\nbegin :new.n := :new.n + 1; end;`);
+      await conn.execute(`alter trigger pltest_jt disable`);
+      const obj = await loadObject(conn, owner, 'PLTEST_JT', 'TRIGGER');
+      // a mutant as the file has it: with DISABLE in the header
+      assert.equal(await replaceSource(conn, obj, `trigger pltest_jt before insert on pltest_jt_t for each row disable\nbegin :new.n := :new.n - 1; end;`, 'test'), null);
+      assert.deepEqual(await state(), ['DISABLED', 'VALID']);
+      const out: string[] = [];
+      await restoreJournal(conn, await mine(), quiet(out));
+      assert.deepEqual(await mine(), [], out.join('\n'));
+      const src = (await conn.execute<[string]>(`select text from user_source where name = 'PLTEST_JT' order by line`)).rows!.map((r) => r[0]).join('');
+      assert.match(src, /:new\.n \+ 1/, out.join('\n'));
+      assert.deepEqual(await state(), ['DISABLED', 'VALID']);
+    } finally {
+      await conn.execute(`drop table pltest_jt_t purge`).catch(() => {});
+    }
+  });
+});

@@ -117,7 +117,8 @@ export function splitScript(text: string): string[] {
   let ended = false; // the statement ended, a block comment after its semicolon is still open
   let cont = false;
   let foreign = false; // in an inline Java/MLE source: only the "/" line ends it
-  let parked = false; // SQL cut off by a blank line: run only if "/" follows // a SQL*Plus command continues on the next line
+  let parked = false; // SQL cut off by a blank line: run only if "/" follows
+  let blankLines = false; // SET SQLBLANKLINES ON: blank lines belong to the statement // a SQL*Plus command continues on the next line
   const flush = () => {
     // a statement of comments only, or a lone semicolon, is none (ORA-00900)
     if (code.replace(/;\s*$/, '').trim()) out.push(buf.join('\n').replace(/\s+$/, ''));
@@ -186,7 +187,7 @@ export function splitScript(text: string): string[] {
       code = '';
     }
     // a blank line in unfinished SQL (not PL/SQL, not in a string or comment) ends its entry
-    if (!line.trim() && code.trim() && !st.comment && !st.quote && !PLSQL_START.test(code) && !WITH_PLSQL.test(code)) {
+    if (!blankLines && !line.trim() && code.trim() && !st.comment && !st.quote && !PLSQL_START.test(code) && !WITH_PLSQL.test(code)) {
       parked = true;
       continue;
     }
@@ -198,6 +199,8 @@ export function splitScript(text: string): string[] {
     }
     // a SQL*Plus command, with its continuation lines (" -" at the end)
     if (between && SQLPLUS.test(line)) {
+      const bl = /^\s*SET\b.*\bSQLBL[A-Z]*\s+(ON|OFF)\b/i.exec(line);
+      if (bl) blankLines = bl[1].toUpperCase() === 'ON';
       cont = /\s-\s*$/.test(line);
       continue;
     }

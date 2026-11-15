@@ -442,8 +442,9 @@ class Finder {
         const outer = this.scopeNode;
         this.scopeNode = n;
         // parameter defaults of a subprogram that a spec or a forward declaration declares too (in
-        // a package or type body, or nested) must match that declaration (PLS-00593): no mutants
-        const declaredTwice = !!env.sub || / BODY$/.test(this.units[this.unit]?.type ?? '');
+        // a package or type body, a trigger's declarations, or nested) must match that
+        // declaration (PLS-00593): no mutants
+        const declaredTwice = !!env.sub || /( BODY|TRIGGER)$/.test(this.units[this.unit]?.type ?? '');
         for (const k of n.kids) if (!(declaredTwice && k.k === 'decl')) this.walk(k, n, inner);
         this.scopeNode = outer;
         const body = n.kids.find((k) => k.k === 'body');
@@ -454,7 +455,8 @@ class Finder {
         // a constant whose name gives a size (VARCHAR2(c_len)) must stay static: a switch in its
         // value (it reads plmut$a) would make every such use fail to compile (PLS-00491)
         const name = this.t[n.a + 1]?.up === 'CONSTANT' ? this.norm(n.a) : undefined;
-        this.fixed ??= fixedConstants(this.src);
+        // (the whole text: a size may come in a $IF branch the preprocessing left out)
+        this.fixed ??= fixedConstants(this.orig);
         const fixed = !!name && this.fixed.has(name.toUpperCase());
         for (const k of n.kids) this.walk(k, n, fixed ? { ...env, naiveOnly: env.naiveOnly ?? 'static' } : env);
         return;

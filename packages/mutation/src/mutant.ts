@@ -194,5 +194,5 @@ export function withoutCreate(text: string): string {
   // (CREATE PROCEDURE IF NOT EXISTS p: OR REPLACE goes in front, and the two do not go together)
   return text
     .replace(/^\s*create\s+(or\s+replace\s+)?((non)?editionable\s+)?/i, '')
-    .replace(/^((((no)?force|(non)?editionable|editioning)\s+)*(package\s+body|type\s+body|package|type|procedure|function|trigger|view)\s+)if\s+not\s+exists\s+/i, '$1');
+    .replace(/^((((no\s+)?force|(non)?editionable|editioning)\s+)*(package\s+body|type\s+body|package|type|procedure|function|trigger|view)\s+)if\s+not\s+exists\s+/i, '$1');
 }

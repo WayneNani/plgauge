@@ -101,11 +101,12 @@ export function codeFingerprint(type: string, source: string): string {
 export async function journalNote(conn: oracledb.Connection, obj: Pick<SourceObject, 'owner' | 'name' | 'type'>, source: string, before?: string): Promise<void> {
   // before: what the object holds now (its fingerprint, read from the database); without it the
   // previous note stands in for it
-  // a view: the dictionary may hold its query differently (SELECT * expanded); until journalSettle
-  // notes what it holds, a restore cannot tell and puts the original back
+  // a view or trigger: the dictionary may hold it differently (a view's SELECT * expanded, a
+  // trigger's ENABLE/DISABLE left out); until journalSettle notes what it holds, a restore cannot
+  // tell and puts the original back
   const note = () => conn.execute(
     `update pltest_journal set prev_sha = nvl(:p, current_sha), current_sha = :h, pending = :w where owner = :o and name = :n and type = :t`,
-    { p: before ?? null, h: codeFingerprint(obj.type, source), w: obj.type === 'VIEW' ? 1 : 0, o: obj.owner, n: obj.name, t: obj.type });
+    { p: before ?? null, h: codeFingerprint(obj.type, source), w: obj.type === 'VIEW' || obj.type === 'TRIGGER' ? 1 : 0, o: obj.owner, n: obj.name, t: obj.type });
   try {
     await note();
   } catch (e) {

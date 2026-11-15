@@ -140,17 +140,18 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
   });
   // this run's objects back through the journal check: what someone compiled or dropped while the
   // tests ran stays (a warning), like after a crashed run; returns how many stay changed
-  const restoreOwn = async (objs: SourceObject[]) => {
+  const restoreOwn = async (objs: SourceObject[], c: oracledb.Connection = conn) => {
     const mine = new Set(objs.map((o) => `${o.owner}|${o.name}|${o.type}`));
-    return restoreJournal(conn, (await journalEntries(conn)).filter((e) => mine.has(`${e.owner}|${e.name}|${e.type}`)), say);
+    return restoreJournal(c, (await journalEntries(c)).filter((e) => mine.has(`${e.owner}|${e.name}|${e.type}`)), say);
   };
   // the logoff trigger this run created, dropped under a confirmed lock (a run that took the lock
   // meanwhile may have its own there now); one left behind is reported
   let logoff = false;
-  const dropLogoff = async () => {
+  const dropLogoff = async (c: oracledb.Connection = conn) => {
     if (!logoff || !(await confirmed())) return;
-    await conn.execute(`drop trigger cov$_logoff`).catch(() => {});
-    logoff = false;
+    await c.execute(`drop trigger cov$_logoff`).then(
+      () => { logoff = false; },
+      (e: Error) => { if (e.message.includes('ORA-04080')) logoff = false; });
   };
   const ping = setInterval(() => keepLock().catch((e: Error) => say(`WARNUNG: ${e.message}`)), 60_000);
   ping.unref();
@@ -359,14 +360,29 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     };
   } finally {
     clearInterval(ping);
-    await dropLogoff().catch(() => {});
-    if (logoff) say('FEHLER: Trigger cov$_logoff nicht entfernt (Laufsperre nicht bestätigt): pltest restore');
+    // the main connection may be what failed (a test crashed its server process): the cleanup on
+    // a fresh one then
+    let fin = conn;
+    if ((logoff || restore.length) && !(await conn.execute('select 1 from dual').then(() => true, () => false))) {
+      fin = await connect(cfg).then(async (c) => {
+        await c.execute(`alter session set current_schema = ${dbIdent(rtOwner)}`);
+        return c;
+      }).catch(() => conn);
+    }
+    await dropLogoff(fin).catch(() => {});
+    if (logoff) say('FEHLER: Trigger cov$_logoff nicht entfernt: pltest restore');
     try {
       if (restore.length) {
-        if (await confirmed()) await restoreOwn(restore);
-        else say(`FEHLER: ${restore.length} Objekte nicht wiederhergestellt (Laufsperre nicht bestätigt), ihr instrumentierter Code steht im Journal: pltest restore`);
+        const n = await confirmed()
+          ? await restoreOwn(restore, fin).catch((e: Error) => {
+            say(`FEHLER: Originale nicht wiederhergestellt (${e.message.split('\n')[0]}), der instrumentierte Code steht im Journal: pltest restore`);
+            return 0;
+          })
+          : (say(`FEHLER: ${restore.length} Objekte nicht wiederhergestellt (Laufsperre nicht bestätigt), ihr instrumentierter Code steht im Journal: pltest restore`), 0);
+        if (n) say(`FEHLER: ${n} Objekte nicht wiederhergestellt, ihr instrumentierter Code steht im Journal: pltest restore`);
       }
     } finally {
+      if (fin !== conn) await fin.close().catch(() => {});
       await conn.close().catch(() => {});
       // (a check in flight may still swap the connection; after this none takes the lock again)
       down = true;

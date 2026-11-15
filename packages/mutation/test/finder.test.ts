@@ -1002,3 +1002,34 @@ test('withoutCreate drops IF NOT EXISTS also after FORCE', () => {
   assert.equal(withoutCreate('create force view if not exists v as select 1 a from dual'), 'force view v as select 1 a from dual');
   assert.equal(withoutCreate('create procedure if not exists p is begin null; end;'), 'procedure p is begin null; end;');
 });
+
+test('finder: a size in a $IF branch the preprocessing leaves out still keeps its constant static', () => {
+  const f = points(`CREATE OR REPLACE PACKAGE BODY k AS
+  c_len CONSTANT PLS_INTEGER := 100 * 2;
+  PROCEDURE p IS
+  $IF dbms_db_version.version >= 12 $THEN
+    v VARCHAR2(c_len);
+  $ELSE
+    v VARCHAR2(4000);
+  $END
+  BEGIN NULL; END;
+END k;
+/
+`)[0];
+  assert.equal(f.points.find((p) => p.op === 'AOR' && p.orig.includes('100'))?.naiveOnly, 'static');
+});
+
+test('finder: no mutants in parameter defaults inside a trigger (forward declarations)', () => {
+  const got = mutants(`CREATE OR REPLACE TRIGGER ct FOR INSERT ON t COMPOUND TRIGGER
+  PROCEDURE log_it(p_lvl NUMBER := 1 + 1);
+  PROCEDURE log_it(p_lvl NUMBER := 1 + 1) IS BEGIN NULL; END;
+  BEFORE STATEMENT IS BEGIN log_it; END BEFORE STATEMENT;
+END ct;
+/
+`, ['AOR']);
+  assert.deepEqual(got, []);
+});
+
+test('withoutCreate drops IF NOT EXISTS after NO FORCE', () => {
+  assert.equal(withoutCreate('create no force view if not exists v as select 1 a from dual'), 'no force view v as select 1 a from dual');
+});
