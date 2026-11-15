@@ -122,6 +122,13 @@ export async function loadObject(conn: oracledb.Connection, owner: string, name:
     const table = t.rows?.[0]?.[0] ?? null;
     const cols = Object.fromEntries(c.rows ?? []);
     const settings: Record<string, string> = table || Object.keys(cols).length ? { comments: JSON.stringify({ table, cols }) } : {};
+    // mixed length semantics and a length without BYTE/CHAR (CAST(x AS VARCHAR2(10))): which one
+    // the view was created with cannot be told, a recompile could change its column
+    const raw = (await conn.execute<[string]>(`select text from all_views where owner = :o and view_name = :n`, { o: owner, n: name })).rows?.[0]?.[0] ?? '';
+    const lengths = await conn.execute<[string]>(`select distinct char_used from all_tab_columns where owner = :o and table_name = :n and char_used in ('B', 'C')`, { o: owner, n: name });
+    if ((lengths.rows ?? []).length > 1 && /\b(N?VARCHAR2?|N?CHAR|CHARACTER)\s*\(\s*\d+\s*\)/i.test(raw)) {
+      throw new Error(`View ${owner}.${name} mischt BYTE- und CHAR-Spalten und hat Längen ohne BYTE/CHAR: nicht verändert`);
+    }
     if (settings.comments) {
       // another schema's view: COMMENT ON needs COMMENT ANY TABLE, or the comments are lost for good
       const user = (await conn.execute<[string]>(`select user from dual`)).rows![0][0];
@@ -388,9 +395,9 @@ export async function replaceSourceDetailed(conn: oracledb.Connection, obj: Sour
       await journalForget(conn, obj);
       out.untouched = true;
     } else await journalUnnote(conn, obj);
-  } else if (obj.type === 'VIEW' || obj.type === 'TRIGGER') {
-    // what the dictionary made of it (a view's SELECT * expanded, a trigger's ENABLE/DISABLE
-    // left out): a restore compares with that
+  } else {
+    // what the dictionary made of it (a view's SELECT * expanded, a trigger's ENABLE/DISABLE or
+    // comments after CREATE left out): a restore compares with that
     const held = await currentCode(conn, obj).catch(() => undefined);
     if (held) await journalSettle(conn, obj, held.sha);
   }
@@ -445,9 +452,9 @@ export async function restoreJournal(conn: oracledb.Connection, entries: Journal
       }
       continue;
     }
-    // a view or trigger noted before its compile, or by an older version (other fingerprints): no
+    // noted before its compile and not settled, or by an older version (other fingerprints): no
     // comparison possible, the original goes back
-    const comparable = e.currentSha && ((e.type !== 'VIEW' && e.type !== 'TRIGGER') || e.pending === 0);
+    const comparable = e.currentSha && e.pending === 0;
     if (comparable) {
       // pltest's: the text it was about to compile, the one before, or the original itself
       const ours = new Set([e.currentSha, e.prevSha, codeFingerprint(e.object.type, e.object.original)]);

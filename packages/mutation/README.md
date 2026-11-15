@@ -177,8 +177,8 @@ diesem Schema mutiert. Das Laufzeitpaket `plmut_ctl` bleibt beim angemeldeten Be
 der Lauf vergibt `EXECUTE` darauf. Rechte wie bei der Coverage (`CREATE ANY PROCEDURE`, `EXECUTE ANY PROCEDURE`). Der
 Kontext für Schleifengrenzen heißt pro Schema anders, so stören sich Läufe verschiedener Benutzer in einer Datenbank
 nicht – solange sie nicht dieselben fremden Einheiten mutieren: Sperre und Journal liegen im Schema des Laufs, ein Lauf
-eines anderen Benutzers auf `app_util.calc` sieht sie nicht. Zwei solche Läufe (oder Worker-URLs mit verschiedenen
-Benutzern auf einer Datenbank) dürfen nicht gleichzeitig laufen; ebenso wenig ein Coverage-Lauf mit `schema: app_util`
+eines anderen Benutzers auf `app_util.calc` sieht sie nicht. Zwei solche Läufe dürfen nicht gleichzeitig laufen
+(Worker-URLs eines Laufs brauchen ohnehin denselben Benutzer bzw. dasselbe Schema, sonst bricht der Lauf ab); ebenso wenig ein Coverage-Lauf mit `schema: app_util`
 und ein Mutationslauf, der `app_util.…` mutiert (sie sperren verschiedene Schemas).
 
 ## Zusammen mit Coverage

@@ -1110,3 +1110,11 @@ test('finder: a replacement never joins the next word; binds in string literals 
   assert.ok(!got.some((g) => /(FALSE|TRUE)and/.test(g)), got.join('\n'));
   assert.ok(got.some((g) => g.startsWith('ROR') && g.includes("< ''06:00''") && g.endsWith('FALSE')), got.join('\n'));
 });
+
+test('finder: JOI reads the WHERE of its own UNION branch; WHR TRUE is no duplicate of LCR TRUE', () => {
+  const got = mutants(body(`OPEN cur FOR SELECT o.id FROM orders o JOIN customers c ON c.id = o.cust_id
+      UNION ALL SELECT o.id FROM orders o LEFT JOIN customers c ON c.id = o.cust_id WHERE c.vip = 1;
+    SELECT COUNT(*) INTO x FROM t WHERE(t.x=a)OR(t.y=b);`), ['JOI', 'WHR', 'LCR']);
+  assert.ok(got.some((g) => g.includes('LEFT JOIN') && g.startsWith('JOI')), got.join('\n'));
+  assert.equal(got.filter((g) => /→ TRUE$/.test(g) && g.includes('(t.x=a)OR(t.y=b)')).length, 1, got.join('\n'));
+});

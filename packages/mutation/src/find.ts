@@ -1490,7 +1490,7 @@ class Finder {
           else if (kind === 'INNER' || (kind !== 'CROSS' && s === i)) {
             const a0 = kind === 'INNER' ? s - 1 : i;
             // WHERE rejects the NULL rows of the joined table: LEFT JOIN changes nothing
-            if (this.nullRejected(q, joinedAlias(i + 1))) this.skipped++;
+            if (this.nullRejected(q, joinedAlias(i + 1), own[i])) this.skipped++;
             else clause('JOI', a0, i, ['LEFT JOIN']);
           }
           break;
@@ -1594,9 +1594,20 @@ class Finder {
   }
 
   /** True if a conjunct of q's WHERE compares a column of alias in a way a NULL fails. */
-  private nullRejected(q: Node, alias: string): boolean {
+  private nullRejected(q: Node, alias: string, join: number): boolean {
     if (!alias) return false;
-    const where = q.kids.find((c) => this.t[c.a - 1]?.up === 'WHERE');
+    // the WHERE of the join's own query block: no set operator (UNION …) at its level in between
+    const setOp = (from: number, to: number) => {
+      let d = 0;
+      for (let k = from; k < to; k++) {
+        const t = this.t[k];
+        if (t.text === '(') d++;
+        else if (t.text === ')') d--;
+        else if (d === 0 && ['UNION', 'INTERSECT', 'MINUS', 'EXCEPT'].includes(t.up)) return true;
+      }
+      return false;
+    };
+    const where = q.kids.find((c) => this.t[c.a - 1]?.up === 'WHERE' && c.a > join && !setOp(join, c.a));
     if (!where) return false;
     const conj: Node[] = [];
     const flat = (x: Node) => {
@@ -1665,7 +1676,7 @@ class Finder {
       // (in FORALL, pointSpan keeps a mutant only if a bulk bind is left: PLS-00435)
       const s = this.sb(x.a);
       const e = this.eb(x.b - 1);
-      if (this.points.some((p) => p.start === s && p.end === e && p.kind === 'bool' && p.mutants.includes('TRUE'))) {
+      if (this.points.some((p) => p.start === s && p.end === e && p.kind === 'bool' && p.mutants.some((m) => m.trim() === 'TRUE'))) {
         this.skipped++;
         continue;
       }

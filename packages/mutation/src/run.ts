@@ -1253,6 +1253,9 @@ export async function runMutation(opt: Options): Promise<Report> {
     const failedOpen = opened.find((o): o is PromiseRejectedResult => o.status === 'rejected');
     if (failedOpen) throw failedOpen.reason;
     if (run.workers.length > 1) run.logf(`${run.workers.length} Worker-Datenbanken`);
+    // the switched code names the run's schema (its context, its plmut_ctl): one for all workers
+    const homes = new Set(await Promise.all(run.workers.map((w) => w.currentSchema())));
+    if (homes.size > 1) throw new Error(`Worker-Datenbanken mit verschiedenen Schemas (${[...homes].join(', ')}) werden nicht unterstützt: alle Worker brauchen denselben Benutzer bzw. dasselbe CURRENT_SCHEMA`);
     run.checkpoint();
     // one database object defined in two files (a unit file and an install-all script, say, or
     // once with its schema and once without): both would compile into the same object, the

@@ -121,6 +121,11 @@ class Instrumenter {
         break;
       case 'TRIGGER': {
         const begin = u.kids.findIndex((k) => k.k === 'decls' || k.k === 'body');
+        // a CALL trigger has no PL/SQL of its own
+        if (begin < 0) {
+          this.gap(this.t[u.a].line, 'CALL-Trigger: kein PL/SQL-Rumpf zu messen');
+          break;
+        }
         const first = u.kids[begin];
         // header: WHEN clause is not measured
         let declIdx = first.a;
@@ -515,6 +520,12 @@ class Instrumenter {
   private atom(j: number, k: number, d: number, conds: Condition[], pos: boolean): CondNode {
     const i = conds.length + 1;
     conds.push({ i, text: this.text(j, k - 1), span: this.span(j, k - 1) });
+    // the runtime keys a condition as d*256 + i*4 + v: from the 64th on it would hit the next
+    // decision's; those conditions go unmeasured
+    if (i > 63) {
+      if (i === 64) this.gap(this.t[j].line, 'Entscheidung mit mehr als 63 Bedingungen: die weiteren werden nicht gemessen');
+      return { t: 'cond', i };
+    }
     this.ins(this.t[j].start, `${this.rt}.${this.probeCtx === 'sql' ? this.q : ''}${pos ? 'c' : 'n'}(${d},${i},`);
     this.ins(this.t[k - 1].end, ')');
     return { t: 'cond', i };
