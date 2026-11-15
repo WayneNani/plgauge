@@ -397,18 +397,18 @@ async function currentCode(conn: oracledb.Connection, obj: Pick<SourceObject, 'o
 export async function restoreJournal(conn: oracledb.Connection, entries: JournalEntry[], say: (m: string) => void): Promise<number> {
   const todo: SourceObject[] = [];
   for (const e of entries) {
+    // (not readable: restored as before; the compile reports what is wrong)
+    const cur = await currentCode(conn, e.object).catch(() => null);
+    if (cur === undefined) {
+      // pltest never drops an object: someone did since, on purpose
+      say(`  ✗ ${e.owner}.${e.name} existiert nicht mehr: Journal-Eintrag verworfen, nicht neu angelegt`);
+      await journalForget(conn, e.object);
+      continue;
+    }
     // a view or trigger noted before its compile, or by an older version (other fingerprints): no
     // comparison possible, the original goes back
     const comparable = e.currentSha && ((e.type !== 'VIEW' && e.type !== 'TRIGGER') || e.pending === 0);
     if (comparable) {
-      // (not readable: restored as before; the compile reports what is wrong)
-      const cur = await currentCode(conn, e.object).catch(() => null);
-      if (cur === undefined) {
-        // pltest never drops an object: someone did since, on purpose
-        say(`  ✗ ${e.owner}.${e.name} existiert nicht mehr: Journal-Eintrag verworfen, nicht neu angelegt`);
-        await journalForget(conn, e.object);
-        continue;
-      }
       // pltest's: the text it was about to compile, the one before, or the original itself
       const ours = new Set([e.currentSha, e.prevSha, codeFingerprint(e.object.type, e.object.original)]);
       if (cur && !ours.has(cur.sha) && !/plmut_ctl\.|plmut\$a|cov\$\./i.test(cur.text)) {

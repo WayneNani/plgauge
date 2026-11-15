@@ -560,10 +560,19 @@ class Worker {
   /** Set when tests started (dispatch: a crash before them is no kill). */
   testsRan = false;
 
+  /** A test call is running (a signal breaks it off). */
+  inTests = false;
+
   async runTests(paths: string[], limitMs = this.limitMs): Promise<RunResult> {
     this.testsRan = true;
     this.guard();
-    const r = await runTests(this.test, this.monitor, paths, limitMs);
+    this.inTests = true;
+    let r: RunResult;
+    try {
+      r = await runTests(this.test, this.monitor, paths, limitMs);
+    } finally {
+      this.inTests = false;
+    }
     if (r.killed || (!r.timedOut && lostConnection(r.err))) await this.reconnectTest();
     return r;
   }
@@ -938,6 +947,8 @@ class Run {
             return;
           }
         }
+        // a run broken off by Ctrl-C says nothing about the mutant: left out (the report is partial)
+        if (this.interrupted) return;
         if (r.sideEffect) await w.resetAfterSideEffect();
         results[i] = r;
         this.ranOn.set(r.id, w);
@@ -1153,6 +1164,8 @@ export async function runMutation(opt: Options): Promise<Report> {
     }
     run.interrupted = true;
     run.logf('Abbruch angefordert, stelle Originale wieder her …');
+    // test calls in flight end now (a CI cancel kills the process a few seconds later)
+    for (const w of run.workers) if (w.inTests) w.test.conn.break().catch(() => {});
   };
   // kept until the originals are back: a second Ctrl-C must not kill the restore
   process.on('SIGINT', onSig);

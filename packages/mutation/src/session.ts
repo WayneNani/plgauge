@@ -33,11 +33,17 @@ export interface Session {
 
 export async function newSession(cfg: ConnectConfig): Promise<Session> {
   const conn = await oracledb.getConnection(cfg);
-  const r = await conn.execute<[number, number]>(
-    `select to_number(sys_context('USERENV','SID')), serial# from v$session where sid = sys_context('USERENV','SID')`,
-  );
-  const [sid, serial] = r.rows![0];
-  return { conn, sid, serial };
+  try {
+    const r = await conn.execute<[number, number]>(
+      `select to_number(sys_context('USERENV','SID')), serial# from v$session where sid = sys_context('USERENV','SID')`,
+    );
+    const [sid, serial] = r.rows![0];
+    return { conn, sid, serial };
+  } catch (e) {
+    // (an open connection would keep the process alive)
+    await conn.close().catch(() => {});
+    throw e;
+  }
 }
 
 async function compileDdl(conn: oracledb.Connection, ddl: string, type: string, name: string): Promise<void> {

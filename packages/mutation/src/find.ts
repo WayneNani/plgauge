@@ -43,6 +43,21 @@ function sizeUse(src: string, name: string): boolean {
   return new RegExp(`\\b(N?VARCHAR2?|N?CHAR|CHARACTER|NUMBER|NUMERIC|DEC(IMAL)?|FLOAT|RAW|UROWID|STRING|TIMESTAMP|INTERVAL\\s+(DAY|YEAR)|SECOND|VARRAY|VARYING\\s+ARRAY)\\s*\\(([^()]|\\([^()]*\\))*?${word(name)}`, 'i').test(src);
 }
 
+/** How many parentheses are open at offset i of SQL text (strings and quoted names skipped). */
+function parenDepth(sql: string, i: number): number {
+  let d = 0;
+  for (let k = 0; k < i; k++) {
+    const c = sql[k];
+    if (c === "'" || c === '"') {
+      const e = sql.indexOf(c, k + 1);
+      if (e < 0 || e >= i) break;
+      k = e;
+    } else if (c === '(') d++;
+    else if (c === ')') d--;
+  }
+  return d;
+}
+
 /** name as a whole word of PL/SQL ($ and # belong to names). */
 const word = (name: string) => `(?<![\\w$#])${name.replace(/[$#]/g, (c) => `\\${c}`)}(?![\\w$#])`;
 
@@ -937,7 +952,8 @@ class Finder {
     const orderFree = single && !/\b(FETCH\s+(FIRST|NEXT)|ROWNUM)\b|\(\s*(SELECT|WITH)\b/i.test(content);
     for (const p of inner.points) {
       if (p.start < from || p.end > to || p.kind === 'insert' || p.kind === 'stmt') continue;
-      if (orderFree && p.op === 'ORD') {
+      // (only the query's own ORDER BY: one in OVER, WITHIN GROUP or KEEP decides the row's value)
+      if (orderFree && p.op === 'ORD' && parenDepth(content, buf.subarray(from, p.start).toString('utf8').length) === 0) {
         this.skipped += p.mutants.length;
         continue;
       }

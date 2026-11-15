@@ -211,3 +211,18 @@ test('a disabled trigger (DISABLE written in its file) stays disabled and valid,
     }
   });
 });
+
+test('a view dropped after a run died mid-compile (pending) is not created again', { skip: !m && 'PLCOV_DB not set' }, async () => {
+  await withConn(async (conn, owner) => {
+    await conn.execute(`create or replace view pltest_jp as select 1 a from dual`);
+    const obj = await loadObject(conn, owner, 'PLTEST_JP', 'VIEW');
+    await replaceSource(conn, obj, `view pltest_jp as select 2 a from dual`, 'test');
+    await conn.execute(`update pltest_journal set pending = 1 where name = 'PLTEST_JP'`);
+    await conn.commit();
+    await conn.execute(`drop view pltest_jp`);
+    const out: string[] = [];
+    await restoreJournal(conn, (await journalEntries(conn)).filter((e) => e.name === 'PLTEST_JP'), quiet(out));
+    assert.match(out.join('\n'), /existiert nicht mehr/);
+    assert.equal((await conn.execute<[number]>(`select count(*) from user_views where view_name = 'PLTEST_JP'`)).rows![0][0], 0);
+  });
+});

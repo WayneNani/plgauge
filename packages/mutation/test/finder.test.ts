@@ -1040,3 +1040,9 @@ test('finder: no ORD mutant for a dynamic single-row EXECUTE IMMEDIATE … INTO 
   assert.ok(!got.some((g) => g.includes('order by 1') || g.startsWith('ORD: 1 ')), got.join('\n'));
   assert.ok(got.some((g) => g.includes('b DESC')), got.join('\n'));
 });
+
+test('finder: ORD in OVER / WITHIN GROUP of a dynamic single-row query stays', () => {
+  const got = mutants(body(`EXECUTE IMMEDIATE 'SELECT LISTAGG(n, '','') WITHIN GROUP (ORDER BY n) FROM t' INTO s;
+    EXECUTE IMMEDIATE 'SELECT FIRST_VALUE(n) OVER (ORDER BY m) FROM t WHERE id = 1' INTO x;`), ['ORD']);
+  assert.ok(got.some((g) => g.includes('n DESC')) && got.some((g) => g.includes('m DESC')), got.join('\n'));
+});

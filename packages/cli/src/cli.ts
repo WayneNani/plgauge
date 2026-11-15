@@ -193,10 +193,14 @@ async function main() {
         const valid = j.results.filter((r: { status: string }) => ['KILLED', 'TIMEOUT', 'MEMORY', 'SURVIVED', 'NOT_COVERED'].includes(r.status));
         const det = valid.filter((r: { status: string }) => ['KILLED', 'TIMEOUT', 'MEMORY'].includes(r.status)).length;
         const score = valid.length ? (100 * det) / valid.length : 100;
+        const errors = j.results.some((r: { status: string }) => r.status === 'ERROR');
         console.error(`Mutation Score ${score.toFixed(1)} % (${det}/${valid.length})`);
         // an aborted run's partial score says nothing (as in mutate run)
         if (j.aborted) {
           console.error(`Lauf abgebrochen: ${j.aborted}`);
+          process.exitCode = 1;
+        } else if (th.score !== undefined && !valid.length && errors) {
+          console.error('Kein Mutant bewertbar (nur Fehler): die Schwelle lässt sich nicht prüfen');
           process.exitCode = 1;
         } else if (th.score !== undefined && score + 1e-9 < th.score) enforce([`Mutation Score: ${score.toFixed(1)} % < ${th.score} %`]);
       } else {
@@ -316,6 +320,11 @@ async function main() {
       const scored = rep.results.some((r) => ['KILLED', 'TIMEOUT', 'MEMORY', 'SURVIVED', 'NOT_COVERED'].includes(r.status));
       // an aborted run's partial score says nothing: its exit code (1) stands
       if (minScore !== undefined && scored && !rep.aborted && score(rep) + 1e-9 < minScore) enforce([`Mutation Score: ${score(rep).toFixed(1)} % < ${minScore} %`]);
+      // mutants, but none scored (all ERROR: a unit that could not be compiled into): no pass
+      if (minScore !== undefined && !scored && rep.results.some((r) => r.status === 'ERROR')) {
+        console.error('Kein Mutant bewertbar (nur Fehler): die Schwelle lässt sich nicht prüfen');
+        process.exitCode = 1;
+      }
       // changed code left in the schema outranks the score gate
       if (rep.unrestored?.length) process.exitCode = 1;
       break;
