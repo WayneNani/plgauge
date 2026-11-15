@@ -14,8 +14,8 @@ import oracledb from 'oracledb';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import {
-  connect, databaseInfo, dbIdent, utInfoContext, restoreJournal, ensureJournal, journalEntries, loadObjects, lockRun, replaceSourceDetailed, restoreAll, RUN_LOCK, runScript, sha256, splitScript,
-  runTestsJunit as runTests, sameResults, suiteTests, type SourceObject, type TestCase, type TestRun,
+  connect, databaseInfo, dbIdent, firstLine, utInfoContext, restoreJournal, ensureJournal, journalEntries, loadObjects, lockRun, replaceSourceDetailed, restoreAll, RUN_LOCK, runScript, sha256, splitScript,
+  runTestsJunit as runTests, suiteTests, tryExecute, type SourceObject, type TestCase, type TestRun,
 } from '@pltest/core';
 import { instrument } from './instrument.js';
 import { analyze, type ObjectResult } from './analyze.js';
@@ -89,21 +89,22 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
   const multi = !!cfg.schemas?.length;
   const schemas = multi ? cfg.schemas!.map((s) => s.toUpperCase()) : [schema];
   const rtOwner = (multi ? cfg.runtimeSchema ?? cfg.user : schema).toUpperCase();
-  // the run lock (shared with mutation runs) on a connection of its own, held to the end; in the
-  // schema of the journal (rtOwner), where a mutation run of that schema takes it too
-  const takeLock = async () => {
+  // a connection of its own in the schema of the journal (rtOwner), closed again if then fails
+  const connectHome = async (then?: (c: oracledb.Connection) => Promise<void>, callTimeout?: number) => {
     const c = await connect(cfg);
-    // a silently dropped connection must not hang the check until TCP gives up
-    c.callTimeout = 15_000;
+    if (callTimeout) c.callTimeout = callTimeout;
     try {
       await c.execute(`alter session set current_schema = ${dbIdent(rtOwner)}`);
-      await lockRun(c, RUN_LOCK);
+      await then?.(c);
       return c;
     } catch (e) {
       await c.close().catch(() => {});
       throw e;
     }
   };
+  // the run lock (shared with mutation runs), held to the end, where a mutation run of that schema
+  // takes it too; a silently dropped connection must not hang the check until TCP gives up
+  const takeLock = () => connectHome((c) => lockRun(c, RUN_LOCK), 15_000);
   let lock = await takeLock();
   // the lock went to another run: it restored this run's journal at its start and works on the
   // schema now; this run changes nothing there any more, not even to restore
@@ -127,7 +128,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       lock = c;
     } catch (e) {
       if ((e as Error).message.includes('anderer pltest-Lauf')) foreign = true;
-      throw new Error(`Laufsperre verloren: ${(e as Error).message.split('\n')[0]}${foreign ? ' – schon instrumentierter Code bleibt im Journal: pltest restore, sobald die Sperre frei ist' : ''}`);
+      throw new Error(`Laufsperre verloren: ${firstLine(e)}${foreign ? ' – schon instrumentierter Code bleibt im Journal: pltest restore, sobald die Sperre frei ist' : ''}`);
     }
   })().finally(() => {
     checking = undefined;
@@ -206,9 +207,8 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     if (left.length) {
       say(`${left.length} Objekte eines abgebrochenen Laufs werden aus dem Journal wiederhergestellt`);
       // on a connection of its own: compiling sets session parameters the install must not inherit
-      const r = await connect(cfg);
+      const r = await connectHome();
       try {
-        await r.execute(`alter session set current_schema = ${dbIdent(rtOwner)}`);
         await restoreJournal(r, left, say);
         const still = await journalEntries(r);
         if (still.length) throw new Error(`${still.length} Objekte eines abgebrochenen Laufs ließen sich nicht wiederherstellen (${still.map((e) => e.name).join(', ')}); erst pltest restore`);
@@ -236,10 +236,9 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     // Every run starts with fresh package state, like the instrumented run after compiling:
     // tests that depend on state left by earlier tests then behave the same in all runs.
     const fresh = () => conn.execute('begin dbms_session.reset_package; end;');
-    await fresh();
-    let baseline = await testRun(cfg.tests, null);
-    const observed: TestCase[][] = [baseline.run.tests];
-    for (let k = 1; k < repeat; k++) {
+    let baseline!: Awaited<ReturnType<typeof testRun>>;
+    const observed: TestCase[][] = [];
+    for (let k = 0; k < repeat; k++) {
       await fresh();
       baseline = await testRun(cfg.tests, null);
       observed.push(baseline.run.tests);
@@ -300,7 +299,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     const perTest = cfg.perTest !== false;
     await fresh();
     await conn.execute(`begin cov$.reset; cov$.per_test(:p = 1); cov$.start_run(:r); end;`, { p: perTest ? 1 : 0, r: runId });
-    await conn.execute(LOGOFF_TRIGGER).then(() => { logoff = true; }, (e) => say(`  Hinweis: ohne Logoff-Trigger (${(e as Error).message.split('\n')[0]}), andere Sessions schreiben nur alle 1000 Anweisungen`));
+    await conn.execute(LOGOFF_TRIGGER).then(() => { logoff = true; }, (e) => say(`  Hinweis: ohne Logoff-Trigger (${firstLine(e)}), andere Sessions schreiben nur alle 1000 Anweisungen`));
     let instrumentedRun;
     // compiling left the last object's length semantics in the session; the tests (DDL in them)
     // run with the session's own, as in the baseline
@@ -395,10 +394,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     // a fresh one then
     let fin = conn;
     if ((logoff || restore.length) && !(await conn.execute('select 1 from dual').then(() => true, () => false))) {
-      fin = await connect(cfg).then(async (c) => {
-        await c.execute(`alter session set current_schema = ${dbIdent(rtOwner)}`);
-        return c;
-      }).catch(() => conn);
+      fin = await connectHome().catch(() => conn);
     }
     await dropLogoff(fin).catch(() => {});
     if (logoff) say('FEHLER: Trigger cov$_logoff nicht entfernt: pltest restore');
@@ -406,7 +402,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       if (restore.length) {
         const n = await confirmed()
           ? await restoreOwn(restore, fin).catch((e: Error) => {
-            say(`FEHLER: Originale nicht wiederhergestellt (${e.message.split('\n')[0]}), der instrumentierte Code steht im Journal: pltest restore`);
+            say(`FEHLER: Originale nicht wiederhergestellt (${firstLine(e)}), der instrumentierte Code steht im Journal: pltest restore`);
             return 0;
           })
           : (say(`FEHLER: ${restore.length} Objekte nicht wiederhergestellt (Laufsperre nicht bestätigt), ihr instrumentierter Code steht im Journal: pltest restore`), 0);
@@ -439,21 +435,9 @@ async function waitForJobs(conn: oracledb.Connection, say: (m: string) => void) 
 }
 
 export async function installRuntime(conn: oracledb.Connection) {
-  try {
-    await conn.execute(HITS_TABLE);
-  } catch (e) {
-    if (!(e as Error).message.includes('ORA-00955')) throw e;
-    try {
-      await conn.execute(`alter table plcov_hits add (test varchar2(400))`); // table from an older plcov version
-    } catch (e2) {
-      if (!(e2 as Error).message.includes('ORA-01430')) throw e2;
-    }
-  }
-  try {
-    await conn.execute(RUNS_TABLE);
-  } catch (e) {
-    if (!(e as Error).message.includes('ORA-00955')) throw e;
-  }
+  // a table from an older plcov version gets the test column
+  if (!(await tryExecute(conn, HITS_TABLE, 'ORA-00955'))) await tryExecute(conn, `alter table plcov_hits add (test varchar2(400))`, 'ORA-01430');
+  await tryExecute(conn, RUNS_TABLE, 'ORA-00955');
   await conn.execute(RUNTIME_SPEC);
   await conn.execute(RUNTIME_BODY.replace(/UT3_INFO/g, await utInfoContext(conn)));
   // Native compilation makes the probes cheaper; it does not affect the instrumented code itself.
@@ -513,9 +497,7 @@ async function loadTestCatalog(
 ): Promise<TestInfo[]> {
   const owners = new Set([schema, ...paths.filter((p) => !p.startsWith(':')).map((p) => p.split('.')[0].toUpperCase())]);
   const tests: TestInfo[] = [];
-  const statusOf = (list: TestCase[], suite: string, desc: string) =>
-    list.find((t) => t.suite.toLowerCase() === suite && t.name === desc)?.status ?? 'unknown';
-  const timeOf = (suite: string, desc: string) => instrumented.find((t) => t.suite.toLowerCase() === suite && t.name === desc)?.time ?? 0;
+  const caseOf = (list: TestCase[], suite: string, desc: string) => list.find((t) => t.suite.toLowerCase() === suite && t.name === desc);
   for (const owner of owners) {
     for (const { owner: o, object: obj, item, description: desc, path } of await suiteTests(conn, owner)) {
       const full = `${o}.${obj}.${item}`.toLowerCase();
@@ -528,10 +510,11 @@ async function loadTestCatalog(
       if (!inScope || tests.some((t) => t.path === full)) continue;
       const suite = path.toLowerCase().split('.').slice(0, -1).join('.');
       const description = desc || item.toLowerCase();
-      const status = statusOf(instrumented, suite, description);
+      const run = caseOf(instrumented, suite, description);
+      const status = run?.status ?? 'unknown';
       if (status === 'unknown' && !hits.perTest.has(full)) continue; // not part of this run
       tests.push({
-        path: full, suite, description, setup: false, status, baselineStatus: statusOf(baseline, suite, description), ms: timeOf(suite, description) * 1000,
+        path: full, suite, description, setup: false, status, baselineStatus: caseOf(baseline, suite, description)?.status ?? 'unknown', ms: (run?.time ?? 0) * 1000,
       });
     }
   }

@@ -24,7 +24,7 @@ import {
 } from '@pltest/core';
 import type { CoverageExport } from '@pltest/coverage';
 import { CoverageIndex, unitLineOf } from './link.js';
-import { expand, mutatedUnit, objectName, objectOwner, unitKey, withoutCreate, type Mutant, type Point, type SourceFile } from './mutant.js';
+import { expand, mutatedUnit, objectName, objectOwner, unitKey, withoutCreate, withoutLeadingComments, type Mutant, type Point } from './mutant.js';
 import { findPoints } from './find.js';
 import { buildSchema, livePlan, locate, planDiff, positionOf, switchable, type PlanRow, type SchemaUnit } from './schema.js';
 import {
@@ -163,9 +163,10 @@ export function sample<T>(items: T[], n: number, seed: number): T[] {
   return idx.slice(0, n).sort((a, b) => a - b).map((i) => items[i]);
 }
 
-const sleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
 const isCompanion = (text: string) => text.includes('Statement ignored') || text.includes('Item ignored');
 const lostConnection = (e?: Error) => !!e && /NJS-500|NJS-003|NJS-521|DPI-1010|DPI-1080|ORA-00028|ORA-03113|ORA-03135|ORA-07445/.test(e.message);
+/** A quoted identifier, exactly as written. */
+const quoted = (x: string) => `"${x.replace(/"/g, '""')}"`;
 
 class Worker {
   deploy!: oracledb.Connection;
@@ -274,7 +275,8 @@ class Worker {
   /** Set by shutdown: no lock is taken any more. */
   private down = false;
 
-  async open(): Promise<void> {
+  /** The lock and the connections; what a broken run (or connection) left changed comes back from the journal. */
+  private async connect(): Promise<void> {
     await this.ensureLock();
     this.deploy = await oracledb.getConnection(this.db);
     this.monitor = await oracledb.getConnection(this.db);
@@ -290,6 +292,28 @@ class Worker {
       this.logf(`Worker${this.name}: ${left.length} Objekte eines abgebrochenen Laufs werden aus dem Journal wiederhergestellt`);
       await this.restoreLeftovers(left);
     }
+  }
+
+  /** Closes the connections; a new database: objects, grants and the schema name are to be found again. */
+  private async forget(): Promise<void> {
+    await this.close();
+    this.objects.clear();
+    this.changed.clear();
+    this.lastUnit = '';
+    this.schemaName = undefined;
+    this.granted.clear();
+  }
+
+  /** The schema build again on new connections (none before the first install). */
+  private async reinstall(): Promise<void> {
+    if (!this.schema) return;
+    await this.installSchema(this.schema);
+    if (this.loopLimits) await setLoopLimits(this.test, this.loopLimits);
+    await this.warmUp();
+  }
+
+  async open(): Promise<void> {
+    await this.connect();
     if (!this.run.opt.skipInstall) {
       const scripts: [string, string[]][] = [];
       for (const s of this.run.cfg.install) {
@@ -368,21 +392,19 @@ class Worker {
       const st = withoutLeadingComments(raw);
       const sw = /^alter\s+session\s+set\s+current_schema\s*=\s*("[^"]+"|[\w$#À-\uffff]+)/i.exec(st);
       if (sw) schema = sw[1].startsWith('"') ? sw[1].slice(1, -1) : sw[1].toUpperCase();
-      const m = /^create\s+(?:or\s+replace\s+)?(?:(?:non)?editionable\s+)?(package\s+body|package|type\s+body|procedure|function|trigger)\s+(?:if\s+not\s+exists\s+)?((?:"[^"]+"|[\w$#À-\uffff]+)(?:\s*\.\s*(?:"[^"]+"|[\w$#À-\uffff]+))?)/i.exec(st);
-      if (!m) continue;
-      const full = m[2].replace(/\s*\.\s*(?=(?:"[^"]+"|[\w$#À-\uffff]+)$)/, '.');
-      units.push({ type: m[1].toUpperCase().replace(/\s+/g, ' '), owner: objectOwner(full) ?? schema, name: objectName(full) });
+      // (a view has no status worth a recompile)
+      const c = createStatement(st);
+      if (c && c.type !== 'VIEW') units.push({ type: c.type, owner: objectOwner(c.name) ?? schema, name: objectName(c.name) });
     }
     const status = async (u: (typeof units)[number]) =>
       (await this.deploy.execute<[string]>(`select status from all_objects where owner = :o and object_name = :n and object_type = :t`, { o: u.owner, n: u.name, t: u.type })).rows?.[0]?.[0];
-    const q = (x: string) => `"${x.replace(/"/g, '""')}"`;
     const out: string[] = [];
     for (const u of units) {
       const before = await status(u);
       // VALID, or gone again (a helper the script drops after use)
       if (before === 'VALID' || before === undefined) continue;
       const [kind, body] = u.type.endsWith(' BODY') ? [u.type.replace(' BODY', ''), ' BODY'] : [u.type, ''];
-      await this.deploy.execute(`alter ${kind} ${q(u.owner)}.${q(u.name)} compile${body} reuse settings`).catch(() => {});
+      await this.deploy.execute(`alter ${kind} ${quoted(u.owner)}.${quoted(u.name)} compile${body} reuse settings`).catch(() => {});
       if ((await status(u)) !== 'VALID') out.push(`${u.type} ${u.name}`);
     }
     return out;
@@ -506,27 +528,11 @@ class Worker {
    * (the database may hold a mutated unit), then the schema build is installed again.
    */
   async reopen(): Promise<boolean> {
-    await this.close();
-    this.objects.clear();
-    this.changed.clear();
-    this.lastUnit = '';
-    this.schemaName = undefined;
-    this.granted.clear();
+    await this.forget();
     try {
-      await this.ensureLock();
-      this.deploy = await oracledb.getConnection(this.db);
-      this.monitor = await oracledb.getConnection(this.db);
-      this.monitor.callTimeout = 30_000;
-      this.test = await newSession(this.db);
-      await ensureJournal(this.deploy);
-      const mine = await journalEntries(this.deploy);
-      if (mine.length) await this.restoreLeftovers(mine);
+      await this.connect();
       await installRuntime(this.deploy);
-      if (this.schema) {
-        await this.installSchema(this.schema);
-        if (this.loopLimits) await setLoopLimits(this.test, this.loopLimits);
-        await this.warmUp();
-      }
+      await this.reinstall();
       this.logf(`Worker${this.name} neu verbunden`);
       return true;
     } catch (e) {
@@ -608,7 +614,7 @@ class Worker {
     // a test may have left CURRENT_SCHEMA switched (a mutant made it skip the switch back): the
     // run's packages are found in the run's schema only
     const home = await this.currentSchema();
-    await this.test.conn.execute(`alter session set current_schema = "${home.replace(/"/g, '""')}"`).catch(() => {});
+    await this.test.conn.execute(`alter session set current_schema = ${quoted(home)}`).catch(() => {});
     stopped();
     if (r.killed || (!r.timedOut && lostConnection(r.err))) await this.reconnectTest();
     return r;
@@ -760,16 +766,7 @@ class Worker {
       const run = await this.runTests(ran, kill ? this.limitMs : 2 * this.limitMs);
       this.sideEffect(res, run, ran);
       // a lost connection says nothing about the mutant
-      if (lostConnection(run.err)) return run;
-      if (kill) {
-        if (!run.timedOut && !run.err && !failed(run)) res.unstable = `nicht wiederholbar: ${res.killedBy!.split('.').pop()} besteht allein`;
-      } else if (!run.timedOut && !run.killed) {
-        const again = newResult(res.mutant);
-        again.sideEffect = res.sideEffect; // already noted
-        this.classify(again, run, ran);
-        res.unstable = `Zeitgrenze knapp: zweiter Versuch ${again.status} nach ${Math.round(run.elapsedMs)} ms (Grenze ${Math.round(this.limitMs)} ms)`;
-        Object.assign(res, { status: again.status, killedBy: again.killedBy, detail: again.detail });
-      }
+      if (!lostConnection(run.err)) this.judgeAgain(res, run, ran);
       return run;
     } catch (e) {
       this.logf(`Gegenprobe${this.name}, Mutant ${res.id}: ${firstLine(e as Error)}`);
@@ -779,7 +776,6 @@ class Worker {
 
   /** Second look at a verdict on this worker; see confirmVerdicts. */
   async confirm(r: Result): Promise<void> {
-    const m = r.mutant;
     const timeout = r.status === 'TIMEOUT';
     const tests = !timeout ? [r.killedBy!] : (r.coveredBy ?? this.testPaths()).filter((t) => !this.flaky.has(t));
     if (!tests.length) return;
@@ -793,27 +789,35 @@ class Worker {
       this.sideEffect(r, run, tests);
       if (r.sideEffect) await this.resetAfterSideEffect();
       r.sideEffect ||= had;
-      if (lostConnection(run.err)) return;
-      const where = this.name ? ` auf${this.name}` : '';
-      if (timeout) {
-        if (run.timedOut || run.killed || guard) return;
-        const again = newResult(m);
-        again.sideEffect = r.sideEffect; // already noted
-        this.classify(again, run, tests);
-        r.unstable = `Zeitgrenze knapp: zweiter Versuch${where} ${again.status} nach ${Math.round(run.elapsedMs)} ms (Grenze ${Math.round(this.limitMs)} ms)`;
-        Object.assign(r, { status: again.status, killedBy: again.killedBy, detail: again.detail });
-      } else if (!run.timedOut && !run.err && !failed(run)) {
-        r.unstable = `nicht wiederholbar: ${r.killedBy!.split('.').pop()} besteht allein${where}`;
-      }
+      if (!lostConnection(run.err)) this.judgeAgain(r, run, tests, this.name ? ` auf${this.name}` : '', guard);
     } catch (e) {
       this.logf(`Gegenprobe${this.name}, Mutant ${r.id}: ${firstLine(e as Error)}`);
     }
   }
 
+  /** The second look's verdict on a kill or a timeout (confirm, confirmHere); where: the worker, if another one looked. */
+  private judgeAgain(r: Result, run: RunResult, tests: string[], where = '', guard = false): void {
+    if (r.status === 'KILLED') {
+      if (!run.timedOut && !run.err && !failed(run)) r.unstable = `nicht wiederholbar: ${r.killedBy!.split('.').pop()} besteht allein${where}`;
+      return;
+    }
+    if (run.timedOut || run.killed || guard) return;
+    const again = newResult(r.mutant);
+    again.sideEffect = r.sideEffect; // already noted
+    this.classify(again, run, tests);
+    r.unstable = `Zeitgrenze knapp: zweiter Versuch${where} ${again.status} nach ${Math.round(run.elapsedMs)} ms (Grenze ${Math.round(this.limitMs)} ms)`;
+    Object.assign(r, { status: again.status, killedBy: again.killedBy, detail: again.detail });
+  }
+
+  /** Compiles a schema unit's text (see compileUnit). */
+  compileSchemaUnit(su: SchemaUnit) {
+    return this.compileUnit(su.key, su.type, su.owner ? `"${su.owner}"."${su.name}"` : su.name, su.text);
+  }
+
   async installSchema(units: SchemaUnit[]): Promise<void> {
     await installControl(this.deploy);
     for (const su of units) {
-      const errs = await this.compileUnit(su.key, su.type, su.owner ? `"${su.owner}"."${su.name}"` : su.name, su.text);
+      const errs = await this.compileSchemaUnit(su);
       if (errs.length) throw new Error(`${su.key} ungültig${this.name}: ${errs.slice(0, 3).map((e) => e.text).join('; ')}`);
     }
   }
@@ -834,20 +838,10 @@ class Worker {
       this.logf(`Zurücksetzen${this.name} gescheitert: ${firstLine(e as Error)}`);
       return;
     }
-    await this.close();
-    this.objects.clear();
-    this.changed.clear();
-    this.lastUnit = '';
-    // a new database: grants and the schema name are to be found again
-    this.schemaName = undefined;
-    this.granted.clear();
+    await this.forget();
     try {
       await this.open();
-      if (this.schema) {
-        await this.installSchema(this.schema);
-        if (this.loopLimits) await setLoopLimits(this.test, this.loopLimits);
-        await this.warmUp();
-      }
+      await this.reinstall();
       this.logf(`Worker${this.name} zurückgesetzt in ${Math.round((Date.now() - t0) / 1000)}s`);
     } catch (e) {
       // half set up, its verdicts would be wrong: it takes no more mutants
@@ -889,6 +883,14 @@ class Run {
   ranOn = new Map<number, Worker>();
   /** Test runs that wrote the data back after a mutant (Worker.repair). */
   repairs = 0;
+  /**
+   * Schema mode, the state of the build (see buildSchema): its mutants, those that did not
+   * compile (with the error), points not switched, view blocks whose wrapper did not compile.
+   */
+  ms: Mutant[] = [];
+  dropped = new Map<number, string>();
+  naive = new Set<Point>();
+  broken = new Set<string>();
   /** Views that go into the schema exactly as written (see buildSchema). */
   plain = new Set<string>();
   /** Units the schema could not put in place at all (not even with errors): left out of it. */
@@ -960,24 +962,21 @@ class Run {
         let r = await fn(w, ms[i]);
         if (broken(r) || !(await w.alive())) {
           this.logf(`Worker${w.name}: Verbindung verloren (${r.detail ?? 'Verwaltungsverbindung'}), baue neu auf …`);
-          if (await w.reopen()) {
+          let up = await w.reopen();
+          if (up) {
             w.testsRan = false;
             r = await fn(w, ms[i]);
             // (read now: the reopen below warms up, and that runs tests)
             const ranTests = w.testsRan;
             // on a fresh connection it broke the server process again: the mutant does it
             if (broken(r)) {
-              if (!(await w.reopen())) {
-                w.retired = true;
-                again.push(i);
-                this.logf(`Worker${w.name} scheidet aus, die anderen übernehmen seine Mutanten`);
-                return;
-              }
+              up = await w.reopen();
               // under the tests: they would fail; before them (compiling the mutant): no test saw it
-              if (ranTests) Object.assign(r, { status: 'KILLED', killedBy: '(Serverprozess abgestürzt)' });
-              else r.detail = `Serverprozess beim Kompilieren abgestürzt: ${r.detail ?? ''}`;
+              if (up && ranTests) Object.assign(r, { status: 'KILLED', killedBy: '(Serverprozess abgestürzt)' });
+              else if (up) r.detail = `Serverprozess beim Kompilieren abgestürzt: ${r.detail ?? ''}`;
             }
-          } else {
+          }
+          if (!up) {
             w.retired = true;
             again.push(i);
             this.logf(`Worker${w.name} scheidet aus, die anderen übernehmen seine Mutanten`);
@@ -1013,6 +1012,29 @@ class Run {
 
   async restoreEverywhere() {
     await Promise.all(this.workers.map((w) => w.restoreAll()));
+  }
+
+  /** Schema mode: the schema units as the state of the build stands. */
+  async build(): Promise<SchemaUnit[]> {
+    return buildSchema(this.ms, new Set(this.dropped.keys()), this.naive, await this.primary.currentSchema(), this.broken, this.plain);
+  }
+
+  /** Schema mode: all points of a unit run one by one; plain: a view goes in exactly as written. */
+  oneByOne(key: string, plain = false): void {
+    for (const m of this.ms) if (unitKey(m) === key) this.naive.add(m.point);
+    if (plain) this.plain.add(key);
+  }
+
+  /** Tests found unreliable leave the run, on w and the primary (shareBaseline copies from it, also onto w). */
+  exclude(w: Worker, bad: Set<string>): void {
+    const keep = w.passing.filter((t) => !bad.has(t));
+    const excluded = w.excluded + w.passing.length - keep.length;
+    for (const x of new Set([w, this.primary])) {
+      x.excluded = excluded;
+      x.passing = keep;
+    }
+    for (const f of bad) w.flaky.add(f);
+    this.shareBaseline();
   }
 
   /** The baseline committed: commits under mutants are no side effect of theirs. */
@@ -1070,7 +1092,7 @@ class Run {
     const w = this.workers.find((x) => !x.retired);
     if (!w) return;
     const mine = (r: Result) => !only || only.has(r.id);
-    const killers = [...new Set(rep.results.filter((r) => mine(r) && r.status === 'KILLED' && r.killedBy && !r.killedBy.startsWith('(')).map((r) => r.killedBy!))].sort();
+    const killers = [...new Set(rep.results.filter((r) => mine(r) && killedByTest(r)).map((r) => r.killedBy!))].sort();
     const flaky = new Set<string>();
     try {
       for (const name of killers) {
@@ -1094,17 +1116,9 @@ class Run {
     if (!flaky.size) return;
     rep.flakyTests.push(...[...flaky].sort());
     rep.flakyTests.sort();
-    const keep = w.passing.filter((t) => !flaky.has(t));
-    // on the primary too: shareBaseline copies from it, also onto w
-    const excluded = w.excluded + w.passing.length - keep.length;
-    for (const x of new Set([w, this.primary])) {
-      x.excluded = excluded;
-      x.passing = keep;
-    }
-    for (const f of flaky) w.flaky.add(f);
-    this.shareBaseline();
-    rep.tests = keep.length;
-    rep.excludedTests = excluded;
+    this.exclude(w, flaky);
+    rep.tests = w.passing.length;
+    rep.excludedTests = w.excluded;
     // every kill of a test found unreliable, also one checked earlier (another recheck call)
     const again = rep.results.filter((r) => r.status === 'KILLED' && flaky.has(r.killedBy ?? ''));
     this.logf(`${again.length} Mutanten werden ohne die unzuverlässigen Tests wiederholt`);
@@ -1132,10 +1146,13 @@ async function withoutTriggeredViews(run: Run, ms: Mutant[]): Promise<Mutant[]> 
   const key = (m: Mutant, c: (typeof checks)[number]) => `${objectOwner(m.unitRef.name) ?? c.me}.${objectName(m.unitRef.name)}`;
   const hasTrigger = (m: Mutant) => checks.some((c) => c.triggered.has(key(m, c)));
   const unchecked = (m: Mutant) => checks.some((c) => !c.complete && (objectOwner(m.unitRef.name) ?? c.me) !== c.me);
-  const out = ms.filter((m) => m.unitRef.type !== 'VIEW' || (!hasTrigger(m) && !unchecked(m)));
-  const left = new Set(ms.filter((m) => !out.includes(m)).map((m) => unitKey(m)));
-  for (const k of left) {
-    const m = ms.find((x) => unitKey(x) === k)!;
+  const out: Mutant[] = [];
+  const left = new Map<string, Mutant>(); // unit key → its first mutant (all of the unit's are left out)
+  for (const m of ms) {
+    if (m.unitRef.type !== 'VIEW' || (!hasTrigger(m) && !unchecked(m))) out.push(m);
+    else if (!left.has(unitKey(m))) left.set(unitKey(m), m);
+  }
+  for (const [k, m] of left) {
     run.logf(hasTrigger(m)
       ? `${k}: View mit INSTEAD-OF-Trigger, wird nicht mutiert (CREATE OR REPLACE VIEW würde den Trigger löschen)`
       : `${k}: View eines anderen Schemas, deren INSTEAD-OF-Trigger sich ohne CREATE ANY TRIGGER nicht prüfen lassen: wird nicht mutiert`);
@@ -1143,17 +1160,24 @@ async function withoutTriggeredViews(run: Run, ms: Mutant[]): Promise<Mutant[]> 
   return out;
 }
 
+/** A kill by a test (not by a broken-off run or a crash, whose killedBy is in parentheses). */
+const killedByTest = (r: Result) => r.status === 'KILLED' && !!r.killedBy && !r.killedBy.startsWith('(');
+
 /** Oracle mode: whether a verdict gets a second look (a kill by one of several tests, a timeout). */
 function wantsConfirm(res: Result, tests: string[]): boolean {
-  return (res.status === 'KILLED' && !!res.killedBy && !res.killedBy.startsWith('(') && tests.length > 1) || res.status === 'TIMEOUT';
+  return (killedByTest(res) && tests.length > 1) || res.status === 'TIMEOUT';
+}
+
+/** What second looks found among results. */
+function unstableSummary(rs: Result[]): string {
+  const kills = rs.filter((r) => r.unstable?.startsWith('nicht')).length;
+  const slow = rs.filter((r) => r.unstable?.startsWith('Zeit')).length;
+  return `${kills} Erkennungen nicht wiederholbar, ${slow} Zeitüberschreitungen knapp`;
 }
 
 /** Oracle mode: what the second looks right after each verdict (Worker.confirmHere) found. */
 function logConfirmed(run: Run, results: Result[]): void {
-  if (run.opt.confirm === false) return;
-  const kills = results.filter((r) => r.unstable?.startsWith('nicht')).length;
-  const slow = results.filter((r) => r.unstable?.startsWith('Zeit')).length;
-  run.logf(`Gegenprobe (einzeln kompiliert): ${kills} Erkennungen nicht wiederholbar, ${slow} Zeitüberschreitungen knapp`);
+  if (run.opt.confirm !== false) run.logf(`Gegenprobe (einzeln kompiliert): ${unstableSummary(results)}`);
 }
 
 /**
@@ -1167,7 +1191,7 @@ function logConfirmed(run: Run, results: Result[]): void {
 async function confirmVerdicts(run: Run, results: Result[], stop: () => boolean): Promise<void> {
   if (run.opt.confirm === false) return;
   // a mutant with a side effect changes the data of the worker that checks it: no second look
-  const todo = results.filter((r) => !r.sideEffect).filter((r) => (r.status === 'KILLED' && r.killedBy && !r.killedBy.startsWith('(')) || (r.status === 'TIMEOUT' && r.detail !== 'Schleifenwächter'));
+  const todo = results.filter((r) => !r.sideEffect).filter((r) => killedByTest(r) || (r.status === 'TIMEOUT' && r.detail !== 'Schleifenwächter'));
   if (!todo.length) return;
   const live = run.workers.filter((w) => !w.retired);
   if (!live.length) return;
@@ -1183,22 +1207,21 @@ async function confirmVerdicts(run: Run, results: Result[], stop: () => boolean)
     for (const r of rs) if (!stop() && !w.retired) await w.confirm(r);
     await activate(w.test, 0).catch((e) => run.logf(`Gegenprobe${w.name}: ${firstLine(e as Error)}`));
   }));
-  const kills = todo.filter((r) => r.unstable?.startsWith('nicht')).length;
-  const slow = todo.filter((r) => r.unstable?.startsWith('Zeit')).length;
-  run.logf(`Gegenprobe: ${todo.length} Urteile in ${Math.round(performance.now() - t0)}ms, ${kills} Erkennungen nicht wiederholbar, ${slow} Zeitüberschreitungen knapp`);
+  run.logf(`Gegenprobe: ${todo.length} Urteile in ${Math.round(performance.now() - t0)}ms, ${unstableSummary(todo)}`);
 }
 
-/** A script statement without the comments in front of it (splitScript keeps them). */
-function withoutLeadingComments(stmt: string): string {
-  return stmt.replace(/^(\s*(--[^\n]*(\n|$)|\/\*[\s\S]*?\*\/))*\s*/, '');
+/** Type and [schema.]name of the unit a script statement creates (leading comments skipped). */
+function createStatement(stmt: string): { type: string; name: string } | undefined {
+  // (names as the lexer reads them: letters beyond ASCII too, quoted ones with their spaces)
+  const m = /^CREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:NO\s+)?FORCE\s+|(?:NON)?EDITIONABLE\s+|EDITIONING\s+)*(PACKAGE\s+BODY|PACKAGE|TYPE\s+BODY|PROCEDURE|FUNCTION|TRIGGER|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?((?:"[^"]+"|[\w$#À-\uffff]+)(?:\s*\.\s*(?:"[^"]+"|[\w$#À-\uffff]+))?)/i.exec(withoutLeadingComments(stmt));
+  return m ? { type: m[1].replace(/\s+/g, ' ').toUpperCase(), name: m[2].replace(/\s*\.\s*(?=(?:"[^"]+"|[\w$#À-\uffff]+)$)/, '.') } : undefined;
 }
 
 /** "TYPE|NAME" of the unit a script statement creates (leading comments skipped), or ''. */
 export function createdUnit(stmt: string): string {
-  const s = withoutLeadingComments(stmt);
-  // (names as the lexer reads them: letters beyond ASCII too, quoted ones with their spaces)
-  const m = /^CREATE\s+(OR\s+REPLACE\s+)?((NO\s+)?FORCE\s+|(NON)?EDITIONABLE\s+|EDITIONING\s+)*(PACKAGE\s+BODY|TYPE\s+BODY|PROCEDURE|FUNCTION|TRIGGER|VIEW)\s+(IF\s+NOT\s+EXISTS\s+)?((?:"[^"]+"|[\w$#À-\uffff]+)(?:\s*\.\s*(?:"[^"]+"|[\w$#À-\uffff]+))?)/i.exec(s);
-  return m ? `${m[5].replace(/\s+/g, ' ').toUpperCase()}|${objectName(m[7].replace(/\s*\.\s*(?=(?:"[^"]+"|[\w$#À-\uffff]+)$)/, '.'))}` : '';
+  // (a package spec is no unit of mutants)
+  const c = createStatement(stmt);
+  return c && c.type !== 'PACKAGE' ? `${c.type}|${objectName(c.name)}` : '';
 }
 
 /** Executes a complete run. */
@@ -1355,21 +1378,21 @@ async function runSchema(run: Run, ms: Mutant[], stop: () => boolean): Promise<R
   }
   // the main block of an ordered view gets no wrapper (its order must hold): its points run one by one
   const orderedMain = (m: Mutant) => !!m.unitRef.ordered && !!m.unitRef.main && m.point.scope?.[0] === m.unitRef.main[0] && m.point.scope?.[1] === m.unitRef.main[1];
-  const naive = new Set<Point>(ms.filter((m) => !switchable(m.point) || orderedMain(m)).map((m) => m.point));
-  const dropped = new Map<number, string>();
+  run.ms = ms;
+  const { naive, dropped } = run;
+  for (const m of ms) if (!switchable(m.point) || orderedMain(m)) naive.add(m.point);
   const t0 = performance.now();
   await installControl(w.deploy);
-  const plans = await capBranches(run, ms, naive);
+  const plans = await capBranches(run);
   run.checkpoint();
-  const broken = new Set<string>();
-  let rounds = await compileSchema(run, ms, dropped, naive, broken);
+  let rounds = await compileSchema(run);
   run.checkpoint();
-  rounds += await isolateViews(run, ms, dropped, naive, broken);
+  rounds += await isolateViews(run);
   run.checkpoint();
-  rounds += await checkPlans(run, ms, dropped, naive, broken, plans);
+  rounds += await checkPlans(run, plans);
   run.checkpoint();
   // (a unit left out stays original on every worker)
-  const built = buildSchema(ms, new Set(dropped.keys()), naive, await w.currentSchema(), broken, run.plain);
+  const built = await run.build();
   const units = built.filter((u) => !run.unplaced.has(u.key));
   // loop guard ids run over all units, the ones left out too
   const loopCount = built.reduce((n, u) => n + u.loops, 0);
@@ -1419,13 +1442,13 @@ async function runSchema(run: Run, ms: Mutant[], stop: () => boolean): Promise<R
     else await wk.schemaMutant(res, covering.get(m.id));
     return res;
   };
-  rep.results = await run.dispatch(switched, schemaOne, stop);
-  for (const wk of run.workers) if (!wk.retired) await activate(wk.test, 0).catch((e) => run.logf(`Worker${wk.name}: ${firstLine(e as Error)}`));
-  await run.recheckKillers(rep, async (again) => {
-    const out = await run.dispatch(again, schemaOne, stop);
+  const schemaList = async (list: Mutant[]) => {
+    const out = await run.dispatch(list, schemaOne, stop);
     for (const wk of run.workers) if (!wk.retired) await activate(wk.test, 0).catch((e) => run.logf(`Worker${wk.name}: ${firstLine(e as Error)}`));
     return out;
-  }, stop);
+  };
+  rep.results = await schemaList(switched);
+  await run.recheckKillers(rep, schemaList, stop);
   await confirmVerdicts(run, rep.results, stop);
   if (fallback.length && !stop()) {
     await run.restoreEverywhere();
@@ -1460,8 +1483,8 @@ const DUP_BYTES = 256 * 1024;
  * rewriter; inside a view their tests are still selected by the recording of their block.
  * Returns the plans of the original views (livePlan), for checkPlans.
  */
-async function capBranches(run: Run, ms: Mutant[], naive: Set<Point>): Promise<Map<string, ViewPlans>> {
-  const w = run.primary;
+async function capBranches(run: Run): Promise<Map<string, ViewPlans>> {
+  const { primary: w, ms, naive } = run;
   const plans = new Map<string, ViewPlans>();
   const cap = (bms: Mutant[], n: number, what: string) => {
     let kept = 0;
@@ -1505,22 +1528,19 @@ async function capBranches(run: Run, ms: Mutant[], naive: Set<Point>): Promise<M
         plans.set(key, { own: livePlan(e.rows), deps });
       } catch (e) {
         // without a plan neither the cap nor the plan check can work: the view stays as written
-        for (const m of ms) if (unitKey(m) === key) naive.add(m.point);
-        run.plain.add(key);
+        run.oneByOne(key, true);
         run.logf(`${key}: EXPLAIN PLAN gescheitert (${firstLine(e as Error)}), View im Original, Mutanten einzeln`);
         continue;
       }
       if (!branches.length) continue;
       cap(branches, Math.min(VIEW_BRANCHES, Math.floor(VIEW_PLAN_BUDGET_MS / Math.max(probe, 1))), `${key}: Parsen ${Math.round(probe)}ms`);
-    } else if (gms[0].point.dyn) {
-      // every variant is the whole literal again
-      const [a, b] = gms[0].point.dyn;
-      cap(gms, Math.floor(DUP_BYTES / Math.max(b - a, 1)), `${unitKey(gms[0])}:${gms[0].line} dynamisches SQL (${b - a} Bytes)`);
-    } else if (gms[0].point.union) {
+    } else if (gms[0].point.union && !gms[0].point.dyn) {
       cap(branches, CURSOR_BRANCHES, `${unitKey(gms[0])}:${gms[0].line} Cursor`);
     } else {
-      const [a, b] = gms[0].point.scope!;
-      cap(gms, Math.floor(DUP_BYTES / Math.max(b - a, 1)), `${unitKey(gms[0])}:${gms[0].line} Anweisung (${b - a} Bytes)`);
+      // every variant is the whole literal (dynamic SQL) or the whole statement again
+      const { dyn, scope } = gms[0].point;
+      const [a, b] = dyn ?? scope!;
+      cap(gms, Math.floor(DUP_BYTES / Math.max(b - a, 1)), `${unitKey(gms[0])}:${gms[0].line} ${dyn ? 'dynamisches SQL' : 'Anweisung'} (${b - a} Bytes)`);
     }
   }
   return plans;
@@ -1595,8 +1615,8 @@ async function explain(w: Worker, owner: string, name: string): Promise<{ rows: 
  * test that queries the view would run differently, slower or not at all. Such a view stays
  * original; its mutants run one by one. Returns the compile rounds spent.
  */
-async function checkPlans(run: Run, ms: Mutant[], dropped: Map<number, string>, naive: Set<Point>, broken: Set<string>, plans: Map<string, ViewPlans>): Promise<number> {
-  const w = run.primary;
+async function checkPlans(run: Run, plans: Map<string, ViewPlans>): Promise<number> {
+  const { primary: w, ms, naive, dropped } = run;
   let rounds = 0;
   let checked = 0;
   // first the branches go; if the recording wrapper alone still changes the plan, the view stays
@@ -1604,8 +1624,7 @@ async function checkPlans(run: Run, ms: Mutant[], dropped: Map<number, string>, 
   // went back) at once. Every pass from then on makes one more view plain or ends: it ends.
   for (let pass = 0; ; pass++) {
     run.checkpoint();
-    const views = buildSchema(ms, new Set(dropped.keys()), naive, await w.currentSchema(), broken, run.plain)
-      .filter((u) => u.type === 'VIEW' && u.text !== u.original && plans.has(u.key));
+    const views = (await run.build()).filter((u) => u.type === 'VIEW' && u.text !== u.original && plans.has(u.key));
     if (!pass) checked = views.length;
     const me = await w.currentSchema();
     const changed = new Set(views.map((v) => `${v.owner ?? me}.${v.name}`));
@@ -1614,7 +1633,7 @@ async function checkPlans(run: Run, ms: Mutant[], dropped: Map<number, string>, 
       let d: string | undefined;
       const p = plans.get(v.key)!;
       try {
-        d = planDiff(p.own, livePlan((await explain(w, v.owner ?? (await w.currentSchema()), v.name)).rows));
+        d = planDiff(p.own, livePlan((await explain(w, v.owner ?? me, v.name)).rows));
         for (const dep of p.deps) {
           if (d) break;
           // a dependent that is switched itself answers for its plan in its own check
@@ -1628,18 +1647,17 @@ async function checkPlans(run: Run, ms: Mutant[], dropped: Map<number, string>, 
       if (!d) continue;
       const own = ms.filter((m) => unitKey(m) === v.key);
       if (pass < 2 && own.some((m) => !naive.has(m.point) && !dropped.has(m.id))) {
-        for (const m of own) naive.add(m.point);
+        run.oneByOne(v.key);
         run.logf(`${v.key}: Plan mit Zweigen weicht ab (${d}), Mutanten einzeln, Block nur zur Aufzeichnung`);
       } else {
         // its mutants run one by one (some may still be switched when this comes from pass 2 on)
-        for (const m of own) naive.add(m.point);
-        run.plain.add(v.key);
+        run.oneByOne(v.key, true);
         run.logf(`${v.key}: Plan schon mit dem Aufzeichnungs-Wrapper anders (${d}), View im Original`);
       }
       differs = true;
     }
     if (!differs) break;
-    rounds += await compileSchema(run, ms, dropped, naive, broken, (su) => su.type === 'VIEW');
+    rounds += await compileSchema(run, (su) => su.type === 'VIEW');
   }
   if (checked) run.logf(`Planvergleich: ${checked} Views geprüft`);
   return rounds;
@@ -1662,9 +1680,9 @@ async function failingTests(run: Run, paths: string[]): Promise<Set<string>> {
  * traced to single views; those views stay original, their mutants run one by one (naive).
  * Returns the compile rounds spent putting the views back.
  */
-async function isolateViews(run: Run, ms: Mutant[], dropped: Map<number, string>, naive: Set<Point>, broken: Set<string>): Promise<number> {
+async function isolateViews(run: Run): Promise<number> {
   const w = run.primary;
-  const views = buildSchema(ms, new Set(dropped.keys()), naive, await w.currentSchema(), broken, run.plain).filter((u) => u.type === 'VIEW' && u.text !== u.original && !run.unplaced.has(u.key));
+  const views = (await run.build()).filter((u) => u.type === 'VIEW' && u.text !== u.original && !run.unplaced.has(u.key));
   if (!views.length) return 0;
   const withViews = await failingTests(run, run.cfg.tests);
   if (!withViews.size) return 0;
@@ -1676,7 +1694,7 @@ async function isolateViews(run: Run, ms: Mutant[], dropped: Map<number, string>
     const culprits = new Map<SchemaUnit, string[]>();
     for (const v of views) {
       // a view that cannot be put in place alone (a lock, say) is not tried on its own
-      const errs = await w.compileUnit(v.key, v.type, v.owner ? `"${v.owner}"."${v.name}"` : v.name, v.text).catch(() => undefined);
+      const errs = await w.compileSchemaUnit(v).catch(() => undefined);
       if (errs === undefined) continue;
       const f = await failingTests(run, extra);
       const hit = extra.filter((t) => f.has(t));
@@ -1686,21 +1704,20 @@ async function isolateViews(run: Run, ms: Mutant[], dropped: Map<number, string>
     // no single view: they fail together
     if (!culprits.size) for (const v of views) culprits.set(v, extra);
     for (const [v, tests] of culprits) {
-      for (const m of ms) if (unitKey(m) === v.key) naive.add(m.point);
-      run.plain.add(v.key);
+      run.oneByOne(v.key, true);
       run.logf(`${v.key}: ohne Schema (scheitern damit: ${tests.map((t) => t.split('.').pop()).join(', ')}), Mutanten einzeln`);
     }
   }
   // the views back into the schema (those to blame as originals); the other units are unchanged
-  return compileSchema(run, ms, dropped, naive, broken, (su) => su.type === 'VIEW');
+  return compileSchema(run, (su) => su.type === 'VIEW');
 }
 
 /**
  * Compiles the schema units (those passing only) on the primary, charges compile errors to the branch or
  * point they occur in and repeats until every unit is valid.
  */
-async function compileSchema(run: Run, ms: Mutant[], dropped: Map<number, string>, naive: Set<Point>, broken: Set<string>, only: (su: SchemaUnit) => boolean = () => true): Promise<number> {
-  const w = run.primary;
+async function compileSchema(run: Run, only: (su: SchemaUnit) => boolean = () => true): Promise<number> {
+  const { primary: w, dropped, naive, broken } = run;
   // as many rounds as errors take things out (CREATE VIEW reports one error at a time); a round
   // that takes nothing out cannot be followed by a better one
   const state = () => dropped.size + naive.size + broken.size;
@@ -1708,17 +1725,16 @@ async function compileSchema(run: Run, ms: Mutant[], dropped: Map<number, string
     let bad = false;
     const before = state();
     run.checkpoint();
-    for (const su of buildSchema(ms, new Set(dropped.keys()), naive, await w.currentSchema(), broken, run.plain).filter((u) => only(u) && !run.unplaced.has(u.key))) {
+    for (const su of (await run.build()).filter((u) => only(u) && !run.unplaced.has(u.key))) {
       // not compiled at all (a lock, a privilege): the unit stays out of the schema, its mutants
       // run one by one, the run goes on
       let failure = '';
-      const errs = await w.compileUnit(su.key, su.type, su.owner ? `"${su.owner}"."${su.name}"` : su.name, su.text)
-        .catch((e: Error) => ((failure = firstLine(e)), []));
+      const errs = await w.compileSchemaUnit(su).catch((e: Error) => ((failure = firstLine(e)), []));
       if (failure) {
         // an earlier round put its schema text there: back to the original, like on the other workers
         if (run.placed.has(su.key)) await w.restore(su.key, false);
         run.unplaced.add(su.key);
-        for (const m of ms) if (unitKey(m) === su.key) naive.add(m.point);
+        run.oneByOne(su.key);
         run.logf(`${su.key}: nicht kompilierbar (${failure}), ohne Schema, Mutanten einzeln`);
         continue;
       }
@@ -1754,16 +1770,11 @@ async function record(run: Run, tests: TestResult[], ids: number[], loopCount: n
   const intact = (await w.test.conn.execute<[number]>(`select plmut_ctl.intact from dual`)).rows?.[0]?.[0] === 1;
   // A test that passed the baseline but fails now depends on state or order.
   const flakyNow = r.tests.filter((t) => t.failed);
-  for (const t of flakyNow) {
-    w.flaky.add(t.name);
-    run.logf(`unzuverlässig, scheitert im Aufzeichnungslauf: ${t.name}: ${t.message.split(/\s+/).join(' ').slice(0, 60)}`);
-  }
+  for (const t of flakyNow) run.logf(`unzuverlässig, scheitert im Aufzeichnungslauf: ${t.name}: ${t.message.split(/\s+/).join(' ').slice(0, 60)}`);
   if (flakyNow.length) {
-    const keep = tests.filter((t) => !w.flaky.has(t.name));
-    w.excluded += tests.length - keep.length;
-    tests = keep;
-    w.passing = keep.map((t) => t.name);
-    run.shareBaseline();
+    // (w.passing are the names of tests: both come from the baseline)
+    run.exclude(w, new Set(flakyNow.map((t) => t.name)));
+    tests = tests.filter((t) => !w.flaky.has(t.name));
   }
   const h = await hits(w.test);
   const dur = new Map(tests.map((t) => [t.name, t.durationMs]));
@@ -1797,4 +1808,3 @@ async function record(run: Run, tests: TestResult[], ids: number[], loopCount: n
   return covering;
 }
 
-export { sleep };

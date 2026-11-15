@@ -11,7 +11,7 @@ import { join, relative } from 'node:path';
 import { TextDecoder } from 'node:util';
 import oracledb from 'oracledb';
 import { instrument } from './instrument.js';
-import { parseUnit, preprocess, walk as walkTree } from '@pltest/core';
+import { firstLine, parseUnit, preprocess, walk as walkTree } from '@pltest/core';
 import { newIds } from './model.js';
 import { HITS_TABLE, RUNTIME_BODY, RUNTIME_SPEC } from './runtime.js';
 
@@ -43,11 +43,12 @@ export interface CorpusResult {
   db?: { originalOk: number; instrumentedOk: number; failures: { unit: string; error: string }[] };
 }
 
-function walk(dir: string, out: string[] = []): string[] {
+/** The SQL and PL/SQL files below dir (.git and node_modules left out). */
+export function sqlFiles(dir: string, out: string[] = []): string[] {
   for (const e of readdirSync(dir)) {
     if (e === '.git' || e === 'node_modules') continue;
     const p = join(dir, e);
-    if (statSync(p).isDirectory()) walk(p, out);
+    if (statSync(p).isDirectory()) sqlFiles(p, out);
     else if (EXT.test(e)) out.push(p);
   }
   return out;
@@ -68,6 +69,7 @@ export function extractUnits(file: string, root: string): CorpusUnit[] {
   const lines = text.split('\n');
   const units: CorpusUnit[] = [];
   let cur: { start: number; kind: string; name: string; body: string[] } | null = null;
+  const emit = (c: NonNullable<typeof cur>) => units.push({ file: relative(root, file), line: c.start, kind: c.kind, name: c.name, text: c.body.join('\n') + '\n', latin1 });
   for (let k = 0; k < lines.length; k++) {
     const line = lines[k];
     if (!cur) {
@@ -76,23 +78,22 @@ export function extractUnits(file: string, root: string): CorpusUnit[] {
       else continue;
     }
     if (line.trim() === '/') {
-      units.push({ file: relative(root, file), line: cur.start, kind: cur.kind, name: cur.name, text: cur.body.join('\n') + '\n', latin1 });
+      emit(cur);
       cur = null;
       continue;
     }
     cur.body.push(line);
   }
-  if (cur && cur.body.join('').trim()) {
-    units.push({ file: relative(root, file), line: cur.start, kind: cur.kind, name: cur.name, text: cur.body.join('\n') + '\n', latin1 });
-  }
+  if (cur && cur.body.join('').trim()) emit(cur);
   return units;
 }
 
 const isBody = (u: CorpusUnit) => !['package', 'type'].includes(u.kind);
+const idOf = (u: CorpusUnit) => `${u.file}:${u.line} ${u.kind} ${u.name}`;
 
 export async function runCorpus(dirs: string[], db?: { user: string; password: string; connectString: string }): Promise<CorpusResult> {
   const t0 = performance.now();
-  const files = dirs.flatMap((d) => walk(d).map((f) => ({ f, root: d })));
+  const files = dirs.flatMap((d) => sqlFiles(d).map((f) => ({ f, root: d })));
   const units = files.flatMap(({ f, root }) => extractUnits(f, join(root, '..')));
   const res: CorpusResult = {
     files: files.length,
@@ -103,7 +104,7 @@ export async function runCorpus(dirs: string[], db?: { user: string; password: s
   };
   const instrumented = new Map<CorpusUnit, string>();
   for (const u of units.filter(isBody)) {
-    const id = `${u.file}:${u.line} ${u.kind} ${u.name}`;
+    const id = idOf(u);
     try {
       const r = instrument(preprocess(u.text), 'CORPUS', newIds(), { sqlProbes: true });
       if (r.instrumented.split('\n').length !== u.text.split('\n').length) throw new Error('Zeilenzahl verändert');
@@ -153,7 +154,7 @@ async function compileCheck(units: CorpusUnit[], instrumented: Map<CorpusUnit, s
       await conn.execute(src.replace(/\s*$/, ''));
     } catch (e) {
       const msg = (e as Error).message;
-      if (!msg.includes('ORA-24344')) return msg.split('\n')[0];
+      if (!msg.includes('ORA-24344')) return firstLine(msg);
     }
     return errorsOf(u);
   };
@@ -166,11 +167,10 @@ async function compileCheck(units: CorpusUnit[], instrumented: Map<CorpusUnit, s
     for (let pass = 0; pass < 2; pass++) for (const u of specs) await compile(u, u.text);
     // pass 2: bodies, original then instrumented
     for (const [u, instr] of instrumented) {
-      const id = `${u.file}:${u.line} ${u.kind} ${u.name}`;
       if (await compile(u, u.text)) continue; // original does not compile here (missing objects) -> not comparable
       out.originalOk++;
       const err = await compile(u, instr);
-      if (err) out.failures.push({ unit: id, error: err });
+      if (err) out.failures.push({ unit: idOf(u), error: err });
       else out.instrumentedOk++;
       await compile(u, u.text); // restore
     }

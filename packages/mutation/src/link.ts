@@ -12,13 +12,13 @@
  * yardstick for the cross-check against the recording run of the schema mode.
  */
 import type { CoverageExport } from '@pltest/coverage';
-import { objectName, withoutCreate, lineCol, type Mutant } from './mutant.js';
+import { objectName, originalUnit, withoutCreate, lineCol, type Mutant } from './mutant.js';
 
 export type CoverageObject = CoverageExport['objects'][number];
 
 /** The file line of the unit keyword: ALL_SOURCE line 1. */
 export function unitLineOf(m: Mutant): number {
-  const text = m.sourceFile.src.subarray(m.unitRef.start, m.unitRef.end).toString('utf8');
+  const text = originalUnit(m);
   const skip = Buffer.byteLength(text.slice(0, text.length - withoutCreate(text).length), 'utf8');
   return lineCol(m.sourceFile.src, m.unitRef.start + skip)[0];
 }

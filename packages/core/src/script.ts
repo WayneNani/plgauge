@@ -1,4 +1,5 @@
 /** Splitting SQL*Plus style scripts into statements. */
+import { Q_CLOSERS } from './lexer.js';
 
 /** A SQL*Plus command word in every length it accepts: PRO, PROM, PROMP, PROMPT. */
 const abbrev = (min: string, full: string) => min + [...full.slice(min.length)].reduceRight((acc, c) => `(?:${c}${acc})?`, '');
@@ -58,8 +59,6 @@ export interface ScanState {
   quote: string;
 }
 
-const Q_CLOSE: Record<string, string> = { '[': ']', '{': '}', '<': '>', '(': ')' };
-
 /**
  * A line's code without comments and the contents of strings and quoted names (a string stays
  * as '' in it); the state carries over to the next line. Knows q'[…]' quotes and "names".
@@ -91,16 +90,12 @@ export function scanLine(line: string, st: ScanState): { code: string; state: Sc
       quote = '';
       continue;
     }
-    const free = !/[\w$#]/.test(line[i - 1] ?? '');
-    if (free && (((c === 'q' || c === 'Q') && line[i + 1] === "'" && line[i + 2]) || ((c === 'n' || c === 'N') && /[qQ]/.test(line[i + 1] ?? '') && line[i + 2] === "'"))) {
-      const k = c === 'n' || c === 'N' ? i + 1 : i;
-      const d = line[k + 2];
-      if (d) {
-        quote = (Q_CLOSE[d] ?? d) + "'";
-        code += "''";
-        i = k + 3;
-        continue;
-      }
+    const qq = /[\w$#]/.test(line[i - 1] ?? '') ? null : /^n?q'([^])/i.exec(line.slice(i, i + 4));
+    if (qq) {
+      quote = (Q_CLOSERS[qq[1]] ?? qq[1]) + "'";
+      code += "''";
+      i += qq[0].length;
+      continue;
     }
     if (c === "'" || c === '"') {
       quote = c;
@@ -126,6 +121,9 @@ export function scanLine(line: string, st: ScanState): { code: string; state: Sc
  * own line, SQL at its semicolon (outside comments and strings). Header comments stay with the
  * statement after them; SQL*Plus commands between statements drop out, EXEC becomes a block.
  */
+const CONT = /\s-\s*$/;
+const RUN = /^\s*R(UN)?\s*$/i;
+
 export function splitScript(text: string): string[] {
   const out: string[] = [];
   let buf: string[] = [];
@@ -133,29 +131,36 @@ export function splitScript(text: string): string[] {
   let st: ScanState = { comment: false, quote: '' };
   let exec: string[] | undefined;
   let ended = false; // the statement ended, a block comment after its semicolon is still open
-  let cont = false;
+  let cont = false; // a SQL*Plus command continues on the next line
   let foreign = false; // in an inline Java/MLE source: only the "/" line ends it
   let parked = false; // SQL cut off by a blank line: run only if "/" follows
   let blankLines = false; // SET SQLBLANKLINES ON: blank lines belong to the statement
   let dropped = false; // after SQL a blank line ended: lines that start no statement are rejected
   let held = ''; // that SQL: still in SQL*Plus's buffer, a later "/" runs it
-  let last = ''; // the statement last run: "/" or RUN with nothing new runs it again, as SQL*Plus does // a SQL*Plus command continues on the next line
+  let last = ''; // the statement last run: "/" or RUN with nothing new runs it again, as SQL*Plus does
+  const joined = () => buf.join('\n').replace(/\s+$/, '');
   const flush = () => {
     // a statement of comments only, or a lone semicolon, is none (ORA-00900)
-    if (code.replace(/;\s*$/, '').trim()) out.push((last = buf.join('\n').replace(/\s+$/, '')));
+    if (code.replace(/;\s*$/, '').trim()) out.push((last = joined()));
     buf = [];
     code = '';
   };
+  // the statement's entry ends without running it: SQL*Plus keeps it in its buffer
+  const hold = () => {
+    held = joined();
+    buf = [];
+    code = '';
+    dropped = true;
+  };
   // EXEC call;  →  BEGIN call; END;  (continuation lines ending in " -" joined, a trailing comment and the semicolon off)
   const execBlock = (lines: string[]) => {
-    const parts = lines.map((l, i) => (i < lines.length - 1 ? l.replace(/\s-\s*$/, '') : l));
     let state: ScanState = { comment: false, quote: '' };
-    const kept: string[] = [];
-    for (const l of parts) {
+    const kept = lines.map((l, i) => {
+      if (i < lines.length - 1) l = l.replace(CONT, '');
       const r = scanLine(l, state);
       state = r.state;
-      kept.push(r.dash >= 0 ? l.slice(0, r.dash) : l);
-    }
+      return r.dash >= 0 ? l.slice(0, r.dash) : l;
+    });
     const body = kept.join('\n').replace(/^\s*EXEC(UTE)?\s+/i, '').trim().replace(/;\s*$/, '');
     if (body) out.push(`BEGIN ${body}; END;`);
   };
@@ -176,16 +181,17 @@ export function splitScript(text: string): string[] {
       line = line.slice(at);
       if (!line.trim()) continue;
     }
+    const t = line.trim();
     if (exec) {
       exec.push(line);
-      if (!/\s-\s*$/.test(line)) {
+      if (!CONT.test(line)) {
         execBlock(exec);
         exec = undefined;
       }
       continue;
     }
     if (foreign) {
-      if (line.trim() === '/') {
+      if (t === '/') {
         foreign = false;
         flush();
       } else buf.push(line);
@@ -193,80 +199,74 @@ export function splitScript(text: string): string[] {
     }
     // a SQL*Plus command continued with " -": this line belongs to it, even a blank one
     if (cont) {
-      cont = /\s-\s*$/.test(line);
+      cont = CONT.test(line);
       continue;
     }
     if (parked) {
-      if (!line.trim()) continue;
+      if (!t) continue;
       parked = false;
-      if (line.trim() === '/') {
+      if (t === '/') {
         flush();
         continue;
       }
       // SQL*Plus (SQLBLANKLINES OFF) ended the statement at the blank line without running it
-      held = buf.join('\n').replace(/\s+$/, '');
-      buf = [];
-      code = '';
-      dropped = true;
+      hold();
     }
-    // a "/" before the next statement runs the held one (SP2 errors and commands leave the buffer)
-    if (held && !code.trim() && !st.comment && !st.quote && (line.trim() === '/' || /^\s*R(UN)?\s*$/i.test(line))) {
-      out.push((last = held));
+    const free = !st.comment && !st.quote;
+    const between = free && !code.trim();
+    // "/" runs the held statement, RUN the held or the last one (SP2 errors and commands leave the buffer)
+    if (between && (RUN.test(line) || (held && t === '/'))) {
+      const again = held || last;
       held = '';
       dropped = false;
+      if (again) out.push((last = again));
       continue;
     }
     // "." alone ends the entry of SQL or PL/SQL without running it (a later "/" does)
-    if (!st.comment && !st.quote && line.trim() === '.' && code.trim()) {
-      held = buf.join('\n').replace(/\s+$/, '');
-      buf = [];
-      code = '';
-      dropped = true;
+    if (free && t === '.' && code.trim()) {
+      hold();
       continue;
     }
     // the rest of it: SQL*Plus reads each line as a new command and rejects those that start none
-    if (dropped && !st.comment && !st.quote) {
+    if (dropped && free) {
       // (blank and comment lines change nothing: the next line is a new command still)
-      if (!line.trim() || /^\s*--/.test(line)) continue;
+      if (!t || /^\s*--/.test(line)) continue;
       if (SQLPLUS.test(line) || SQL_START.test(line) || /^\s*(\/\*|EXEC(UTE)?\s)/i.test(line)) dropped = false;
       else continue;
     }
     // a blank line in unfinished SQL (not PL/SQL) ends its entry, also inside a string or comment:
     // SQL*Plus reads lines, not literals (SET SQLBLANKLINES ON is the way to keep one)
-    if (!blankLines && !line.trim() && code.trim() && !PLSQL_START.test(code) && !WITH_PLSQL.test(code) && !FOREIGN_HEAD.test(code)) {
+    if (!blankLines && !t && code.trim() && !PLSQL_START.test(code) && !WITH_PLSQL.test(code) && !FOREIGN_HEAD.test(code)) {
       parked = true;
       st = { comment: false, quote: '' };
       continue;
     }
-    const between = !code.trim() && !st.comment && !st.quote;
-    if (between && !line.trim() && !buf.length) continue;
-    if (!st.comment && !st.quote && line.trim() === '/') {
+    if (between && !t && !buf.length) continue;
+    if (free && t === '/') {
       // nothing new since the last statement: SQL*Plus runs that one again
       if (!code.replace(/;\s*$/, '').trim() && last) out.push(last);
       else flush();
       continue;
     }
-    if (between && /^\s*R(UN)?\s*$/i.test(line)) {
-      if (last) out.push(last);
-      continue;
+    if (between) {
+      // EXIT/QUIT: SQL*Plus stops here
+      if (/^\s*(EXIT|QUIT)(\s|;|$)/i.test(line)) break;
+      // a SQL*Plus command, with its continuation lines (" -" at the end)
+      if (SQLPLUS.test(line)) {
+        const bl = /^\s*SET\b.*\bSQLBL[A-Z]*\s+(ON|OFF)\b/i.exec(line);
+        if (bl) blankLines = bl[1].toUpperCase() === 'ON';
+        cont = CONT.test(line);
+        continue;
+      }
+      if (/^\s*EXEC(UTE)?\s+/i.test(line)) {
+        flush(); // comments before it go
+        if (CONT.test(line)) exec = [line];
+        else execBlock([line]);
+        continue;
+      }
+      // a line that starts neither a statement, a block nor a command: SQL*Plus rejects it (SP2-0734)
+      if (t && !SQL_START.test(line) && !/^\s*(--|\/\*)/.test(line)) continue;
     }
-    // EXIT/QUIT: SQL*Plus stops here
-    if (between && /^\s*(EXIT|QUIT)(\s|;|$)/i.test(line)) break;
-    // a SQL*Plus command, with its continuation lines (" -" at the end)
-    if (between && SQLPLUS.test(line)) {
-      const bl = /^\s*SET\b.*\bSQLBL[A-Z]*\s+(ON|OFF)\b/i.exec(line);
-      if (bl) blankLines = bl[1].toUpperCase() === 'ON';
-      cont = /\s-\s*$/.test(line);
-      continue;
-    }
-    if (between && /^\s*EXEC(UTE)?\s+/i.test(line)) {
-      flush(); // comments before it go
-      if (/\s-\s*$/.test(line)) exec = [line];
-      else execBlock([line]);
-      continue;
-    }
-    // a line that starts neither a statement, a block nor a command: SQL*Plus rejects it (SP2-0734)
-    if (between && line.trim() && !SQL_START.test(line) && !/^\s*(--|\/\*)/.test(line)) continue;
     const r = scanLine(line, st);
     st = r.state;
     buf.push(line);
@@ -289,7 +289,6 @@ export function splitScript(text: string): string[] {
     }
   }
   if (exec) execBlock(exec);
-  // (cut off by a blank line and never run)
   // a statement without its terminator at the end stays in SQL*Plus's buffer, never run (a block
   // comment still open after a semicolon: that statement had ended)
   if (ended) flush();

@@ -152,6 +152,7 @@ export function unitKey(m: Mutant): string {
   return `${m.file}#${m.unit}`;
 }
 
+/** The unit's CREATE statement as written. */
 export function originalUnit(m: Mutant): string {
   return m.sourceFile.src.subarray(m.unitRef.start, m.unitRef.end).toString('utf8');
 }
@@ -193,8 +194,11 @@ export function objectName(name: string): string {
 export function withoutCreate(text: string): string {
   // (CREATE PROCEDURE IF NOT EXISTS p: OR REPLACE goes in front, and the two do not go together)
   // (and the comments up to the unit's keyword: Oracle keeps neither, error lines count from it)
-  return text
-    .replace(/^\s*create\s+(or\s+replace\s+)?((non)?editionable\s+)?/i, '')
-    .replace(/^(\s*(--[^\n]*(\n|$)|\/\*[\s\S]*?\*\/))*\s*/, '')
+  return withoutLeadingComments(text.replace(/^\s*create\s+(or\s+replace\s+)?((non)?editionable\s+)?/i, ''))
     .replace(/^((((no\s+)?force|(non)?editionable|editioning)\s+)*(package\s+body|type\s+body|package|type|procedure|function|trigger|view)\s+)if\s+not\s+exists\s+/i, '$1');
+}
+
+/** A statement without the comments in front of it (splitScript keeps them). */
+export function withoutLeadingComments(stmt: string): string {
+  return stmt.replace(/^(\s*(--[^\n]*(\n|$)|\/\*[\s\S]*?\*\/))*\s*/, '');
 }

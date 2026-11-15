@@ -9,9 +9,9 @@
  */
 import { createHash } from 'node:crypto';
 import oracledb from 'oracledb';
-import type { SourceObject } from './db.js';
+import { tryExecute, type SourceObject } from './db.js';
 
-export const JOURNAL_TABLE = `create table pltest_journal (
+const JOURNAL_TABLE = `create table pltest_journal (
   owner      varchar2(128) not null,
   name       varchar2(128) not null,
   type       varchar2(30)  not null,
@@ -23,27 +23,37 @@ export const JOURNAL_TABLE = `create table pltest_journal (
 )`;
 
 export async function ensureJournal(conn: oracledb.Connection): Promise<void> {
-  try {
-    await conn.execute(JOURNAL_TABLE);
-  } catch (e) {
-    if (!(e as Error).message.includes('ORA-00955')) throw e;
-  }
+  await tryExecute(conn, JOURNAL_TABLE, 'ORA-00955');
   // settings as a CLOB (a view's comments outgrow VARCHAR2(4000)); the fingerprint of the code
   // pltest compiled last (see journalNote); journals of older versions get the columns
   // pending: a view note made before its compile, not yet replaced by what the dictionary holds
   for (const col of ['props clob', 'current_sha varchar2(64)', 'prev_sha varchar2(64)', 'pending number(1)']) {
-    try {
-      await conn.execute(`alter table pltest_journal add (${col})`);
-    } catch (e) {
-      if (!(e as Error).message.includes('ORA-01430')) throw e;
-    }
+    await tryExecute(conn, `alter table pltest_journal add (${col})`, 'ORA-01430');
+  }
+}
+
+type ObjKey = Pick<SourceObject, 'owner' | 'name' | 'type'>;
+
+/** A statement on the object's journal entry, committed. */
+async function onEntry(conn: oracledb.Connection, obj: ObjKey, stmt: string, binds: Record<string, unknown> = {}): Promise<void> {
+  await conn.execute(`${stmt} where owner = :o and name = :n and type = :t`, { ...binds, o: obj.owner, n: obj.name, t: obj.type });
+  await conn.commit();
+}
+
+/** fn, run again after ensureJournal when a journal of an older version lacks a column (ORA-00904). */
+async function upgrading<T>(conn: oracledb.Connection, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    if (!(e as Error).message.includes('ORA-00904')) throw e;
+    await ensureJournal(conn);
+    return fn();
   }
 }
 
 /** Undoes journalNote after a compile that did not change the object (rejected at once). */
-export async function journalUnnote(conn: oracledb.Connection, obj: Pick<SourceObject, 'owner' | 'name' | 'type'>): Promise<void> {
-  await conn.execute(`update pltest_journal set current_sha = prev_sha, pending = 0 where owner = :o and name = :n and type = :t`, { o: obj.owner, n: obj.name, t: obj.type });
-  await conn.commit();
+export async function journalUnnote(conn: oracledb.Connection, obj: ObjKey): Promise<void> {
+  await onEntry(conn, obj, `update pltest_journal set current_sha = prev_sha, pending = 0`);
 }
 
 /**
@@ -100,30 +110,19 @@ export function codeFingerprint(type: string, source: string): string {
  * the compile leaves either this text or the one before, prev_sha), so a later restore can tell
  * its code from newer work.
  */
-export async function journalNote(conn: oracledb.Connection, obj: Pick<SourceObject, 'owner' | 'name' | 'type'>, source: string, before?: string): Promise<void> {
+export async function journalNote(conn: oracledb.Connection, obj: ObjKey, source: string, before?: string): Promise<void> {
   // before: what the object holds now (its fingerprint, read from the database); without it the
   // previous note stands in for it
   // the dictionary may hold it differently (a view's SELECT * expanded, a trigger's ENABLE/DISABLE
   // or comments after CREATE left out); until journalSettle notes what it holds, a restore
   // cannot tell and puts the original back
-  const note = () => conn.execute(
-    `update pltest_journal set prev_sha = nvl(:p, current_sha), current_sha = :h, pending = :w where owner = :o and name = :n and type = :t`,
-    { p: before ?? null, h: codeFingerprint(obj.type, source), w: 1, o: obj.owner, n: obj.name, t: obj.type });
-  try {
-    await note();
-  } catch (e) {
-    // a journal of an older version without the column
-    if (!(e as Error).message.includes('ORA-00904')) throw e;
-    await ensureJournal(conn);
-    await note();
-  }
-  await conn.commit();
+  await upgrading(conn, () => onEntry(conn, obj, `update pltest_journal set prev_sha = nvl(:p, current_sha), current_sha = :h, pending = :w`,
+    { p: before ?? null, h: codeFingerprint(obj.type, source), w: 1 }));
 }
 
 /** After a view's compile: the fingerprint of what the dictionary holds now (see journalNote). */
-export async function journalSettle(conn: oracledb.Connection, obj: Pick<SourceObject, 'owner' | 'name' | 'type'>, sha: string): Promise<void> {
-  await conn.execute(`update pltest_journal set current_sha = :h, pending = 0 where owner = :o and name = :n and type = :t`, { h: sha, o: obj.owner, n: obj.name, t: obj.type });
-  await conn.commit();
+export async function journalSettle(conn: oracledb.Connection, obj: ObjKey, sha: string): Promise<void> {
+  await onEntry(conn, obj, `update pltest_journal set current_sha = :h, pending = 0`, { h: sha });
 }
 
 /**
@@ -133,29 +132,19 @@ export async function journalSettle(conn: oracledb.Connection, obj: Pick<SourceO
 export async function journalRemember(conn: oracledb.Connection, obj: SourceObject, tool: string): Promise<boolean> {
   // with the original's fingerprint from the start: a restore checks the unit even when no
   // compile of pltest ever got through (see restoreJournal)
-  const merge = () => conn.execute(
+  const r = await upgrading(conn, () => conn.execute(
     `merge into pltest_journal j
      using (select :o owner, :n name, :t type from dual) x
         on (j.owner = x.owner and j.name = x.name and j.type = x.type)
       when not matched then insert (owner, name, type, source, props, tool, current_sha, pending) values (:o, :n, :t, :src, :st, :tool, :h, 0)`,
     { o: obj.owner, n: obj.name, t: obj.type, src: { val: obj.original, type: oracledb.DB_TYPE_CLOB }, st: { val: JSON.stringify(obj.settings), type: oracledb.DB_TYPE_CLOB }, tool, h: codeFingerprint(obj.type, obj.original) },
-  );
-  let r;
-  try {
-    r = await merge();
-  } catch (e) {
-    // a journal of an older version without the new columns
-    if (!(e as Error).message.includes('ORA-00904')) throw e;
-    await ensureJournal(conn);
-    r = await merge();
-  }
+  ));
   await conn.commit();
   return (r.rowsAffected ?? 0) > 0;
 }
 
-export async function journalForget(conn: oracledb.Connection, obj: Pick<SourceObject, 'owner' | 'name' | 'type'>): Promise<void> {
-  await conn.execute(`delete from pltest_journal where owner = :o and name = :n and type = :t`, { o: obj.owner, n: obj.name, t: obj.type });
-  await conn.commit();
+export async function journalForget(conn: oracledb.Connection, obj: ObjKey): Promise<void> {
+  await onEntry(conn, obj, `delete from pltest_journal`);
 }
 
 export interface JournalEntry {
@@ -194,11 +183,7 @@ export const RUN_LOCK = 'pltest';
  * stay open and never commit; the lock goes with the session, also when the process dies.
  */
 export async function lockRun(conn: oracledb.Connection, tool: string): Promise<void> {
-  try {
-    await conn.execute(`create table pltest_lock (tool varchar2(30) primary key)`);
-  } catch (e) {
-    if (!(e as Error).message.includes('ORA-00955')) throw e;
-  }
+  await tryExecute(conn, `create table pltest_lock (tool varchar2(30) primary key)`, 'ORA-00955');
   try {
     await conn.execute(`insert into pltest_lock (tool) select :t from dual where not exists (select 1 from pltest_lock where tool = :t)`, { t: tool });
     await conn.commit();

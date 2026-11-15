@@ -3,6 +3,7 @@
  * in an autonomous transaction, where commits of a test are invisible).
  */
 import oracledb from 'oracledb';
+import { sqlLit } from './db.js';
 
 export interface TestCase {
   suite: string;
@@ -27,9 +28,9 @@ export interface LineCoverage {
  * own coverage (Sonar format) for comparison.
  */
 export async function runTestsJunit(conn: oracledb.Connection, paths: string[], coverageSchema: string | string[] | null) {
-  const pathList = paths.map((p) => `'${p.replace(/'/g, "''")}'`).join(', ');
+  const pathList = paths.map(sqlLit).join(', ');
   const schemes = coverageSchema === null ? [] : Array.isArray(coverageSchema) ? coverageSchema : [coverageSchema];
-  const schemeList = schemes.length ? schemes.map((s) => `'${s.replace(/'/g, "''")}'`).join(', ') : "''";
+  const schemeList = schemes.length ? schemes.map(sqlLit).join(', ') : "''";
   const t0 = performance.now();
   const res = await conn.execute(
     `declare
@@ -103,13 +104,6 @@ export function parseSonar(xml: string): Map<string, LineCoverage> {
     out.set(unescapeXml(m[1]).toLowerCase(), { covered, total, lines });
   }
   return out;
-}
-
-export function sameResults(a: TestCase[], b: TestCase[]): boolean {
-  if (a.length !== b.length) return false;
-  const key = (t: TestCase) => `${t.suite}::${t.name}`;
-  const m = new Map(a.map((t) => [key(t), t.status]));
-  return b.every((t) => m.get(key(t)) === t.status);
 }
 
 export interface SuiteTest {

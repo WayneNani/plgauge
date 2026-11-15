@@ -132,9 +132,9 @@ export function blankSqlPlus(s: string): string {
       head = '';
       headAt = out.length;
     }
-    if (state === 'unit' && !/;/.test(head)) {
-      // a unit's header up to its first ";": an MLE call spec with JavaScript inline (AS MLE
-      // LANGUAGE … {{ }}) may come on a later line
+    // (a unit's header up to its first ";": an MLE call spec with JavaScript inline (AS MLE
+    // LANGUAGE … {{ }}) may come on a later line)
+    if ((state === 'unit' && !/;/.test(head)) || state === 'open') {
       head += r.code + '\n';
       if (inlineForeign(head)) {
         state = 'foreign';
@@ -142,14 +142,8 @@ export function blankSqlPlus(s: string): string {
         st = { comment: false, quote: '' };
         continue;
       }
-    } else if (state === 'open') {
-      head += r.code + '\n';
-      if (inlineForeign(head)) {
-        state = 'foreign';
-        out = out.slice(0, headAt) + blank(out.slice(headAt)) + blank(line);
-        st = { comment: false, quote: '' };
-        continue;
-      }
+    }
+    if (state === 'open') {
       if (UNIT_START.test(head)) state = 'unit';
       // (a Java/MLE source stays open until its AS, or until its ";" in the BFILE/CLOB form)
       else if (FOREIGN_HEAD.test(head)) {
@@ -260,6 +254,8 @@ export const SQL_OPERATORS = ['SEL', 'JOI', 'ORD', 'UNI', 'AGR', 'SUB', 'WHR', '
 
 /** Statement kinds the SBR operator removes (plus EXIT WHEN). */
 const SBR_KINDS = new Set(['assign', 'sql', 'call', 'raise']);
+/** A statement SBR deletes (EXIT WHEN gets a mutant, a plain EXIT none). */
+const sbrTarget = (n: Node) => SBR_KINDS.has(n.op!) || (n.op === 'exit' && n.at! >= 0);
 
 interface Env {
   sub: string;
@@ -600,7 +596,8 @@ class Finder {
    */
   private groupedRanges(q: Node): [number, number][] | undefined {
     const nested = q.kids.filter((k) => k.k === 'query' || k.k === 'sql');
-    const base = this.t[q.a].text === '(' && this.close(q.a) === q.b - 1 ? 1 : 0;
+    const [qa, end] = this.bare(q);
+    const base = qa - q.a;
     const top: number[] = [];
     let d = 0;
     for (let k = q.a; k < q.b; k++) {
@@ -614,7 +611,6 @@ class Finder {
       else if (d === base) top.push(k);
     }
     const ENDS = new Set(['HAVING', 'ORDER', 'UNION', 'INTERSECT', 'MINUS', 'EXCEPT', 'FETCH', 'OFFSET', 'WINDOW', 'MODEL', 'FOR', 'LOG', ';']);
-    const end = base ? q.b - 1 : q.b;
     const split = (a: number, b: number): [number, number][] => {
       const out: [number, number][] = [];
       let s0 = a;
@@ -710,10 +706,14 @@ class Finder {
 
   /** Whether a statement has a label inside, also in a $IF branch the preprocessing dropped. */
   private labelled(n: Node): boolean {
-    if (this.t.slice(n.a, n.b).some((x) => x.text === '<<')) return true;
+    return this.t.slice(n.a, n.b).some((x) => x.text === '<<') || this.inDroppedBranch(n, (x) => x.text === '<<');
+  }
+
+  /** Whether a $IF branch the preprocessing dropped inside node n has a token that hit accepts. */
+  private inDroppedBranch(n: Node, hit: (x: Token) => boolean): boolean {
     const from = this.t[n.a].start;
     const to = this.t[n.b - 1].end;
-    return this.blocks.some(([a, b]) => a < to && b > from && tokenize(this.orig.slice(a, b)).some((x) => x.text === '<<'));
+    return this.blocks.some(([a, b]) => a < to && b > from && tokenize(this.orig.slice(a, b)).some(hit));
   }
 
   /**
@@ -724,8 +724,7 @@ class Finder {
    * anywhere inside (CONNECT BY, a sorted inline view): wrapped, it is not guaranteed.
    */
   private cursorBlock(q: Node): boolean {
-    let a = q.a;
-    if (this.t[a].text === '(' && this.close(a) === q.b - 1) a++;
+    const [a] = this.bare(q);
     if (this.t[a].up !== 'SELECT' || this.ordered(q)) return false;
     for (let k = a; k < q.b; k++) {
       if (this.t[k].text === '(') k = this.close(k);
@@ -891,11 +890,8 @@ class Finder {
       if (this.norm(k) === name && !allowed.has(k) && !sinks.has(k)) return undefined;
     }
     // a $IF branch the preprocessing dropped may change it as well
-    const from = this.t[scope.a].start;
-    const to = this.t[scope.b - 1].end;
     // (lexed like the rest: v and "V" are the same variable, "v" is another one)
-    const names = (t: string) => tokenize(t).some((x) => (x.kind === 'ident' && x.up === name) || (x.kind === 'qident' && x.text.slice(1, -1) === name));
-    if (this.blocks.some(([a, b]) => a < to && b > from && names(this.orig.slice(a, b)))) return undefined;
+    if (this.inDroppedBranch(scope, (x) => (x.kind === 'ident' && x.up === name) || (x.kind === 'qident' && x.text.slice(1, -1) === name))) return undefined;
     return { lits, max };
   }
 
@@ -958,7 +954,6 @@ class Finder {
     const buf = Buffer.from(text, 'utf8');
     const from = Buffer.byteLength(head);
     const to = from + Buffer.byteLength(content);
-    const at = (byte: number) => map[buf.subarray(from, byte).toString('utf8').length];
     const escape = (m: string) => (q ? m : m.replaceAll("'", "''"));
     this.skipped += inner.skipped;
     // fetched INTO a single row without a row limit or a subquery (whose order could pick the row):
@@ -966,15 +961,16 @@ class Finder {
     const orderFree = single && !/\b(FETCH\s+(FIRST|NEXT)|ROWNUM)\b|(?<![.\w$#])OFFSET\b[^;]*?\bROWS?\b|\(\s*(SELECT|WITH)\b/i.test(content);
     for (const p of inner.points) {
       if (p.start < from || p.end > to || p.kind === 'insert' || p.kind === 'stmt') continue;
+      // the point's character offsets in content
+      const ca = buf.subarray(from, p.start).toString('utf8').length;
+      const cb = buf.subarray(from, p.end).toString('utf8').length;
       // (only the query's own ORDER BY: one in OVER, WITHIN GROUP or KEEP decides the row's value)
-      if (orderFree && p.op === 'ORD' && parenDepth(content, buf.subarray(from, p.start).toString('utf8').length) === 0) {
+      if (orderFree && p.op === 'ORD' && parenDepth(content, ca) === 0) {
         this.skipped += p.mutants.length;
         continue;
       }
-      const a = at(p.start);
-      const b = at(p.end);
-      const ca = buf.subarray(from, p.start).toString('utf8').length;
-      const cb = buf.subarray(from, p.end).toString('utf8').length;
+      const a = map[ca];
+      const b = map[cb];
       const keep = (m: string) => {
         const v = content.slice(0, ca) + m + content.slice(cb);
         // a variant longer than the variable would fail with ORA-06502 before reaching SQL
@@ -1056,13 +1052,8 @@ class Finder {
 
   /** ORDER BY at the top level of a query's main part (not in OVER, subqueries or WITH elements). */
   private ordered(q: Node): boolean {
-    let a = q.a;
-    let last = q.b - 1;
-    if (this.t[a].text === '(' && this.close(a) === last) {
-      a++;
-      last--;
-    }
-    for (let k = a; k <= last; k++) {
+    const [a, b] = this.bare(q);
+    for (let k = a; k < b; k++) {
       if (this.t[k].text === '(') k = this.close(k);
       else if (this.t[k].up === 'ORDER' && this.t[k].kind === 'ident' && ['BY', 'SIBLINGS'].includes(this.t[k + 1]?.up)) return true;
     }
@@ -1071,12 +1062,9 @@ class Finder {
 
   /** Byte range of a view block: without enclosing parentheses, a WITH query from its main SELECT on. */
   private blockRange(q: Node): [number, number] {
-    let a = q.a;
-    let last = q.b - 1;
-    if (this.t[a].text === '(' && this.close(a) === last) {
-      a++;
-      last--;
-    }
+    const [start, b] = this.bare(q);
+    let a = start;
+    const last = b - 1;
     if (this.t[a].up === 'WITH') {
       for (let k = a + 1; k <= last; k++) {
         if (this.t[k].text === '(') k = this.close(k);
@@ -1087,6 +1075,11 @@ class Finder {
       }
     }
     return [this.sb(a), this.eb(last)];
+  }
+
+  /** Token range [a, b) of a query without the parentheses around all of it. */
+  private bare(q: Node): [number, number] {
+    return this.t[q.a].text === '(' && this.close(q.a) === q.b - 1 ? [q.a + 1, q.b - 1] : [q.a, q.b];
   }
 
   /** Token ranges [a, b) of the select lists of a query (its own, not those of nested queries). */
@@ -1122,19 +1115,20 @@ class Finder {
     }
     // SBR: simple statements; RETURN, NULL and control flow stay
     let cat = '';
-    if (n.op === 'raise' || (n.op === 'call' && this.isRaiseCall(n))) cat = 'fehlerpfad';
-    if (SBR_KINDS.has(n.op!) || (n.op === 'exit' && n.at! >= 0)) {
+    if (this.raises(n)) cat = 'fehlerpfad';
+    if (sbrTarget(n)) {
       this.point('SBR', 'stmt', n, env, 'plsql', cat, ['NULL;']);
     }
   }
 
-  private isRaiseCall(n: Node): boolean {
-    return this.t[n.a].up === 'RAISE_APPLICATION_ERROR';
+  /** RAISE or RAISE_APPLICATION_ERROR (a statement). */
+  private raises(n: Node): boolean {
+    return n.op === 'raise' || (n.op === 'call' && this.t[n.a].up === 'RAISE_APPLICATION_ERROR');
   }
 
   /** True if the IF branch (condition and statements) raises. */
   private containsRaise(n: Node): boolean {
-    if (n.k === 'stmt' && (n.op === 'raise' || (n.op === 'call' && this.isRaiseCall(n)))) return true;
+    if (n.k === 'stmt' && this.raises(n)) return true;
     return n.kids.some((k) => this.containsRaise(k));
   }
 
@@ -1159,7 +1153,7 @@ class Finder {
     const stmts = h.kids[0].kids.filter((k) => k.k === 'stmt' || k.k === 'pragma');
     if (!stmts.length) return;
     // same mutant as SBR (EXIT WHEN gets one, a plain EXIT none)
-    if (stmts.length === 1 && (SBR_KINDS.has(stmts[0].op!) || (stmts[0].op === 'exit' && stmts[0].at! >= 0))) return;
+    if (stmts.length === 1 && sbrTarget(stmts[0])) return;
     const first = stmts[0];
     const last = stmts[stmts.length - 1];
     const a = first.at2 ?? first.a;
@@ -1183,17 +1177,13 @@ class Finder {
       this.skipped += repl.length; // constant comparison
       return;
     }
-    // with NULL the comparison is never true: other operators are equivalent, TRUE and FALSE are not
-    if (/^NULL$/i.test(left) || /^NULL$/i.test(right)) {
+    // with NULL the comparison is never true: other operators are equivalent, TRUE and FALSE are
+    // not; column lists, (a, b) = (select x, y …): only = and <> exist between them (ORA-00920).
+    // (NULL against a string literal returned above: the string case below never needs NULL)
+    if (/^NULL$/i.test(left) || /^NULL$/i.test(right) || columnList(left) || columnList(right)) {
       const keep = repl.filter((m) => m === 'TRUE' || m === 'FALSE');
       this.skipped += repl.length - keep.length;
       if (!keep.length) return;
-      repl = keep;
-    }
-    // column lists, (a, b) = (select x, y …): only = and <> exist between them (ORA-00920)
-    if (columnList(left) || columnList(right)) {
-      const keep = repl.filter((m) => m === 'TRUE' || m === 'FALSE');
-      this.skipped += repl.length - keep.length;
       repl = keep;
     }
     // codes compared with a string literal are categories, not an order
@@ -1378,12 +1368,7 @@ class Finder {
       }
     };
     collect(q);
-    let from = q.a;
-    let to = q.b;
-    if (this.t[from].text === '(' && this.close(from) === to - 1) {
-      from++;
-      to--;
-    }
+    const [from, to] = this.bare(q);
     const own: number[] = [];
     const depth: number[] = [];
     let d = 0;

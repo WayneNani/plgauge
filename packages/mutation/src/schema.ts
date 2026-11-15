@@ -122,7 +122,14 @@ export function buildSchema(ms: Mutant[], dropped: Set<number> = new Set(), naiv
       broken.has(blockKey(su.key, scope)) || (!!u.ordered && !!u.main && scope[0] === u.main[0] && scope[1] === u.main[1]);
     const unrecorded: Mutant[] = [];
     const lits = new Map<string, Node>();
+    const dupNode = (p: Point, scope: [number, number], ctx: Point['ctx']) => {
+      const g: Node = { p: { ...p, op: '', kind: 'clause', ctx, start: scope[0], end: scope[1], orig: '', mutants: [], scope }, ms: [], kids: [], loop: 0, order: -1 - dups.size, dup: { points: [], reach: [], all: [] } };
+      dups.set(scope.join(':'), g);
+      nodes.push(g);
+      return g;
+    };
     for (const [p, pm] of points) {
+      const live = pm.filter((m) => !dropped.has(m.id));
       if (p.dyn && !naive.has(p)) {
         // one node per literal
         const key = p.dyn.join(':');
@@ -133,25 +140,13 @@ export function buildSchema(ms: Mutant[], dropped: Set<number> = new Set(), naiv
           nodes.push(g);
         }
         g.lit!.push(p);
-        for (const m of pm) {
-          if (!dropped.has(m.id)) {
-            g.ms.push(m);
-            su.mutants.push(m);
-          }
-        }
+        g.ms.push(...live);
+        su.mutants.push(...live);
         continue;
       }
       if (p.scope && switchable(p) && !naive.has(p) && !isBroken(p.scope)) {
         // one node per statement; it comes before an SBR point with the same range
-        const key = p.scope.join(':');
-        let g = dups.get(key);
-        if (!g) {
-          const gp: Point = { ...p, op: '', kind: 'clause', ctx: 'plsql', start: p.scope[0], end: p.scope[1], orig: '', mutants: [] };
-          g = { p: gp, ms: [], kids: [], loop: 0, order: -1 - dups.size, dup: { points: [], reach: [], all: [] } };
-          dups.set(key, g);
-          nodes.push(g);
-        }
-        const live = pm.filter((m) => !dropped.has(m.id));
+        const g = dups.get(p.scope.join(':')) ?? dupNode(p, p.scope, 'plsql');
         g.dup!.reach.push(...live);
         g.dup!.all.push(p);
         if (p.inline) {
@@ -161,23 +156,15 @@ export function buildSchema(ms: Mutant[], dropped: Set<number> = new Set(), naiv
           continue;
         }
         g.dup!.points.push(p);
-        for (const m of pm) {
-          if (!dropped.has(m.id)) {
-            g.ms.push(m);
-            su.mutants.push(m);
-          }
-        }
+        g.ms.push(...live);
+        su.mutants.push(...live);
         continue;
       }
       const n: Node = { p, ms: [], kids: [], loop: 0, order: order++ };
       if (u.type === 'VIEW') unrecorded.push(...pm);
       if (!naive.has(p) && switchable(p) && !(u.type === 'VIEW' && p.scope && isBroken(p.scope))) {
-        for (const m of pm) {
-          if (!dropped.has(m.id)) {
-            n.ms.push(m);
-            su.mutants.push(m);
-          }
-        }
+        n.ms.push(...live);
+        su.mutants.push(...live);
       }
       nodes.push(n);
     }
@@ -195,13 +182,8 @@ export function buildSchema(ms: Mutant[], dropped: Set<number> = new Set(), naiv
     // that never runs it never queries the view.
     // the main block records even without switched points of its own (a view whose points all run
     // with the oracle rewriter still notes which test queries it)
-    if (u.type === 'VIEW' && records && u.main) {
-      const gp: Point = { ...points.keys().next().value!, op: '', kind: 'clause', ctx: 'sql', start: u.main[0], end: u.main[1], orig: '', mutants: [], scope: u.main };
-      // no points of its own: if it fails, only the block is marked broken
-      const g: Node = { p: gp, ms: [], kids: [], loop: 0, order: -1 - dups.size, dup: { points: [], reach: [], all: [] } };
-      dups.set(u.main.join(':'), g);
-      nodes.push(g);
-    }
+    // (no points of its own: if it fails, only the block is marked broken)
+    if (u.type === 'VIEW' && records && u.main) dupNode(points.keys().next().value!, u.main, 'sql');
     const top = u.main && dups.get(u.main.join(':'));
     for (const m of unrecorded) {
       const g = (m.point.scope && dups.get(m.point.scope.join(':'))) || top;
@@ -296,11 +278,32 @@ class Renderer {
     this.su.regions.push({ start, end: this.b.length, point, mutantId });
   }
 
+  /** Writes one variant's text as the region of that mutant. */
+  variantRegion(text: string, point: Point, mutantId: number) {
+    const start = this.b.length;
+    this.write(text);
+    this.region(start, point, mutantId);
+  }
+
+  /** Keeps tokens apart: an identifier right before a switch must not fuse with it. */
+  spaceBefore() {
+    if (identChar(this.b.slice(-1))) this.write(' ');
+  }
+
+  /** Keeps tokens apart after a switch that ends where the source goes on with an identifier. */
+  spaceAfter(end: number) {
+    if (end < this.src.length && identByte(this.src[end])) this.write(' ');
+  }
+
+  /** Source text of the node n with mutant m in place. */
+  spliced(n: Node, m: Mutant): string {
+    return this.raw(n.p.start, m.point.start) + m.mutated + this.raw(m.point.end, n.p.end);
+  }
+
   /** Clause points: the statement once per variant, the original (with its own switches) last. */
   dup(n: Node) {
     const a = this.active;
-    const p = n.p;
-    if (identChar(this.b.slice(-1))) this.write(' ');
+    this.spaceBefore();
     const start = this.b.length;
     this.write(`IF ${a} = -1 THEN`);
     for (const q of n.dup!.points) {
@@ -312,9 +315,7 @@ class Renderer {
     for (const m of [...n.ms].sort((x, y) => x.id - y.id)) {
       this.write(` ${first ? 'IF' : 'ELSIF'} ${a} = ${m.id} THEN `);
       first = false;
-      const vs = this.b.length;
-      this.write(this.variant(n, m));
-      this.region(vs, m.point, m.id);
+      this.variantRegion(this.variant(n, m), m.point, m.id);
     }
     this.write(' ELSE ');
     this.orig(n);
@@ -371,29 +372,26 @@ class Renderer {
   /** Dynamic SQL: the literal once per variant, switched in place; see the header. */
   lit(n: Node) {
     const a = this.active;
-    const p = n.p;
-    if (identChar(this.b.slice(-1))) this.write(' ');
+    this.spaceBefore();
     const start = this.b.length;
     const ms = [...n.ms].sort((x, y) => x.id - y.id);
     this.write(`(CASE CASE ${a} WHEN -1 THEN ${this.hits(ms.map((m) => m.id))} ELSE ${a} END`);
     for (const m of ms) {
       this.write(` WHEN ${m.id} THEN `);
-      const vs = this.b.length;
-      this.write(this.raw(p.start, m.point.start) + m.mutated + this.raw(m.point.end, p.end));
-      this.region(vs, m.point, m.id);
+      this.variantRegion(this.spliced(n, m), m.point, m.id);
     }
     this.write(' ELSE ');
     this.orig(n);
     this.write(' END)');
     this.su.regions.push({ start, end: this.b.length, point: n.lit![0], mutantId: 0, points: n.lit });
-    if (p.end < this.src.length && identByte(this.src[p.end])) this.write(' ');
+    this.spaceAfter(n.p.end);
   }
 
   /** Views and cursor declarations: one UNION ALL branch per variant of the block; see the header. */
   viewDup(n: Node) {
     const V = `SYS_CONTEXT('${this.ctx}', 'ACTIVE')`;
     const p = n.p;
-    if (identChar(this.b.slice(-1))) this.write(' ');
+    this.spaceBefore();
     const start = this.b.length;
     const branches = [...n.ms].sort((x, y) => x.id - y.id);
     const conds: string[] = [];
@@ -411,33 +409,29 @@ class Renderer {
     this.write(`) WHERE ${conds.join(' AND ')}`);
     for (const m of branches) {
       this.write(' UNION ALL SELECT * FROM (');
-      const vs = this.b.length;
-      this.write(this.raw(p.start, m.point.start) + m.mutated + this.raw(m.point.end, p.end));
-      this.region(vs, m.point, m.id);
+      this.variantRegion(this.spliced(n, m), m.point, m.id);
       this.write(`) WHERE ${V} = '${m.id}'`);
     }
     // a failing wrapper takes the block's points out of the schema and marks the block broken
     this.su.regions.push({ start, end: this.b.length, point: n.dup!.all[0] ?? n.p, mutantId: 0, points: n.dup!.all, block: blockKey(this.su.key, [p.start, p.end]) });
-    if (p.end < this.src.length && identByte(this.src[p.end])) this.write(' ');
+    this.spaceAfter(p.end);
   }
 
   /** Views and cursor declarations: a point in a select list, switched in place. */
   viewInline(n: Node) {
     const p = n.p;
-    if (identChar(this.b.slice(-1))) this.write(' ');
+    this.spaceBefore();
     const start = this.b.length;
     this.write(`(CASE SYS_CONTEXT('${this.ctx}', 'ACTIVE')`);
     for (const m of n.ms) {
       this.write(` WHEN '${m.id}' THEN `);
-      const vs = this.b.length;
-      this.write(`(${m.mutated})`);
-      this.region(vs, p, m.id);
+      this.variantRegion(`(${m.mutated})`, p, m.id);
     }
     this.write(' ELSE (');
     this.orig(n);
     this.write(') END)');
     this.region(start, p, 0);
-    if (p.end < this.src.length && identByte(this.src[p.end])) this.write(' ');
+    this.spaceAfter(p.end);
   }
 
   point(n: Node) {
@@ -473,7 +467,7 @@ class Renderer {
     const base = n.ms[0].id;
     const count = n.ms[n.ms.length - 1].id - base + 1;
     // Keep tokens apart: "ELSE" directly before a switch must not fuse into "ELSEIF".
-    if (p.kind !== 'insert' && identChar(this.b.slice(-1))) this.write(' ');
+    if (p.kind !== 'insert') this.spaceBefore();
     const start = this.b.length;
     switch (true) {
       case p.kind === 'stmt': {
@@ -487,9 +481,7 @@ class Renderer {
         this.write(` IF ${a} = -1 THEN ${this.ctl}.reach(${base}, ${count}); END IF;`);
         for (const m of n.ms) {
           this.write(` IF ${a} = ${m.id} THEN `);
-          const vs = this.b.length;
-          this.write(m.mutated.trim());
-          this.region(vs, p, m.id);
+          this.variantRegion(m.mutated.trim(), p, m.id);
           this.write(' END IF;');
         }
         break;
@@ -499,9 +491,7 @@ class Renderer {
         this.write(`(CASE CASE ${a} WHEN -1 THEN ${this.ctl}.hit(${base}, ${count}) ELSE ${a} END`);
         for (const m of n.ms) {
           this.write(` WHEN ${m.id} THEN `);
-          const vs = this.b.length;
-          this.write(`(${m.mutated})`);
-          this.region(vs, p, m.id);
+          this.variantRegion(`(${m.mutated})`, p, m.id);
         }
         this.write(' ELSE (');
         this.orig(n);
@@ -509,7 +499,7 @@ class Renderer {
       }
     }
     this.region(start, p, 0);
-    if (p.end < this.src.length && identByte(this.src[p.end])) this.write(' ');
+    this.spaceAfter(p.end);
   }
 }
 

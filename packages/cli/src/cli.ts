@@ -21,11 +21,14 @@
  *   pltest mutate compare a.json b.json                 compare two runs (also against the Go plmut)
  *   pltest crosscheck --coverage c.json --mutation m.json  recording run of the mutation against measured coverage
  */
-import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
-import { changedLines, connect, restoreJournal, dbIdent, ensureJournal, journalEntries, journalForget, lockRun, preprocess, RUN_LOCK, splitScript } from '@pltest/core';
 import {
-  checkQuotas, instrument, mergeExports, newIds, quotas, restrictToChanged, runCoverage, runCorpus, sourceMap, toCobertura,
+  changedLines, connect, currentSchema, restoreJournal, ensureJournal, firstLine, journalEntries, journalForget, lockRun, preprocess, quoteIdent as qi, RUN_LOCK, splitScript,
+  type ConnectConfig,
+} from '@pltest/core';
+import {
+  checkQuotas, instrument, mergeExports, newIds, quotas, restrictToChanged, runCoverage, runCorpus, sourceMap, sqlFiles, toCobertura,
   toCoverageExport, toJunit,
   toLcov, toSonar, type CoverageExport, type QuotaKey, type RunConfig, type RunReport,
 } from '@pltest/coverage';
@@ -59,17 +62,6 @@ function loadExport(file: string): CoverageExport {
   return j.format === 'plcov-coverage/1' ? (j as CoverageExport) : toCoverageExport(j as RunReport);
 }
 
-const SQL_EXT = /\.(sql|pks|pkb|pkg|tps|tpb|typ|prc|fnc|trg|bdy|spc|plb|pls)$/i;
-function sqlFiles(dir: string, out: string[] = []): string[] {
-  for (const e of readdirSync(dir)) {
-    if (e === '.git' || e === 'node_modules') continue;
-    const p = join(dir, e);
-    if (statSync(p).isDirectory()) sqlFiles(p, out);
-    else if (SQL_EXT.test(e)) out.push(p);
-  }
-  return out;
-}
-
 /** A numeric option: undefined if absent; a value that is no number stops with a message (NaN would pass every check). */
 function numOpt(n: string): number | undefined {
   const v = opt(n);
@@ -81,10 +73,9 @@ function numOpt(n: string): number | undefined {
 
 /** --min-stmt/--min-branch/--min-cond/--min-mcdc (coverage) and --min-score (mutation). */
 function thresholds() {
-  const num = (n: string) => numOpt(n);
   return {
-    cov: { stmt: num('min-stmt'), branch: num('min-branch'), cond: num('min-cond'), mcdc: num('min-mcdc') } as Partial<Record<QuotaKey, number>>,
-    score: num('min-score'),
+    cov: { stmt: numOpt('min-stmt'), branch: numOpt('min-branch'), cond: numOpt('min-cond'), mcdc: numOpt('min-mcdc') } as Partial<Record<QuotaKey, number>>,
+    score: numOpt('min-score'),
   };
 }
 
@@ -346,34 +337,31 @@ async function main() {
       // every database of a mutation run with several workers (each keeps its own journal)
       const dbs = (opt('db') ?? process.env.PLMUT_DB ?? '').split(',').map((u) => u.trim()).filter(Boolean);
       const fromUrls = !configFile && dbs.length > 0;
-      const cfgs = fromUrls ? dbs.map((u) => parseDbUrl(u)) : [loadConfig(configFile)];
+      const cfgs: (ConnectConfig & Partial<RunConfig>)[] = fromUrls ? dbs.map((u) => parseDbUrl(u)) : [loadConfig(configFile)];
       const listOnly = flag('list');
       // entries that cannot be restored at all (their table is gone, say) would block every run
       const forget = flag('forget');
       // a database URL: the journal of a mutation run (the session's CURRENT_SCHEMA) and of a
       // coverage run of a project (the user's own schema); they differ only with a logon trigger
-      const targets: [typeof cfgs[number], boolean][] = cfgs.flatMap((c) => (fromUrls ? [[c, false], [c, true]] : [[c, false]]) as [typeof cfgs[number], boolean][]);
+      const targets = cfgs.flatMap((c) => (fromUrls ? [[c, false], [c, true]] : [[c, false]]) as [typeof c, boolean][]);
       const seen = new Set<string>();
       for (const [cfg, own] of targets) {
-        if (!(cfg as { user?: string }).user) throw new Error('keine Datenbankangaben: --db oder eine Coverage-Konfiguration angeben');
+        if (!cfg.user) throw new Error('keine Datenbankangaben: --db oder eine Coverage-Konfiguration angeben');
         // one database that fails (gone, locked by a run) must not keep the others from their restore
         try {
-          if (cfgs.length > 1 && !own) console.error(`${(cfg as { user: string }).user}@${(cfg as { connectString?: string }).connectString ?? ''}:`);
-          // journal and lock live where the runs keep them: the coverage config's runtime schema
-          const c2 = cfg as { schema?: string; schemas?: string[]; runtimeSchema?: string; user: string };
+          if (cfgs.length > 1 && !own) console.error(`${cfg.user}@${cfg.connectString ?? ''}:`);
           const conn = await connect(cfg);
           try {
-            const session = (await conn.execute<[string]>(`select sys_context('USERENV', 'CURRENT_SCHEMA') from dual`)).rows![0][0];
+            const session = await currentSchema(conn);
             // a mutation run (a database URL) works in its session's CURRENT_SCHEMA, which a logon
             // trigger may set; a coverage run in its runtime schema
             const home = fromUrls
-              ? own ? c2.user.toUpperCase() : session
-              : (c2.schemas?.length ? c2.runtimeSchema ?? c2.user : c2.schema ?? c2.user).toUpperCase();
-            const where = `${(cfg as { connectString?: string }).connectString ?? ''}|${home}`;
+              ? own ? cfg.user.toUpperCase() : session
+              : (cfg.schemas?.length ? cfg.runtimeSchema ?? cfg.user : cfg.schema ?? cfg.user).toUpperCase();
+            const where = `${cfg.connectString ?? ''}|${home}`;
             if (seen.has(where)) continue;
             seen.add(where);
             if (own) console.error(`(Schema ${home}:)`);
-            const qi = (x: string) => `"${x.replace(/"/g, '""')}"`;
             await conn.execute(`alter session set current_schema = ${qi(home)}`);
             await ensureJournal(conn);
             const entries = await journalEntries(conn);
@@ -399,7 +387,7 @@ async function main() {
                 if (logoff) {
                   await conn.execute(`drop trigger ${qi(home)}.cov$_logoff`).then(
                     () => console.error('Logoff-Trigger der Coverage entfernt'),
-                    (e: Error) => { if (!e.message.includes('ORA-04080')) console.error(`  ✗ Logoff-Trigger nicht entfernt: ${e.message.split('\n')[0]}`); });
+                    (e: Error) => { if (!e.message.includes('ORA-04080')) console.error(`  ✗ Logoff-Trigger nicht entfernt: ${firstLine(e)}`); });
                 }
                 // read again under the lock: a run that finished meanwhile left other entries
                 await restoreJournal(conn, await journalEntries(conn), (m) => console.error(m));
@@ -419,7 +407,7 @@ async function main() {
             await conn.close();
           }
         } catch (e) {
-          console.error(`  ✗ ${(e as Error).message.split('\n')[0]}`);
+          console.error(`  ✗ ${firstLine(e)}`);
           process.exitCode = 1;
         }
       }

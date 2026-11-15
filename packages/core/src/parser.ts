@@ -130,6 +130,33 @@ export function parseUnit(src: string): { tokens: Token[]; unit: Node } {
   return { tokens: p.t, unit };
 }
 
+// stop sets of find/need
+const SEMI = new Set([';']), COMMA = new Set([',']), THEN = new Set(['THEN']), WHEN = new Set(['WHEN']), LOOP = new Set(['LOOP']);
+const IN = new Set(['IN']), IS = new Set(['IS']), AS = new Set(['AS']), IS_AS = new Set(['IS', 'AS']), FOR = new Set(['FOR']), BY = new Set(['BY']);
+const BEGIN = new Set(['BEGIN']), BEGIN_END = new Set(['BEGIN', 'END']), TIMING_END = new Set(['BEFORE', 'AFTER', 'INSTEAD', 'END']);
+const EQ = new Set(['=']), ASSIGN = new Set([':=']), INIT = new Set([':=', 'DEFAULT']), DOTS = new Set(['..']), LIMIT = new Set(['LIMIT']);
+const FOR_FILTER = new Set(['WHILE', 'WHEN']), USING = new Set(['USING']), USING_END = new Set(['RETURNING', 'RETURN', 'INTO']);
+const EXEC_END = new Set(['INTO', 'USING', 'RETURNING', 'RETURN', 'BULK']), FORALL_DML = new Set(['INSERT', 'UPDATE', 'DELETE', 'MERGE', 'EXECUTE', 'SAVE']);
+const CASE_PARTS = new Set(['WHEN', 'ELSE', 'END']);
+const NAME_SKIP = new Set(['CREATE', 'OR', 'REPLACE', 'EDITIONABLE', 'NONEDITIONABLE', 'PACKAGE', 'BODY', 'PROCEDURE', 'FUNCTION', 'TYPE', 'TRIGGER', 'IF', 'NOT', 'EXISTS']);
+const NAME_STOP = new Set(['IS', 'AS', '(', 'RETURN', 'AUTHID', 'BEFORE', 'AFTER', 'INSTEAD', 'FOR', 'SHARING', 'ACCESSIBLE', 'DEFAULT', 'BEQUEATH', 'OF']);
+
+/** For every parenthesis the index of its partner (-1: none). */
+export function matchParens(t: Token[]): Int32Array {
+  const match = new Int32Array(t.length).fill(-1);
+  const stack: number[] = [];
+  t.forEach((x, k) => {
+    if (x.kind !== 'op') return;
+    if (x.text === '(') stack.push(k);
+    else if (x.text === ')' && stack.length) {
+      const o = stack.pop()!;
+      match[o] = k;
+      match[k] = o;
+    }
+  });
+  return match;
+}
+
 const node = (k: NodeKind, a: number, b: number, kids: Node[] = [], extra: Partial<Node> = {}): Node => ({ k, a, b, kids, ...extra });
 
 class Parser {
@@ -144,17 +171,7 @@ class Parser {
   constructor(private src: string, tolerant = false) {
     this.t = tokenize(src, { tolerant }).filter((x) => x.kind !== 'trivia');
     this.lim = this.t.length;
-    this.match = new Int32Array(this.t.length).fill(-1);
-    const stack: number[] = [];
-    this.t.forEach((x, k) => {
-      if (x.kind !== 'op') return;
-      if (x.text === '(') stack.push(k);
-      else if (x.text === ')' && stack.length) {
-        const o = stack.pop()!;
-        this.match[o] = k;
-        this.match[k] = o;
-      }
-    });
+    this.match = matchParens(this.t);
   }
 
   // ------------------------------------------------------------- helpers
@@ -165,6 +182,11 @@ class Parser {
   }
   private upAt(j: number): string {
     return j < this.t.length ? this.t[j].up : '';
+  }
+  /** A query starts at j. */
+  private isQuery(j: number): boolean {
+    const u = this.upAt(j);
+    return u === 'SELECT' || u === 'WITH';
   }
   private isWord(j: number, ...w: string[]): boolean {
     const x = this.t[j];
@@ -233,7 +255,7 @@ class Parser {
     const out: [number, number][] = [];
     let s = a;
     for (;;) {
-      const c = this.find(s, new Set([',']), b);
+      const c = this.find(s, COMMA, b);
       if (c < 0) {
         out.push([s, b]);
         return out;
@@ -316,13 +338,13 @@ class Parser {
       this.i++;
       this.expect('BODY');
       const name = this.unitName();
-      const is = this.need(this.i, new Set(['IS', 'AS']));
+      const is = this.need(this.i, IS_AS);
       this.i = is + 1;
       const kids: Node[] = [];
       if (type === 'PACKAGE BODY') {
-        kids.push(this.decls(new Set(['BEGIN', 'END'])));
+        kids.push(this.decls(BEGIN_END));
         if (this.at('BEGIN')) kids.push(this.body());
-        else this.endUnit();
+        else this.end();
       } else {
         const ds: Node[] = [];
         const da = this.i;
@@ -333,7 +355,7 @@ class Parser {
           else this.fail(`Unerwartetes "${this.t[this.i].text}" im Type Body`);
         }
         kids.push(node('decls', da, this.i, ds));
-        this.endUnit();
+        this.end();
       }
       n = node('unit', a, this.i, kids, { op: type, name, at: is });
     } else if (kw === 'PROCEDURE' || kw === 'FUNCTION') {
@@ -352,21 +374,20 @@ class Parser {
     return n;
   }
 
-  /** END [name] ; of a unit. */
-  private endUnit() {
+  /** END [kw] [name] ; (a unit's END, END CASE, END LOOP; END IF without a name). */
+  private end(kw = '', named = true) {
     this.expect('END');
-    if (!this.at(';')) this.i++;
+    if (kw) this.expect(kw);
+    if (named && !this.at(';')) this.i++;
     this.expect(';');
   }
 
   /** The unit name as written: the tokens before IS/AS/(/RETURN/... (plmut's rule). */
   private unitName(): string {
-    const skip = new Set(['CREATE', 'OR', 'REPLACE', 'EDITIONABLE', 'NONEDITIONABLE', 'PACKAGE', 'BODY', 'PROCEDURE', 'FUNCTION', 'TYPE', 'TRIGGER', 'IF', 'NOT', 'EXISTS']);
-    const stop = new Set(['IS', 'AS', '(', 'RETURN', 'AUTHID', 'BEFORE', 'AFTER', 'INSTEAD', 'FOR', 'SHARING', 'ACCESSIBLE', 'DEFAULT', 'BEQUEATH', 'OF']);
     let k = this.i;
-    while (skip.has(this.upAt(k))) k++;
+    while (NAME_SKIP.has(this.upAt(k))) k++;
     let name = '';
-    while (k < this.t.length && !stop.has(this.upAt(k))) {
+    while (k < this.t.length && !NAME_STOP.has(this.upAt(k))) {
       name += this.t[k].text;
       if (this.upAt(k + 1) !== '.' && this.upAt(k) !== '.') break;
       k++;
@@ -389,7 +410,7 @@ class Parser {
         continue;
       }
       if (this.isOp(k, ';')) break;
-      if (this.isWord(k, 'AS') && (['SELECT', 'WITH'].includes(this.upAt(k + 1)) || this.isOp(k + 1, '('))) {
+      if (this.isWord(k, 'AS') && (this.isQuery(k + 1) || this.isOp(k + 1, '('))) {
         as = k;
         break;
       }
@@ -442,14 +463,14 @@ class Parser {
     } else if (this.at('COMPOUND')) {
       this.i++;
       this.expect('TRIGGER');
-      kids.push(this.decls(new Set(['BEFORE', 'AFTER', 'INSTEAD', 'END'])));
+      kids.push(this.decls(TIMING_END));
       while (this.at('BEFORE', 'AFTER', 'INSTEAD')) {
         const sa = this.i;
-        this.i = this.need(this.i, new Set(['IS'])) + 1;
+        this.i = this.need(this.i, IS) + 1;
         const b = this.body();
         kids.push(node('section', sa, this.i, [b]));
       }
-      this.endUnit();
+      this.end();
     } else {
       kids.push(...this.block());
     }
@@ -496,10 +517,10 @@ class Parser {
       || (this.at('EXTERNAL') && ['NAME', 'LIBRARY', 'WITH', 'PARAMETERS', ';'].includes(this.up(1)))
       || (this.at('MLE') && ['MODULE', 'LANGUAGE'].includes(this.up(1)));
     if (spec) {
-      this.i = this.need(this.i, new Set([';'])) + 1;
+      this.i = this.need(this.i, SEMI) + 1;
       return node('subprog', a, this.i, kids, { op: kind, name, at: nameTok });
     }
-    kids.push(this.decls(new Set(['BEGIN', 'END'])));
+    kids.push(this.decls(BEGIN_END));
     kids.push(this.body());
     return node('subprog', a, this.i, kids, { op: kind, name, at: nameTok });
   }
@@ -508,7 +529,7 @@ class Parser {
   private paramDefaults(a: number, b: number): Node[] {
     const out: Node[] = [];
     for (const [s, e] of this.commas(a, b)) {
-      const d = this.find(s, new Set([':=', 'DEFAULT']), e);
+      const d = this.find(s, INIT, e);
       if (d >= 0 && d + 1 < e) out.push(node('decl', s, e, [this.region(d + 1, e)]));
     }
     return out;
@@ -524,14 +545,14 @@ class Parser {
         kids.push(this.cursorDecl());
       } else if (this.at('PRAGMA')) {
         const s = this.i;
-        this.i = this.need(this.i, new Set([';'])) + 1;
+        this.i = this.need(this.i, SEMI) + 1;
         kids.push(node('pragma', s, this.i));
       } else if (this.at('TYPE', 'SUBTYPE')) {
-        this.i = this.need(this.i, new Set([';'])) + 1;
+        this.i = this.need(this.i, SEMI) + 1;
       } else {
         const s = this.i;
-        const semi = this.need(this.i, new Set([';']));
-        const d = this.find(s, new Set([':=', 'DEFAULT']), semi);
+        const semi = this.need(this.i, SEMI);
+        const d = this.find(s, INIT, semi);
         kids.push(node('decl', s, semi + 1, d >= 0 && d + 1 < semi ? [this.region(d + 1, semi)] : []));
         this.i = semi + 1;
       }
@@ -541,7 +562,7 @@ class Parser {
 
   private cursorDecl(): Node {
     const a = this.i;
-    const semi = this.need(this.i, new Set([';']));
+    const semi = this.need(this.i, SEMI);
     const kids: Node[] = [];
     let k = this.i + 2;
     if (this.isOp(k, '(')) {
@@ -549,7 +570,7 @@ class Parser {
       kids.push(...this.paramDefaults(k + 1, c));
       k = c + 1;
     }
-    const is = this.find(k, new Set(['IS']), semi);
+    const is = this.find(k, IS, semi);
     if (is >= 0) kids.push(this.query(is + 1, semi));
     this.i = semi + 1;
     return node('cursor', a, this.i, kids);
@@ -560,7 +581,7 @@ class Parser {
     const out: Node[] = [];
     if (this.at('DECLARE')) {
       this.i++;
-      out.push(this.decls(new Set(['BEGIN'])));
+      out.push(this.decls(BEGIN));
     }
     out.push(this.body());
     return out;
@@ -575,10 +596,10 @@ class Parser {
       this.i++;
       while (this.at('WHEN')) {
         const ha = this.i;
-        const then = this.need(this.i + 1, new Set(['THEN']));
+        const then = this.need(this.i + 1, THEN);
         this.i = then + 1;
-        kids.push(node('handler', ha, this.i, [this.seq()], { at: then }));
-        kids[kids.length - 1].b = this.i;
+        const s = this.seq();
+        kids.push(node('handler', ha, this.i, [s], { at: then }));
       }
     }
     this.expect('END');
@@ -627,21 +648,21 @@ class Parser {
         case 'FORALL': return this.forall(a, la);
         case 'EXIT': case 'CONTINUE': {
           this.i++;
-          const semi = this.need(this.i, new Set([';']));
-          const w = this.find(this.i, new Set(['WHEN']), semi);
+          const semi = this.need(this.i, SEMI);
+          const w = this.find(this.i, WHEN, semi);
           const kids = w >= 0 ? [this.region(w + 1, semi)] : [];
           this.i = semi + 1;
           return st(u.toLowerCase(), kids, { at: w });
         }
         case 'RETURN': {
           this.i++;
-          const semi = this.need(this.i, new Set([';']));
+          const semi = this.need(this.i, SEMI);
           const kids = semi > this.i ? [this.region(this.i, semi)] : [];
           this.i = semi + 1;
           return st('return', kids);
         }
         case 'RAISE': case 'GOTO': {
-          this.i = this.need(this.i, new Set([';'])) + 1;
+          this.i = this.need(this.i, SEMI) + 1;
           return st(u.toLowerCase());
         }
         case 'NULL':
@@ -655,46 +676,46 @@ class Parser {
           return st('block', kids);
         }
         case 'PRAGMA': {
-          this.i = this.need(this.i, new Set([';'])) + 1;
+          this.i = this.need(this.i, SEMI) + 1;
           return node('pragma', a, this.i, [], { at2: la });
         }
         case 'EXECUTE': return this.execImmediate(a, la);
         case 'OPEN': return this.openStmt(a, la);
         case 'FETCH': {
-          const semi = this.need(this.i, new Set([';']));
-          const lim = this.find(this.i, new Set(['LIMIT']), semi);
+          const semi = this.need(this.i, SEMI);
+          const lim = this.find(this.i, LIMIT, semi);
           const kids = lim >= 0 ? [this.region(lim + 1, semi)] : [];
           this.i = semi + 1;
           return st('fetch', kids);
         }
         case 'CLOSE': {
-          this.i = this.need(this.i, new Set([';'])) + 1;
+          this.i = this.need(this.i, SEMI) + 1;
           return st('close');
         }
         case 'PIPE': {
-          const semi = this.need(this.i, new Set([';']));
+          const semi = this.need(this.i, SEMI);
           const kids = this.isOp(a + 2, '(') && this.close(a + 2) < semi ? [this.region(a + 3, this.close(a + 2))] : [];
           this.i = semi + 1;
           return st('pipe', kids);
         }
         default:
           if (SQL_STMT.has(u) || (u === 'SET' && this.upAt(a + 1) === 'TRANSACTION')) {
-            const semi = this.need(this.i, new Set([';']));
+            const semi = this.need(this.i, SEMI);
             const q = this.sqlStatement(a, semi);
             this.i = semi + 1;
             return st('sql', [q]);
           }
       }
     }
-    if (kind === 'op' && u === '(' && ['SELECT', 'WITH'].includes(this.upAt(a + 1))) {
-      const semi = this.need(this.i, new Set([';']));
+    if (kind === 'op' && u === '(' && this.isQuery(a + 1)) {
+      const semi = this.need(this.i, SEMI);
       const q = this.sqlStatement(a, semi);
       this.i = semi + 1;
       return st('sql', [q]);
     }
     // assignment or procedure call
-    const semi = this.need(this.i, new Set([';']));
-    const asg = this.find(a, new Set([':=']), semi);
+    const semi = this.need(this.i, SEMI);
+    const asg = this.find(a, ASSIGN, semi);
     if (asg >= 0) {
       const target = this.region(a, asg);
       const value = this.region(asg + 1, semi);
@@ -711,7 +732,7 @@ class Parser {
     const kids: Node[] = [];
     let kw = a;
     for (;;) {
-      const then = this.need(this.i, new Set(['THEN']));
+      const then = this.need(this.i, THEN);
       const cond = this.region(this.i, then);
       this.i = then + 1;
       const s = this.seq();
@@ -719,14 +740,8 @@ class Parser {
       if (!this.at('ELSIF')) break;
       kw = this.i++;
     }
-    if (this.at('ELSE')) {
-      const e = this.i++;
-      kids.push(node('else', e, this.i, [this.seq()]));
-      kids[kids.length - 1].b = this.i;
-    }
-    this.expect('END');
-    this.expect('IF');
-    this.expect(';');
+    this.elseBranch(kids);
+    this.end('IF', false);
     return node('stmt', a, this.i, kids, { op: 'if', at2: la });
   }
 
@@ -735,28 +750,28 @@ class Parser {
     const kids: Node[] = [];
     const searched = this.at('WHEN');
     if (!searched) {
-      const w = this.need(this.i, new Set(['WHEN']));
+      const w = this.need(this.i, WHEN);
       kids.push(this.region(this.i, w));
       this.i = w;
     }
     while (this.at('WHEN')) {
       const w = this.i;
-      const then = this.need(this.i + 1, new Set(['THEN']));
+      const then = this.need(this.i + 1, THEN);
       const cond = this.region(w + 1, then);
       this.i = then + 1;
       const s = this.seq();
       kids.push(node('branch', w, this.i, [cond, s], { name: searched ? 'case' : 'case-simple', at: then }));
     }
-    if (this.at('ELSE')) {
-      const e = this.i++;
-      kids.push(node('else', e, this.i, [this.seq()]));
-      kids[kids.length - 1].b = this.i;
-    }
-    this.expect('END');
-    this.expect('CASE');
-    if (!this.at(';')) this.i++;
-    this.expect(';');
+    this.elseBranch(kids);
+    this.end('CASE');
     return node('stmt', a, this.i, kids, { op: 'case', at2: la, name: searched ? 'searched' : 'simple' });
+  }
+
+  private elseBranch(kids: Node[]) {
+    if (!this.at('ELSE')) return;
+    const e = this.i++;
+    const s = this.seq();
+    kids.push(node('else', e, this.i, [s]));
   }
 
   private loop(a: number, la: number): Node {
@@ -765,26 +780,26 @@ class Parser {
     if (this.at('WHILE')) {
       kind = 'while';
       this.i++;
-      const lp = this.need(this.i, new Set(['LOOP']));
+      const lp = this.need(this.i, LOOP);
       kids.push(this.region(this.i, lp));
       this.i = lp;
     } else if (this.at('FOR')) {
       this.i++;
-      const lp = this.need(this.i, new Set(['LOOP']));
-      const inIdx = this.need(this.i, new Set(['IN']), lp);
+      const lp = this.need(this.i, LOOP);
+      const inIdx = this.need(this.i, IN, lp);
       let k = inIdx + 1;
       if (this.isWord(k, 'REVERSE')) k++;
       kind = 'for';
-      if (this.isOp(k, '(') && ['SELECT', 'WITH'].includes(this.upAt(k + 1))) {
+      if (this.isOp(k, '(') && this.isQuery(k + 1)) {
         kind = 'cursor-for';
         const c = this.close(k);
         kids.push(this.query(k + 1, c));
       } else {
         for (const [s, e] of this.commas(k, lp)) {
           // 21c iteration controls: … [WHILE cond] [WHEN cond]
-          const f = this.find(s, new Set(['WHILE', 'WHEN']), e);
+          const f = this.find(s, FOR_FILTER, e);
           const ce = f >= 0 ? f : e;
-          const dots = this.find(s, new Set(['..']), ce);
+          const dots = this.find(s, DOTS, ce);
           if (this.isWord(s, 'VALUES', 'INDICES', 'PAIRS') && this.isWord(s + 1, 'OF')) {
             kids.push(this.region(s + 2, ce));
           } else if (dots < 0) {
@@ -792,13 +807,13 @@ class Parser {
             kind = 'cursor-for';
             kids.push(this.region(s, ce));
           } else {
-            const by = this.find(dots + 1, new Set(['BY']), ce);
+            const by = this.find(dots + 1, BY, ce);
             const r = node('range', s, ce, [this.region(s, dots), this.region(dots + 1, by >= 0 ? by : ce)], { at: dots, name: by >= 0 ? 'by' : '' });
             if (by >= 0) r.kids.push(this.region(by + 1, ce));
             kids.push(r);
           }
           for (let w = f; w >= 0 && w < e;) {
-            const next = this.find(w + 1, new Set(['WHILE', 'WHEN']), e);
+            const next = this.find(w + 1, FOR_FILTER, e);
             const we = next >= 0 ? next : e;
             kids.push(node('branch', w, we, [this.region(w + 1, we)], { name: `for-${this.upAt(w).toLowerCase()}`, at: w }));
             w = next;
@@ -809,23 +824,20 @@ class Parser {
     }
     const loopTok = this.expect('LOOP');
     kids.push(this.seq());
-    this.expect('END');
-    this.expect('LOOP');
-    if (!this.at(';')) this.i++;
-    this.expect(';');
+    this.end('LOOP');
     return node('stmt', a, this.i, kids, { op: 'loop', name: kind, at: loopTok, at2: la });
   }
 
   private forall(a: number, la: number): Node {
-    const semi = this.need(this.i, new Set([';']));
-    const inIdx = this.need(this.i, new Set(['IN']), semi);
-    const dml = this.need(inIdx + 1, new Set(['INSERT', 'UPDATE', 'DELETE', 'MERGE', 'EXECUTE', 'SAVE']), semi);
+    const semi = this.need(this.i, SEMI);
+    const inIdx = this.need(this.i, IN, semi);
+    const dml = this.need(inIdx + 1, FORALL_DML, semi);
     const kids: Node[] = [];
     let k = inIdx + 1;
     if (this.isWord(k, 'VALUES', 'INDICES') && this.isWord(k + 1, 'OF')) {
       kids.push(this.region(k + 2, dml));
     } else {
-      const dots = this.find(k, new Set(['..']), dml);
+      const dots = this.find(k, DOTS, dml);
       if (dots >= 0) kids.push(node('range', k, dml, [this.region(k, dots), this.region(dots + 1, dml)], { at: dots, name: 'forall' }));
     }
     k = dml;
@@ -841,49 +853,47 @@ class Parser {
   }
 
   private execImmediate(a: number, la: number): Node {
-    const semi = this.need(this.i, new Set([';']));
+    const semi = this.need(this.i, SEMI);
     let k = this.i + 1;
     if (this.isWord(k, 'IMMEDIATE')) k++;
-    const clauses = new Set(['INTO', 'USING', 'RETURNING', 'RETURN', 'BULK']);
-    const e = this.find(k, clauses, semi);
+    const e = this.find(k, EXEC_END, semi);
     const kids: Node[] = [this.region(k, e >= 0 ? e : semi)];
-    const using = this.find(k, new Set(['USING']), semi);
+    const using = this.find(k, USING, semi);
     if (using >= 0) {
-      const ue = this.find(using + 1, new Set(['RETURNING', 'RETURN', 'INTO']), semi);
-      for (const [s, x] of this.commas(using + 1, ue >= 0 ? ue : semi)) {
-        let s2 = s;
-        while (this.isWord(s2, 'IN', 'OUT')) s2++;
-        if (s2 < x) kids.push(this.region(s2, x));
-      }
+      const ue = this.find(using + 1, USING_END, semi);
+      this.binds(using + 1, ue >= 0 ? ue : semi, kids);
     }
     this.i = semi + 1;
     return node('stmt', a, this.i, kids, { op: 'exec', at2: la });
   }
 
   private openStmt(a: number, la: number): Node {
-    const semi = this.need(this.i, new Set([';']));
-    const f = this.find(a + 1, new Set(['FOR']), semi);
+    const semi = this.need(this.i, SEMI);
+    const f = this.find(a + 1, FOR, semi);
     const kids: Node[] = [];
     if (f < 0) {
       if (a + 1 < semi) kids.push(this.region(a + 1, semi));
     } else {
-      const using = this.find(f + 1, new Set(['USING']), semi);
+      const using = this.find(f + 1, USING, semi);
       const qe = using >= 0 ? using : semi;
-      if (['SELECT', 'WITH'].includes(this.upAt(f + 1)) || (this.isOp(f + 1, '(') && ['SELECT', 'WITH'].includes(this.upAt(f + 2)))) {
+      if (this.isQuery(f + 1) || (this.isOp(f + 1, '(') && this.isQuery(f + 2))) {
         kids.push(this.query(f + 1, qe));
       } else {
         kids.push(this.region(f + 1, qe));
       }
-      if (using >= 0) {
-        for (const [s, x] of this.commas(using + 1, semi)) {
-          let s2 = s;
-          while (this.isWord(s2, 'IN', 'OUT')) s2++;
-          if (s2 < x) kids.push(this.region(s2, x));
-        }
-      }
+      if (using >= 0) this.binds(using + 1, semi, kids);
     }
     this.i = semi + 1;
     return node('stmt', a, this.i, kids, { op: 'open', at2: la });
+  }
+
+  /** The bind arguments of USING in [a, b): [IN] [OUT] expression, comma separated. */
+  private binds(a: number, b: number, kids: Node[]) {
+    for (const [s, x] of this.commas(a, b)) {
+      let s2 = s;
+      while (this.isWord(s2, 'IN', 'OUT')) s2++;
+      if (s2 < x) kids.push(this.region(s2, x));
+    }
   }
 
   // ------------------------------------------------------------------ SQL
@@ -912,7 +922,7 @@ class Parser {
       if (x.kind === 'op' && x.text === '(') {
         const m = this.match[k];
         if (m < 0 || m >= b) break;
-        if (['SELECT', 'WITH'].includes(this.upAt(k + 1))) {
+        if (this.isQuery(k + 1)) {
           out.push(this.query(k + 1, m));
         } else if (state === 'from') {
           out.push(...this.sqlScan(k + 1, m));
@@ -964,7 +974,7 @@ class Parser {
           break;
         case 'WHEN':
           if (nx === 'MATCHED' || (nx === 'NOT' && this.upAt(k + 2) === 'MATCHED')) {
-            k = this.find(k, new Set(['THEN']), b);
+            k = this.find(k, THEN, b);
             if (k < 0) return out;
             k++;
             continue;
@@ -1028,7 +1038,7 @@ class Parser {
           if (this.isOp(k + 1, '(')) {
             const m = this.match[k + 1];
             if (m > 0 && m < b) {
-              if (['SELECT', 'WITH'].includes(this.upAt(k + 2))) out.push(this.query(k + 2, m));
+              if (this.isQuery(k + 2)) out.push(this.query(k + 2, m));
               else out.push(this.region(k + 2, m));
               k = m + 1;
               continue;
@@ -1097,7 +1107,7 @@ class Parser {
   /** UPDATE ... SET col = expr, (cols) = (subquery), ... */
   private setList(k: number, b: number, out: Node[]): number {
     for (;;) {
-      const eq = this.find(k, new Set(['=']), b);
+      const eq = this.find(k, EQ, b);
       if (eq < 0) return k;
       k = eq + 1;
       const n = this.parseAt(k, b, () => this.cond());
@@ -1158,7 +1168,7 @@ class Parser {
       if (x.kind === 'op' && x.text === '(') {
         const m = this.match[k];
         if (m < 0 || m >= b) break;
-        if (['SELECT', 'WITH'].includes(this.upAt(k + 1))) out.push(this.query(k + 1, m));
+        if (this.isQuery(k + 1)) out.push(this.query(k + 1, m));
         else out.push(...this.exprList(k + 1, m));
         k = m;
       } else if (x.kind === 'ident' && x.up === 'CASE') {
@@ -1194,29 +1204,18 @@ class Parser {
   }
 
   cond(): Node | null {
-    return this.or();
+    return this.logic('OR');
   }
 
-  private or(): Node | null {
-    let l = this.and();
+  /** OR over AND over NOT, left to right. */
+  private logic(op: 'OR' | 'AND'): Node | null {
+    let l = op === 'OR' ? this.logic('AND') : this.not();
     if (!l) return null;
-    while (this.at('OR') && this.t[this.i].kind === 'ident') {
-      const op = this.i++;
-      const r = this.and();
+    while (this.at(op) && this.t[this.i].kind === 'ident') {
+      const at = this.i++;
+      const r = op === 'OR' ? this.logic('AND') : this.not();
       if (!r) return null;
-      l = node('logic', l.a, r.b, [l, r], { op: 'OR', at: op });
-    }
-    return l;
-  }
-
-  private and(): Node | null {
-    let l = this.not();
-    if (!l) return null;
-    while (this.at('AND') && this.t[this.i].kind === 'ident') {
-      const op = this.i++;
-      const r = this.not();
-      if (!r) return null;
-      l = node('logic', l.a, r.b, [l, r], { op: 'AND', at: op });
+      l = node('logic', l.a, r.b, [l, r], { op, at });
     }
     return l;
   }
@@ -1414,8 +1413,8 @@ class Parser {
         const m = this.close(a);
         if (m >= this.lim) return null;
         this.i = m + 1;
-        if (['SELECT', 'WITH'].includes(this.upAt(a + 1))) return node('query', a, m + 1, this.sqlScan(a + 1, m));
-        const asAt = this.find(a + 1, new Set(['AS']), m);
+        if (this.isQuery(a + 1)) return node('query', a, m + 1, this.sqlScan(a + 1, m));
+        const asAt = this.find(a + 1, AS, m);
         const items = asAt > a + 1 && this.isTypeName(asAt + 1, m) ? [node('cast', a + 1, m, [this.region(a + 1, asAt)], { op: 'AS' })] : this.exprList(a + 1, m);
         const p = node(items.length === 1 ? 'paren' : 'list', a, m + 1, items);
         // (self as t).method(...), (expr).attribute
@@ -1611,17 +1610,16 @@ class Parser {
     if (end < 0) return null;
     const kids: Node[] = [];
     let k = a + 1;
-    const stops = new Set(['WHEN', 'ELSE', 'END']);
     if (this.upAt(k) !== 'WHEN') {
-      const w = this.find(k, new Set(['WHEN']), end);
+      const w = this.find(k, WHEN, end);
       if (w < 0) return null;
       kids.push(this.region(k, w));
       k = w;
     }
     while (this.upAt(k) === 'WHEN' && k < end) {
-      const then = this.find(k + 1, new Set(['THEN']), end);
+      const then = this.find(k + 1, THEN, end);
       if (then < 0) return null;
-      const re = this.find(then + 1, stops, end + 1);
+      const re = this.find(then + 1, CASE_PARTS, end + 1);
       if (re < 0) return null;
       kids.push(node('when', k, re, [this.region(k + 1, then), this.region(then + 1, re)], { at: then }));
       k = re;

@@ -22,7 +22,8 @@ export interface Token {
 }
 
 const MULTI_OPS = [':=', '=>', '..', '||', '**', '<>', '!=', '~=', '^=', '<=', '>=', '<<', '>>'];
-const Q_CLOSERS: Record<string, string> = { '[': ']', '{': '}', '(': ')', '<': '>' };
+/** Closing character of a q-quote's opening one (others close themselves). */
+export const Q_CLOSERS: Record<string, string> = { '[': ']', '{': '}', '(': ')', '<': '>' };
 
 const isIdentStart = (ch: string) => /[A-Za-z_$#À-￿]/.test(ch);
 const isIdentPart = (ch: string) => /[A-Za-z0-9_$#À-￿]/.test(ch);
@@ -181,17 +182,4 @@ export function tokenize(src: string, opts: LexOptions = {}): Token[] {
     push('op', start, pos, startLine, startCol);
   }
   return tokens;
-}
-
-/** Converts a 0-based offset into a 1-based line/column. */
-export function lineColOf(src: string, offset: number): { line: number; col: number } {
-  let line = 1;
-  let lineStart = 0;
-  for (let k = 0; k < offset && k < src.length; k++) {
-    if (src[k] === '\n') {
-      line++;
-      lineStart = k + 1;
-    }
-  }
-  return { line, col: offset - lineStart + 1 };
 }

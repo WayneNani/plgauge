@@ -34,6 +34,27 @@ export function connect(cfg: ConnectConfig): Promise<oracledb.Connection> {
   return oracledb.getConnection({ user: cfg.user, password: cfg.password, connectString: cfg.connectString });
 }
 
+/** A quoted identifier: a schema named in mixed case ("MyApp") is not MYAPP. */
+export const quoteIdent = (x: string) => `"${x.replace(/"/g, '""')}"`;
+export const sqlLit = (x: string) => `'${x.replace(/'/g, "''")}'`;
+/** The first line of an error's message (Oracle adds the help URL below). */
+export const firstLine = (e: unknown) => (typeof e === 'string' ? e : (e as Error).message).split('\n')[0];
+
+export async function currentSchema(conn: oracledb.Connection): Promise<string> {
+  return (await conn.execute<[string]>(`select sys_context('USERENV', 'CURRENT_SCHEMA') from dual`)).rows![0][0];
+}
+
+/** Executes sql; an error carrying one of the codes (ORA-00955: already exists, …) is ignored. Returns whether it ran. */
+export async function tryExecute(conn: oracledb.Connection, sql: string, ...ignored: string[]): Promise<boolean> {
+  try {
+    await conn.execute(sql);
+    return true;
+  } catch (e) {
+    if (!ignored.some((c) => (e as Error).message.includes(c))) throw e;
+    return false;
+  }
+}
+
 export function dbIdent(s: string): string {
   if (!/^[A-Za-z][A-Za-z0-9_$#]*$/.test(s)) throw new Error(`Ungültiger Bezeichner: ${s}`);
   return s.toUpperCase();
@@ -112,8 +133,8 @@ export async function loadObject(conn: oracledb.Connection, owner: string, name:
   if (type === 'VIEW') {
     // a view the ALL_* views do not show (DBMS_METADATA may, with SELECT_CATALOG_ROLE): its
     // comments, triggers and text could be neither read nor checked, not even after a crash
-    const seen = (await conn.execute<[number]>(`select count(*) from all_views where owner = :o and view_name = :n`, { o: owner, n: name })).rows?.[0]?.[0] ?? 0;
-    if (!seen) throw new Error(`View ${owner}.${name} ist ohne SELECT- oder READ-Recht nicht sichtbar: nicht verändert`);
+    const seen = (await conn.execute<[string]>(`select text from all_views where owner = :o and view_name = :n`, { o: owner, n: name })).rows ?? [];
+    if (!seen.length) throw new Error(`View ${owner}.${name} ist ohne SELECT- oder READ-Recht nicht sichtbar: nicht verändert`);
     const original = await viewDdl(conn, owner, name);
     // CREATE OR REPLACE VIEW drops the comments: compile puts them back
     const t = await conn.execute<[string | null]>(`select comments from all_tab_comments where owner = :o and table_name = :n`, { o: owner, n: name });
@@ -124,9 +145,10 @@ export async function loadObject(conn: oracledb.Connection, owner: string, name:
     const settings: Record<string, string> = table || Object.keys(cols).length ? { comments: JSON.stringify({ table, cols }) } : {};
     // mixed length semantics and a length without BYTE/CHAR (CAST(x AS VARCHAR2(10))): which one
     // the view was created with cannot be told, a recompile could change its column
-    const raw = (await conn.execute<[string]>(`select text from all_views where owner = :o and view_name = :n`, { o: owner, n: name })).rows?.[0]?.[0] ?? '';
-    const lengths = await conn.execute<[string]>(`select distinct char_used from all_tab_columns where owner = :o and table_name = :n and char_used in ('B', 'C')`, { o: owner, n: name });
-    if ((lengths.rows ?? []).length > 1 && /\b(N?VARCHAR2?|N?CHAR|CHARACTER)\s*\(\s*\d+\s*\)/i.test(raw)) {
+    const u = await conn.execute<[string]>(
+      `select distinct char_used from all_tab_columns where owner = :o and table_name = :n and char_used in ('B', 'C')`, { o: owner, n: name });
+    const used = (u.rows ?? []).map((r) => r[0]);
+    if (used.length > 1 && /\b(N?VARCHAR2?|N?CHAR|CHARACTER)\s*\(\s*\d+\s*\)/i.test(seen[0][0] ?? '')) {
       throw new Error(`View ${owner}.${name} mischt BYTE- und CHAR-Spalten und hat Längen ohne BYTE/CHAR: nicht verändert`);
     }
     if (settings.comments) {
@@ -137,16 +159,10 @@ export async function loadObject(conn: oracledb.Connection, owner: string, name:
     }
     // CAST(… AS VARCHAR2(n)) without BYTE/CHAR takes the session's length semantics at CREATE:
     // compile the view with what its columns have (mixed: the default BYTE)
-    const u = await conn.execute<[string]>(
-      `select distinct char_used from all_tab_columns where owner = :o and table_name = :n and char_used in ('B', 'C')`, { o: owner, n: name });
-    const used = (u.rows ?? []).map((r) => r[0]);
     settings.nls_length_semantics = used.length === 1 && used[0] === 'C' ? 'CHAR' : 'BYTE';
     return { owner, name, type, original, processed: original, settings };
   }
-  const src = await conn.execute<[string]>(
-    `select text from all_source where owner = :o and name = :n and type = :t order by line`, { o: owner, n: name, t: type },
-  );
-  const original = (src.rows ?? []).map((r) => r[0]).join('');
+  const original = (await currentCode(conn, { owner, name, type }))?.text ?? '';
   const pp = await conn.execute(
     `declare l dbms_preprocessor.source_lines_t; s clob; begin
        l := dbms_preprocessor.get_post_processed_source(:t, :o, :n);
@@ -215,23 +231,13 @@ export async function viewFromDictionary(conn: oracledb.Connection, owner: strin
   }
   const cols = await conn.execute<[string]>(`select column_name from all_tab_columns where owner = :o and table_name = :n order by column_id`, { o: owner, n: name });
   const cons = await conn.execute<[string]>(`select constraint_type from all_constraints where owner = :o and table_name = :n and constraint_type in ('O', 'V')`, { o: owner, n: name });
-  const q = (x: string) => `"${x.replace(/"/g, '""')}"`;
   const types = new Set((cons.rows ?? []).map((r) => r[0]));
   // the text ends with WITH READ ONLY / CHECK OPTION as written (23ai); added only if not
   const written = /\bwith\s+(read\s+only|check\s+option)\s*$/i.test(text.trim());
   const tail = written ? '' : types.has('O') ? ' WITH READ ONLY' : types.has('V') ? ' WITH CHECK OPTION' : '';
   // BEQUEATH DEFINER is the default
   const bequeath = row[3] === 'CURRENT_USER' ? ' BEQUEATH CURRENT_USER' : '';
-  return `FORCE VIEW ${q(owner)}.${q(name)} (${(cols.rows ?? []).map((r) => q(r[0])).join(', ')})${bequeath} AS ${text.trim()}${tail}`;
-}
-
-/**
- * Compiles source (without CREATE) with the object's original settings, in the object's
- * schema (CURRENT_SCHEMA is switched for the statement if needed: objects of other
- * schemas need CREATE ANY PROCEDURE / TYPE / TRIGGER). Returns error text or null.
- */
-export async function compile(conn: oracledb.Connection, obj: SourceObject, source: string): Promise<string | null> {
-  return (await compileDetailed(conn, obj, source)).error;
+  return `FORCE VIEW ${quoteIdent(owner)}.${quoteIdent(name)} (${(cols.rows ?? []).map((r) => quoteIdent(r[0])).join(', ')})${bequeath} AS ${text.trim()}${tail}`;
 }
 
 export interface CompileOutcome {
@@ -251,16 +257,19 @@ export interface CompileOutcome {
   untouched?: boolean;
 }
 
+/**
+ * Compiles source (without CREATE) with the object's original settings, in the object's
+ * schema (CURRENT_SCHEMA is switched for the statement if needed: objects of other
+ * schemas need CREATE ANY PROCEDURE / TYPE / TRIGGER).
+ */
 export async function compileDetailed(conn: oracledb.Connection, obj: SourceObject, source: string): Promise<CompileOutcome> {
-  const cur = (await conn.execute<[string]>(`select sys_context('USERENV', 'CURRENT_SCHEMA') from dual`)).rows![0][0];
+  const cur = await currentSchema(conn);
   if (cur === obj.owner) return compileHere(conn, obj, source);
-  // quoted: a schema named in mixed case ("MyApp") is not MYAPP
-  const q = (x: string) => `"${x.replace(/"/g, '""')}"`;
-  await conn.execute(`alter session set current_schema = ${q(obj.owner)}`);
+  await conn.execute(`alter session set current_schema = ${quoteIdent(obj.owner)}`);
   try {
     return await compileHere(conn, obj, source);
   } finally {
-    await conn.execute(`alter session set current_schema = ${q(cur)}`);
+    await conn.execute(`alter session set current_schema = ${quoteIdent(cur)}`);
   }
 }
 
@@ -269,9 +278,7 @@ export async function compileDetailed(conn: oracledb.Connection, obj: SourceObje
  * view's table and column comments (from loadObject's settings, kept in the journal too).
  */
 async function keepProperties(conn: oracledb.Connection, obj: SourceObject): Promise<string | undefined> {
-  const q = (x: string) => `"${x.replace(/"/g, '""')}"`;
-  const lit = (x: string) => `'${x.replace(/'/g, "''")}'`;
-  const full = `${q(obj.owner)}.${q(obj.name)}`;
+  const full = `${quoteIdent(obj.owner)}.${quoteIdent(obj.name)}`;
   // (disabled by the statement itself, see withDisable; ALTER where that did not take)
   const status = obj.type === 'TRIGGER' && obj.settings.trigger_status === 'DISABLED'
     ? (await conn.execute<[string]>(`select status from all_triggers where owner = :o and trigger_name = :n`, { o: obj.owner, n: obj.name })).rows?.[0]?.[0]
@@ -280,7 +287,7 @@ async function keepProperties(conn: oracledb.Connection, obj: SourceObject): Pro
     try {
       await conn.execute(`alter trigger ${full} disable`);
     } catch (e) {
-      return `Trigger ${obj.name} bleibt aktiv (war deaktiviert): ${(e as Error).message.split('\n')[0]}`;
+      return `Trigger ${obj.name} bleibt aktiv (war deaktiviert): ${firstLine(e)}`;
     }
   }
   if (obj.type === 'VIEW' && obj.settings.comments) {
@@ -289,10 +296,10 @@ async function keepProperties(conn: oracledb.Connection, obj: SourceObject): Pro
     const comment = (sql: string) => conn.execute(sql).then(() => {}, (e: Error) => {
       // a column the mutant's text no longer has cannot take its comment (ORA-00904); anything
       // else (a missing COMMENT ANY TABLE for another schema's view) loses it: reported
-      if (!e.message.includes('ORA-00904')) failure ??= e.message.split('\n')[0];
+      if (!e.message.includes('ORA-00904')) failure ??= firstLine(e);
     });
-    if (c.table) await comment(`comment on table ${full} is ${lit(c.table)}`);
-    for (const [col, text] of Object.entries(c.cols)) await comment(`comment on column ${full}.${q(col)} is ${lit(text)}`);
+    if (c.table) await comment(`comment on table ${full} is ${sqlLit(c.table)}`);
+    for (const [col, text] of Object.entries(c.cols)) await comment(`comment on column ${full}.${quoteIdent(col)} is ${sqlLit(text)}`);
     if (failure) return `Kommentare der View ${obj.name} nicht wiederhergestellt: ${failure}`;
   }
   return undefined;
@@ -331,7 +338,7 @@ async function compileHere(conn: oracledb.Connection, obj: SourceObject, source:
   if (disabled) source = disabled;
   if (st.plsql_optimize_level) await conn.execute(`alter session set plsql_optimize_level = ${Number(st.plsql_optimize_level)}`);
   if (st.plsql_code_type) await conn.execute(`alter session set plsql_code_type = '${st.plsql_code_type.replace(/'/g, '')}'`);
-  await conn.execute(`alter session set plsql_ccflags = '${(st.plsql_ccflags ?? '').replace(/'/g, "''")}'`);
+  await conn.execute(`alter session set plsql_ccflags = ${sqlLit(st.plsql_ccflags ?? '')}`);
   if (st.nls_length_semantics) await conn.execute(`alter session set nls_length_semantics = ${st.nls_length_semantics === 'CHAR' ? 'CHAR' : 'BYTE'}`);
   // PL/Scope data of the unit stays as it was (code that inspects PL/Scope, e.g. plscope-utils)
   if (st.plscope_settings) await conn.execute(`alter session set plscope_settings = '${st.plscope_settings.replace(/'/g, '')}'`);
@@ -349,7 +356,7 @@ async function compileHere(conn: oracledb.Connection, obj: SourceObject, source:
     const msg = (e as Error).message;
     if (!msg.includes('ORA-24344')) {
       const off = (e as { offset?: number }).offset;
-      return { error: msg.split('\n')[0], offset: typeof off === 'number' && off >= prefix.length ? off - prefix.length : undefined };
+      return { error: firstLine(msg), offset: typeof off === 'number' && off >= prefix.length ? off - prefix.length : undefined };
     }
   }
   const warning = await keepProperties(conn, obj);
@@ -441,7 +448,7 @@ export async function restoreJournal(conn: oracledb.Connection, entries: Journal
       // with the ANY privilege that shows such objects in ALL_SOURCE / ALL_VIEWS
       const any = e.type === 'VIEW' ? ['SELECT ANY TABLE', 'READ ANY TABLE'] : e.type === 'TRIGGER' ? ['CREATE ANY TRIGGER'] : ['CREATE ANY PROCEDURE', 'EXECUTE ANY PROCEDURE'];
       const sees = dba === undefined && (e.owner === user || e.owner === schema
-        || ((await conn.execute<[number]>(`select count(*) from session_privs where privilege in (${any.map((p) => `'${p}'`).join(', ')})`)).rows?.[0]?.[0] ?? 0) > 0);
+        || ((await conn.execute<[number]>(`select count(*) from session_privs where privilege in (${any.map(sqlLit).join(', ')})`)).rows?.[0]?.[0] ?? 0) > 0);
       if (dba === 0 || sees) {
         // pltest never drops an object: someone did since, on purpose
         say(`  ✗ ${e.owner}.${e.name} existiert nicht mehr: Journal-Eintrag verworfen, nicht neu angelegt`);
@@ -480,7 +487,7 @@ export async function restoreAll(conn: oracledb.Connection, objs: SourceObject[]
   let failed = 0;
   for (const obj of objs) {
     // one object that cannot even be tried (its schema is gone, say) must not stop the others
-    const out = await compileDetailed(conn, obj, obj.original).catch((e: Error) => ({ error: e.message.split('\n')[0], warning: undefined }) as CompileOutcome);
+    const out = await compileDetailed(conn, obj, obj.original).catch((e: Error) => ({ error: firstLine(e), warning: undefined }) as CompileOutcome);
     const err = out.error;
     if (out.warning) say(`  ✗ ${out.warning}`);
     if (err) {
@@ -499,7 +506,7 @@ export async function restoreAll(conn: oracledb.Connection, objs: SourceObject[]
   if (recompile) {
     for (const s of schemas) {
       await conn.execute(`begin dbms_utility.compile_schema(:s, compile_all => false, reuse_settings => true); end;`, { s })
-        .catch((e: Error) => say(`  Hinweis: Neukompilieren von ${s} nicht möglich: ${e.message.split('\n')[0]}`));
+        .catch((e: Error) => say(`  Hinweis: Neukompilieren von ${s} nicht möglich: ${firstLine(e)}`));
     }
   }
   // materialized views on a replaced view or function are left NEEDS_COMPILE (compile_schema
@@ -509,8 +516,7 @@ export async function restoreAll(conn: oracledb.Connection, objs: SourceObject[]
       `select owner, name from all_dependencies where referenced_owner = :o and referenced_name = :n and type = 'MATERIALIZED VIEW'`,
       { o: obj.owner, n: obj.name },
     ).catch(() => ({ rows: [] as [string, string][] }));
-    const q = (x: string) => `"${x.replace(/"/g, '""')}"`;
-    for (const [o, n] of mv.rows ?? []) await conn.execute(`alter materialized view ${q(o)}.${q(n)} compile`).catch(() => {});
+    for (const [o, n] of mv.rows ?? []) await conn.execute(`alter materialized view ${quoteIdent(o)}.${quoteIdent(n)} compile`).catch(() => {});
   }
   say(`Originalcode von ${objs.length - failed} Objekten wiederhergestellt${failed ? `, ${failed} nicht (Journal-Eintrag bleibt)` : ''}`);
   // how many hold changed code still (their entries stay)
@@ -535,7 +541,7 @@ export async function objectErrors(conn: oracledb.Connection, obj: Pick<SourceOb
 /** Runs the statements of a SQL*Plus style script; "already exists" errors are skipped. */
 export async function runScript(conn: oracledb.Connection, statements: string[], where: string): Promise<void> {
   // a script may switch CURRENT_SCHEMA: the run's journal and lock stay where they were
-  const home = (await conn.execute<[string]>(`select sys_context('USERENV', 'CURRENT_SCHEMA') from dual`)).rows![0][0];
+  const home = await currentSchema(conn);
   try {
     for (const stmt of statements) {
       try {
@@ -543,10 +549,10 @@ export async function runScript(conn: oracledb.Connection, statements: string[],
       } catch (e) {
         const msg = (e as Error).message;
         if (/ORA-00955|ORA-01430|ORA-02260|ORA-02275|ORA-01920|ORA-24344/.test(msg)) continue;
-        throw new Error(`${where}: ${msg.split('\n')[0]}`);
+        throw new Error(`${where}: ${firstLine(msg)}`);
       }
     }
   } finally {
-    await conn.execute(`alter session set current_schema = "${home.replace(/"/g, '""')}"`).catch(() => {});
+    await conn.execute(`alter session set current_schema = ${quoteIdent(home)}`).catch(() => {});
   }
 }

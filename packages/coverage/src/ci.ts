@@ -130,8 +130,8 @@ export function toLcov(exp: CoverageExport, map?: SourceMap): string {
 /** Cobertura XML (GitLab coverage visualization, Jenkins, Azure DevOps). */
 export function toCobertura(exp: CoverageExport, map?: SourceMap): string {
   const fs = files(exp, map);
-  const count = (pred: (f: FileCov) => [number, number]) => fs.reduce((a, f) => {
-    const [c, t] = pred(f);
+  const sum = (list: FileCov[], count: (f: FileCov) => [number, number]) => list.reduce<[number, number]>((a, f) => {
+    const [c, t] = count(f);
     return [a[0] + c, a[1] + t];
   }, [0, 0]);
   const lineCount = (f: FileCov): [number, number] => [[...f.lines.values()].filter((h) => h > 0).length, f.lines.size];
@@ -140,8 +140,8 @@ export function toCobertura(exp: CoverageExport, map?: SourceMap): string {
     return [all.filter((b) => b[1] > 0).length, all.length];
   };
   const rate = ([c, t]: [number, number]) => (t ? (c / t).toFixed(4) : '1');
-  const [lc, lt] = count(lineCount);
-  const [bc, bt] = count(brCount);
+  const [lc, lt] = sum(fs, lineCount);
+  const [bc, bt] = sum(fs, brCount);
   const ts = Math.floor(Date.parse(exp.generated || new Date().toISOString()) / 1000) || 0;
   const out = [
     '<?xml version="1.0" ?>',
@@ -156,9 +156,7 @@ export function toCobertura(exp: CoverageExport, map?: SourceMap): string {
     byDir.set(d, [...(byDir.get(d) ?? []), f]);
   }
   for (const [dir, list] of byDir) {
-    const pl = list.reduce((a, f) => [a[0] + lineCount(f)[0], a[1] + lineCount(f)[1]], [0, 0]) as [number, number];
-    const pb = list.reduce((a, f) => [a[0] + brCount(f)[0], a[1] + brCount(f)[1]], [0, 0]) as [number, number];
-    out.push(`    <package name="${xml(dir.replace(/\//g, '.'))}" line-rate="${rate(pl)}" branch-rate="${rate(pb)}" complexity="0">`, '      <classes>');
+    out.push(`    <package name="${xml(dir.replace(/\//g, '.'))}" line-rate="${rate(sum(list, lineCount))}" branch-rate="${rate(sum(list, brCount))}" complexity="0">`, '      <classes>');
     for (const f of list) {
       const name = f.path.slice(f.path.lastIndexOf('/') + 1).replace(/\.[^.]*$/, '');
       out.push(`        <class name="${xml(name)}" filename="${xml(f.path)}" line-rate="${rate(lineCount(f))}" branch-rate="${rate(brCount(f))}" complexity="0">`, '          <methods/>', '          <lines>');

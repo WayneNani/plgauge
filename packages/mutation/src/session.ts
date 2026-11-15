@@ -153,12 +153,7 @@ export async function runTests(s: Session, monitor: oracledb.Connection, paths: 
   const t0 = performance.now();
   const res: RunResult = { tests: [], elapsedMs: 0, timedOut: false, killed: false, committed: false };
   try {
-    const r = await s.conn.execute(`BEGIN plmut_rt.run_tests(:p, :o); END;`, {
-      p: { val: paths.join(','), type: oracledb.DB_TYPE_CLOB },
-      o: { dir: oracledb.BIND_OUT, type: oracledb.DB_TYPE_CLOB },
-    });
-    const lob = (r.outBinds as { o: oracledb.Lob | null }).o;
-    const out = lob ? String(await lob.getData()) : '';
+    const out = await clobCall(s, `BEGIN plmut_rt.run_tests(:p, :o); END;`, { p: { val: paths.join(','), type: oracledb.DB_TYPE_CLOB } });
     // (a commit after a test that rolled back the whole transaction, marker included, is not seen)
     res.committed = out.includes('##plmut[committed]');
     res.tests = parseTeamCity(out);
@@ -186,8 +181,9 @@ export async function activate(s: Session, id: number): Promise<void> {
   await resetPackages(s);
 }
 
-async function clobCall(s: Session, block: string): Promise<string> {
-  const r = await s.conn.execute(block, { o: { dir: oracledb.BIND_OUT, type: oracledb.DB_TYPE_CLOB } });
+/** Executes a block; its CLOB out bind :o is the answer. */
+async function clobCall(s: Session, block: string, binds: Record<string, oracledb.BindParameter> = {}): Promise<string> {
+  const r = await s.conn.execute(block, { ...binds, o: { dir: oracledb.BIND_OUT, type: oracledb.DB_TYPE_CLOB } });
   const lob = (r.outBinds as { o: oracledb.Lob | null }).o;
   return lob ? String(await lob.getData()) : '';
 }
