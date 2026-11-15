@@ -121,18 +121,13 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     if (down) return;
     try {
       const c = await takeLock();
-      if (down) {
-        await c.close().catch(() => {});
-        return;
-      }
-      lock = c;
+      if (down) await c.close().catch(() => {});
+      else lock = c;
     } catch (e) {
       if ((e as Error).message.includes('anderer pltest-Lauf')) foreign = true;
       throw new Error(`Laufsperre verloren: ${firstLine(e)}${foreign ? ' – schon instrumentierter Code bleibt im Journal: pltest restore, sobald die Sperre frei ist' : ''}`);
     }
-  })().finally(() => {
-    checking = undefined;
-  }));
+  })().finally(() => { checking = undefined; }));
   // the lock confirmed before a change at the end (restore, trigger drop): without it another run
   // may own the schema, and this one leaves its changes to the journal
   const confirmed = () => keepLock().then(() => true, (e: Error) => {
@@ -143,7 +138,9 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
   // tests ran stays (a warning), like after a crashed run; returns how many stay changed
   const restoreOwn = async (objs: SourceObject[], c: oracledb.Connection = conn) => {
     const mine = new Set(objs.map((o) => `${o.owner}|${o.name}|${o.type}`));
-    return restoreJournal(c, (await journalEntries(c)).filter((e) => mine.has(`${e.owner}|${e.name}|${e.type}`)), say);
+    const n = await restoreJournal(c, (await journalEntries(c)).filter((e) => mine.has(`${e.owner}|${e.name}|${e.type}`)), say);
+    if (n) say(`FEHLER: ${n} Objekte nicht wiederhergestellt, ihr instrumentierter Code steht im Journal: pltest restore`);
+    return n;
   };
   // the logoff trigger this run created, dropped under a confirmed lock (a run that took the lock
   // meanwhile may have its own there now); one left behind is reported
@@ -192,9 +189,8 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
   process.on('SIGINT', onSig);
   process.on('SIGTERM', onSig);
   const restore: SourceObject[] = [];
-  let nls = 'BYTE';
   try {
-    nls = (await conn.execute<[string]>(`select value from nls_session_parameters where parameter = 'NLS_LENGTH_SEMANTICS'`)).rows?.[0]?.[0] ?? 'BYTE';
+    const nls = (await conn.execute<[string]>(`select value from nls_session_parameters where parameter = 'NLS_LENGTH_SEMANTICS'`)).rows?.[0]?.[0] ?? 'BYTE';
     await conn.execute(`alter session set current_schema = ${dbIdent(rtOwner)}`);
     const { banner, major } = await databaseInfo(conn);
     const sqlProbes = cfg.sqlProbes === 'auto' || cfg.sqlProbes === undefined ? major >= 23 : cfg.sqlProbes;
@@ -276,10 +272,9 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       await keepLock();
       restore.push(obj);
       const out = await replaceSourceDetailed(conn, obj, res.instrumented, 'coverage');
-      const errors = out.error;
       compileMs += performance.now() - t1;
-      if (errors) {
-        say(`  ✗ ${obj.name}: instrumentierter Code kompiliert nicht (${errors})`);
+      if (out.error) {
+        say(`  ✗ ${obj.name}: instrumentierter Code kompiliert nicht (${out.error})`);
         // rejected at once, never changed: the original is in place, nothing to restore
         if (out.untouched) restore.pop();
         // back at once; if that fails, the end of the run tries again (it stays in restore)
@@ -287,7 +282,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
           restore.pop();
           say(`    Original wieder aktiv`);
         }
-        maps.push({ error: `Kompilierung: ${errors}`, obj });
+        maps.push({ error: `Kompilierung: ${out.error}`, obj });
         continue;
       }
       maps.push(res.map);
@@ -328,7 +323,6 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     }
     const unrestored = await restoreOwn(restore);
     restore.length = 0;
-    if (unrestored) say(`FEHLER: ${unrestored} Objekte nicht wiederhergestellt, ihr instrumentierter Code steht im Journal: pltest restore`);
 
     // Flaky: the result changed although our instrumentation was not involved (baseline runs and
     // the run with utPLSQL's own coverage). They are left out of the equivalence check.
@@ -399,14 +393,10 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     await dropLogoff(fin).catch(() => {});
     if (logoff) say('FEHLER: Trigger cov$_logoff nicht entfernt: pltest restore');
     try {
-      if (restore.length) {
-        const n = await confirmed()
-          ? await restoreOwn(restore, fin).catch((e: Error) => {
-            say(`FEHLER: Originale nicht wiederhergestellt (${firstLine(e)}), der instrumentierte Code steht im Journal: pltest restore`);
-            return 0;
-          })
-          : (say(`FEHLER: ${restore.length} Objekte nicht wiederhergestellt (Laufsperre nicht bestätigt), ihr instrumentierter Code steht im Journal: pltest restore`), 0);
-        if (n) say(`FEHLER: ${n} Objekte nicht wiederhergestellt, ihr instrumentierter Code steht im Journal: pltest restore`);
+      if (restore.length && !(await confirmed())) {
+        say(`FEHLER: ${restore.length} Objekte nicht wiederhergestellt (Laufsperre nicht bestätigt), ihr instrumentierter Code steht im Journal: pltest restore`);
+      } else if (restore.length) {
+        await restoreOwn(restore, fin).catch((e: Error) => say(`FEHLER: Originale nicht wiederhergestellt (${firstLine(e)}), der instrumentierte Code steht im Journal: pltest restore`));
       }
     } finally {
       if (fin !== conn) await fin.close().catch(() => {});

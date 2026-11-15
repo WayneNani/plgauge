@@ -76,18 +76,12 @@ export function viewQuery(statement: string): string {
   let depth = 0;
   for (let i = 0; i < statement.length; i++) {
     const c = statement[i];
-    if (c === '"' || c === "'") {
-      const e = statement.indexOf(c, i + 1);
+    // a quote, quoted name or comment: skipped to its end
+    const close = c === '"' || c === "'" ? c : c === '-' && statement[i + 1] === '-' ? '\n' : c === '/' && statement[i + 1] === '*' ? '*/' : '';
+    if (close) {
+      const e = statement.indexOf(close, i + close.length);
       if (e < 0) break;
-      i = e;
-    } else if (c === '-' && statement[i + 1] === '-') {
-      const e = statement.indexOf('\n', i);
-      if (e < 0) break;
-      i = e;
-    } else if (c === '/' && statement[i + 1] === '*') {
-      const e = statement.indexOf('*/', i + 2);
-      if (e < 0) break;
-      i = e + 1;
+      i = e + close.length - 1;
     } else if (c === '(') depth++;
     else if (c === ')') depth--;
     else if (depth === 0 && /[aA]/.test(c) && /[sS]/.test(statement[i + 1] ?? '') && !/[\w$#]/.test(statement[i - 1] ?? '') && !/[\w$#]/.test(statement[i + 2] ?? '')) {
@@ -194,9 +188,7 @@ export async function lockRun(conn: oracledb.Connection, tool: string): Promise<
   try {
     await conn.execute(`select tool from pltest_lock where tool = :t for update nowait`, { t: tool });
   } catch (e) {
-    if ((e as Error).message.includes('ORA-00054')) {
-      throw new Error('Auf diesem Schema läuft gerade ein anderer pltest-Lauf; zwei Läufe würden sich gegenseitig den Code zurücksetzen');
-    }
-    throw e;
+    if (!(e as Error).message.includes('ORA-00054')) throw e;
+    throw new Error('Auf diesem Schema läuft gerade ein anderer pltest-Lauf; zwei Läufe würden sich gegenseitig den Code zurücksetzen');
   }
 }

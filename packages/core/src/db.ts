@@ -68,9 +68,9 @@ export async function utInfoContext(conn: oracledb.Connection): Promise<string> 
   try {
     const r = await conn.execute(`begin :o := ut_utils.ut_owner(); end;`, { o: { dir: oracledb.BIND_OUT, type: oracledb.STRING } });
     const o = (r.outBinds as { o: string | null }).o;
-    if (o && /^[A-Za-z][A-Za-z0-9_$#]*$/.test(o)) return `${o.toUpperCase()}_INFO`;
+    if (o) return `${dbIdent(o)}_INFO`;
   } catch {
-    // an older utPLSQL without ut_owner: the usual name
+    // an older utPLSQL without ut_owner (or an owner name dbIdent refuses): the usual name
   }
   return 'UT3_INFO';
 }
@@ -360,12 +360,8 @@ async function compileHere(conn: oracledb.Connection, obj: SourceObject, source:
     }
   }
   const warning = await keepProperties(conn, obj);
-  const err = await conn.execute<[number, string]>(
-    `select line, text from all_errors where owner = :o and name = :n and type = :t and attribute = 'ERROR' order by sequence`,
-    { o: obj.owner, n: obj.name, t: obj.type },
-  );
-  if (err.rows?.length) return { error: err.rows.slice(0, 3).map((r) => `Zeile ${r[0]}: ${r[1].trim()}`).join('; '), warning };
-  return { error: null, warning };
+  const err = await objectErrors(conn, obj);
+  return { error: err.length ? err.slice(0, 3).map((e) => `Zeile ${e.line}: ${e.text}`).join('; ') : null, warning };
 }
 
 /**
@@ -460,16 +456,14 @@ export async function restoreJournal(conn: oracledb.Connection, entries: Journal
       continue;
     }
     // noted before its compile and not settled, or by an older version (other fingerprints): no
-    // comparison possible, the original goes back
+    // comparison possible, the original goes back; pltest's code: the text it was about to
+    // compile, the one before, or the original itself
     const comparable = e.currentSha?.startsWith('x') && e.pending === 0;
-    if (comparable) {
-      // pltest's: the text it was about to compile, the one before, or the original itself
-      const ours = new Set([e.currentSha, e.prevSha, codeFingerprint(e.object.type, e.object.original)]);
-      if (cur && !ours.has(cur.sha) && !/plmut_ctl\.|plmut\$a|cov\$\./i.test(cur.text)) {
-        say(`  ✗ ${e.owner}.${e.name} wurde nach dem abgebrochenen Lauf geändert: Journal-Eintrag verworfen, die neuere Fassung bleibt`);
-        await journalForget(conn, e.object);
-        continue;
-      }
+    if (comparable && cur && ![e.currentSha, e.prevSha, codeFingerprint(e.object.type, e.object.original)].includes(cur.sha)
+      && !/plmut_ctl\.|plmut\$a|cov\$\./i.test(cur.text)) {
+      say(`  ✗ ${e.owner}.${e.name} wurde nach dem abgebrochenen Lauf geändert: Journal-Eintrag verworfen, die neuere Fassung bleibt`);
+      await journalForget(conn, e.object);
+      continue;
     }
     todo.push(e.object);
   }
@@ -488,13 +482,12 @@ export async function restoreAll(conn: oracledb.Connection, objs: SourceObject[]
   for (const obj of objs) {
     // one object that cannot even be tried (its schema is gone, say) must not stop the others
     const out = await compileDetailed(conn, obj, obj.original).catch((e: Error) => ({ error: firstLine(e), warning: undefined }) as CompileOutcome);
-    const err = out.error;
     if (out.warning) say(`  ✗ ${out.warning}`);
-    if (err) {
-      say(`  ✗ Wiederherstellung von ${obj.name} fehlgeschlagen: ${err}`);
+    if (out.error) {
+      say(`  ✗ Wiederherstellung von ${obj.name} fehlgeschlagen: ${out.error}`);
       // compile errors ("Zeile n: …"): the original is in place, only invalid; anything else
       // left the changed code there and the entry must stay
-      if (!/^Zeile \d+:/.test(err)) {
+      if (!/^Zeile \d+:/.test(out.error)) {
         failed++;
         continue;
       }

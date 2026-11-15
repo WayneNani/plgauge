@@ -26,8 +26,7 @@ export function unitLineOf(m: Mutant): number {
 /** "PACKAGE BODY shop_pricing" → type and dictionary name. */
 export function splitUnit(unit: string): { type: string; name: string } {
   const m = /^(PACKAGE BODY|TYPE BODY|PROCEDURE|FUNCTION|TRIGGER) (.+)$/.exec(unit);
-  if (!m) return { type: '', name: unit };
-  return { type: m[1], name: objectName(m[2]) };
+  return m ? { type: m[1], name: objectName(m[2]) } : { type: '', name: unit };
 }
 
 export class CoverageIndex {

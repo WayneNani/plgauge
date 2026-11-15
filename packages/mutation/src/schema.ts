@@ -48,6 +48,9 @@ export interface Region {
 /** Key of a view block for the broken set of buildSchema. */
 export const blockKey = (unitKey: string, scope: [number, number]) => `${unitKey}@${scope[0]}:${scope[1]}`;
 
+/** The main block of an ordered view: it gets no wrapper (its order must hold), its points run one by one. */
+export const orderedMain = (u: Unit, scope?: [number, number]) => !!u.ordered && !!u.main && scope?.[0] === u.main[0] && scope?.[1] === u.main[1];
+
 export interface SchemaUnit {
   key: string;
   type: string;
@@ -100,9 +103,7 @@ export function buildSchema(ms: Mutant[], dropped: Set<number> = new Set(), naiv
   for (const m of ms) {
     let e = byUnit.get(m.unitRef);
     if (!e) byUnit.set(m.unitRef, (e = { f: m.sourceFile, points: new Map() }));
-    const list = e.points.get(m.point) ?? [];
-    list.push(m);
-    e.points.set(m.point, list);
+    (e.points.get(m.point) ?? e.points.set(m.point, []).get(m.point)!).push(m);
   }
   const out: SchemaUnit[] = [];
   let loopId = 0;
@@ -116,8 +117,7 @@ export function buildSchema(ms: Mutant[], dropped: Set<number> = new Set(), naiv
     let order = 0;
     const dups = new Map<string, Node>();
     // blocks without wrapper: failed before, or the view's ordered main block
-    const isBroken = (scope: [number, number]) =>
-      broken.has(blockKey(su.key, scope)) || (!!u.ordered && !!u.main && scope[0] === u.main[0] && scope[1] === u.main[1]);
+    const isBroken = (scope: [number, number]) => broken.has(blockKey(su.key, scope)) || orderedMain(u, scope);
     const unrecorded: Mutant[] = [];
     const lits = new Map<string, Node>();
     const dupNode = (p: Point, scope: [number, number], ctx: Point['ctx']) => {
@@ -430,60 +430,33 @@ class Renderer {
 
   point(n: Node) {
     const a = this.active;
-    if (n.dup && (this.su.type === 'VIEW' || n.p.union)) {
-      if (n.dup.reach.length) this.viewDup(n);
-      else this.orig(n);
-      return;
-    }
-    if (n.ms.length && n.p.inline) {
-      this.viewInline(n);
-      return;
-    }
-    if (n.lit) {
-      if (n.ms.length) this.lit(n);
-      else this.orig(n);
-      return;
-    }
-    if (n.loop > 0) {
-      // deterministic timeout instead of the wall clock
-      this.write(this.guard(n));
-      return;
-    }
-    if (!n.ms.length) {
-      this.orig(n);
-      return;
-    }
-    if (n.dup) {
-      this.dup(n);
-      return;
-    }
+    if (n.dup && (this.su.type === 'VIEW' || n.p.union)) return n.dup.reach.length ? this.viewDup(n) : this.orig(n);
+    if (n.ms.length && n.p.inline) return this.viewInline(n);
+    if (n.lit) return n.ms.length ? this.lit(n) : this.orig(n);
+    // deterministic timeout instead of the wall clock
+    if (n.loop > 0) return this.write(this.guard(n));
+    if (!n.ms.length) return this.orig(n);
+    if (n.dup) return this.dup(n);
     const p = n.p;
     const base = n.ms[0].id;
     const count = n.ms[n.ms.length - 1].id - base + 1;
     // Keep tokens apart: "ELSE" directly before a switch must not fuse into "ELSEIF".
     if (p.kind !== 'insert') this.spaceBefore();
     const start = this.b.length;
-    switch (true) {
-      case p.kind === 'stmt': {
-        const id = n.ms[0].id;
-        this.write(`IF ${a} = -1 THEN ${this.ctl}.reach(${id}, 1); END IF; IF ${a} <> ${id} THEN `);
-        this.orig(n);
+    if (p.kind === 'stmt') {
+      this.write(`IF ${a} = -1 THEN ${this.ctl}.reach(${base}, 1); END IF; IF ${a} <> ${base} THEN `);
+      this.orig(n);
+      this.write(' END IF;');
+    } else if (p.kind === 'insert') {
+      this.write(` IF ${a} = -1 THEN ${this.ctl}.reach(${base}, ${count}); END IF;`);
+      for (const m of n.ms) {
+        this.write(` IF ${a} = ${m.id} THEN `);
+        this.variantRegion(m.mutated.trim(), p, m.id);
         this.write(' END IF;');
-        break;
       }
-      case p.kind === 'insert': {
-        this.write(` IF ${a} = -1 THEN ${this.ctl}.reach(${base}, ${count}); END IF;`);
-        for (const m of n.ms) {
-          this.write(` IF ${a} = ${m.id} THEN `);
-          this.variantRegion(m.mutated.trim(), p, m.id);
-          this.write(' END IF;');
-        }
-        break;
-      }
-      default: {
-        // bool in PL/SQL, value anywhere
-        this.cases(n, `CASE ${a} WHEN -1 THEN ${this.ctl}.hit(${base}, ${count}) ELSE ${a} END`, n.ms, (m) => `${m.id}`, (m) => `(${m.mutated})`);
-      }
+    } else {
+      // bool in PL/SQL, value anywhere
+      this.cases(n, `CASE ${a} WHEN -1 THEN ${this.ctl}.hit(${base}, ${count}) ELSE ${a} END`, n.ms, (m) => `${m.id}`, (m) => `(${m.mutated})`);
     }
     this.region(start, p, 0);
     this.spaceAfter(p.end);

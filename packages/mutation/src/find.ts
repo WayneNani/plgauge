@@ -329,27 +329,24 @@ class Finder {
   /** The innermost subprogram (or unit) being walked. */
   private scopeNode!: Node;
 
-  /** The source as written: $IF branches the preprocessing dropped are still in it. */
-  private orig: string;
-
-  constructor(private path: string, text: string) {
-    this.orig = text;
-    const r = prepare(text);
+  /** orig: the source as written: $IF branches the preprocessing dropped are still in it. */
+  constructor(private path: string, private orig: string) {
+    const r = prepare(orig);
     this.src = r.text;
     this.blocks = r.blocks;
     // offsets are kept by the preprocessing: bytes come from the original text
-    this.byteAt = new Uint32Array(text.length + 1);
+    this.byteAt = new Uint32Array(orig.length + 1);
     let b = 0;
-    for (let i = 0; i < text.length; i++) {
+    for (let i = 0; i < orig.length; i++) {
       this.byteAt[i] = b;
-      const c = text.charCodeAt(i);
+      const c = orig.charCodeAt(i);
       if (c >= 0xd800 && c <= 0xdbff) {
         this.byteAt[i + 1] = b;
         b += 4;
         i++;
       } else b += utf8Len(c);
     }
-    this.byteAt[text.length] = b;
+    this.byteAt[orig.length] = b;
   }
 
   run(): Omit<SourceFile, 'src'> {
@@ -399,7 +396,7 @@ class Finder {
     return this.byteAt[this.t[k].end];
   }
   private text(n: Node): string {
-    return this.src.slice(this.t[n.a].start, this.t[n.b - 1].end);
+    return this.span(n.a, n.b - 1);
   }
   private inConditional(charIndex: number): boolean {
     return this.blocks.some(([a, b]) => a <= charIndex && charIndex < b);
@@ -1075,10 +1072,7 @@ class Finder {
   }
 
   private stmt(n: Node, env: Env) {
-    if (n.op === 'loop') {
-      const at = this.eb(n.at!);
-      if (!this.inConditional(this.t[n.at!].end)) this.loops.push({ unit: this.unit, at });
-    }
+    if (n.op === 'loop' && !this.inConditional(this.t[n.at!].end)) this.loops.push({ unit: this.unit, at: this.eb(n.at!) });
     // SBR: simple statements; RETURN, NULL and control flow stay
     if (sbrTarget(n)) this.point('SBR', 'stmt', n, env, 'plsql', this.raises(n) ? 'fehlerpfad' : '', ['NULL;']);
   }
@@ -1116,10 +1110,9 @@ class Finder {
     if (!stmts.length) return;
     // same mutant as SBR (EXIT WHEN gets one, a plain EXIT none)
     if (stmts.length === 1 && sbrTarget(stmts[0])) return;
-    const first = stmts[0];
     const last = stmts[stmts.length - 1];
-    const a = first.at2 ?? first.a;
-    const body = this.src.slice(this.t[a].start, this.t[last.b - 1].end);
+    const a = stmts[0].at2 ?? stmts[0].a;
+    const body = this.span(a, last.b - 1);
     if (body.replace(/\s+/g, '').toUpperCase() === 'NULL;') return;
     this.pointSpan('EXC', 'stmt', a, last.b - 1, body, env, 'plsql', 'fehlerpfad', ['NULL;']);
   }
@@ -1221,11 +1214,9 @@ class Finder {
     for (let k = 0; k < ops.length; k++) {
       const op = this.t[ops[k]];
       const last = operands[k + 1].b - 1;
-      const span = this.src.slice(this.t[a].start, this.t[last].end);
+      const span = this.span(a, last);
       if (op.text === '||') {
-        if (mixed) continue;
-        const left = this.src.slice(this.t[a].start, this.t[operands[k].b - 1].end);
-        this.pointSpan('AOR', 'value', a, last, span, env, env.ctx, '', [left]);
+        if (!mixed) this.pointSpan('AOR', 'value', a, last, span, env, env.ctx, '', [this.span(a, operands[k].b - 1)]);
         continue;
       }
       // n MOD m becomes n * m, as for the function MOD(n, m)
@@ -1269,8 +1260,7 @@ class Finder {
       if (texts.length === 2) this.point('AOR', 'value', f, env, env.ctx, '', [`(${texts[0]}) * (${texts[1]})`]);
       return;
     }
-    if (name !== 'NVL' && name !== 'COALESCE') return;
-    if (texts.length < 2 || (name === 'NVL' && texts.length !== 2)) return;
+    if ((name !== 'NVL' && name !== 'COALESCE') || texts.length < 2 || (name === 'NVL' && texts.length !== 2)) return;
     const mutants = [texts[0], texts.length === 2 ? texts[1] : `${this.t[f.a].text}(${texts.slice(1).join(', ')})`];
     this.point('NUL', 'value', f, env, env.ctx, '', mutants);
   }
@@ -1281,8 +1271,7 @@ class Finder {
     const attr = this.t[n.at + 1].up;
     const swapped = attr === 'FOUND' ? 'NOTFOUND' : attr === 'NOTFOUND' ? 'FOUND' : null;
     if (!swapped) return;
-    const cursor = this.src.slice(this.t[n.a].start, this.t[n.at - 1].end);
-    this.point('CUR', 'bool', n, env, 'plsql', '', [`${cursor}%${swapped}`]);
+    this.point('CUR', 'bool', n, env, 'plsql', '', [`${this.span(n.a, n.at - 1)}%${swapped}`]);
   }
 
   /** CUR: a FOR loop loses its first or its last iteration. */
@@ -1440,21 +1429,12 @@ class Finder {
           if (up(i + 1) === '+' && up(i + 2) === ')' && own[i + 2] === own[i] + 2) clause('JOI', i, i + 2, ['']);
           break;
         case 'UNION':
-          if (member) {
-            this.skipped++;
-            break;
-          }
-          if (up(i + 1) === 'ALL') {
-            if (recursive) this.skipped++;
-            else clause('UNI', i, i + 1, ['UNION']);
-          }
+          if (member || (recursive && up(i + 1) === 'ALL')) this.skipped++;
+          else if (up(i + 1) === 'ALL') clause('UNI', i, i + 1, ['UNION']);
           else clause('UNI', i, i, ['UNION ALL']);
           break;
-        case 'INTERSECT':
-          clause('UNI', i, i, ['MINUS']);
-          break;
-        case 'MINUS': case 'EXCEPT':
-          clause('UNI', i, i, ['INTERSECT']);
+        case 'INTERSECT': case 'MINUS': case 'EXCEPT':
+          clause('UNI', i, i, [w === 'INTERSECT' ? 'MINUS' : 'INTERSECT']);
           break;
         case 'ORDER': {
           let b = i + 1;
@@ -1599,8 +1579,7 @@ class Finder {
     const close = this.close(f.a + 1);
     const tail = this.src.slice(this.t[close].end, this.t[f.b - 1].end);
     if (this.t[arg.a].up === 'DISTINCT' || this.t[arg.a].up === 'UNIQUE') {
-      const inner = this.src.slice(this.t[arg.a + 1].start, this.t[arg.b - 1].end);
-      this.point('AGR', 'value', f, env, 'sql', '', [`${this.t[f.a].text}(${inner})${tail}`]);
+      this.point('AGR', 'value', f, env, 'sql', '', [`${this.t[f.a].text}(${this.span(arg.a + 1, arg.b - 1)})${tail}`]);
     } else if (texts[0] !== '*' && !isLiteral(texts[0]) && !/^ALL\b/i.test(texts[0])) {
       this.point('AGR', 'value', f, env, 'sql', '', [`${this.t[f.a].text}(*)${tail}`]);
     }

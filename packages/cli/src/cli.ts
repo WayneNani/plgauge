@@ -35,7 +35,7 @@ import {
 import { renderHtml } from '@pltest/report';
 import {
   buildSchema, compare, CoverageIndex, crossCheck, crossCheckText, htmlReport, jsonReport, mutationTestingReport, parseDbUrl,
-  loadConfig as loadProject, mutateFiles, projectCoverageConfig, projectMutants, runMutation, score, switchable, textReport,
+  loadConfig as loadProject, mutateFiles, projectCoverageConfig, projectMutants, runMutation, switchable, textReport,
   type LinkedResult, type Point,
 } from '@pltest/mutation';
 
@@ -85,6 +85,19 @@ function enforce(violations: string[]) {
   process.exitCode = 3;
 }
 
+/** --min-score on mutation results (check, mutate run): only ERRORs is no pass, no mutants fail nothing; an aborted run's partial score gates nothing. */
+function scoreGate(results: { status: string }[], min: number | undefined, aborted: boolean, print = false): void {
+  const valid = results.filter((r) => ['KILLED', 'TIMEOUT', 'MEMORY', 'SURVIVED', 'NOT_COVERED'].includes(r.status));
+  const det = valid.filter((r) => ['KILLED', 'TIMEOUT', 'MEMORY'].includes(r.status)).length;
+  const score = valid.length ? (100 * det) / valid.length : 100;
+  if (print) console.error(`Mutation Score ${score.toFixed(1)} % (${det}/${valid.length})`);
+  if (min === undefined) return;
+  if (!valid.length && results.some((r) => r.status === 'ERROR')) {
+    console.error('Kein Mutant bewertbar (nur Fehler): die Schwelle lässt sich nicht prüfen');
+    process.exitCode = 1;
+  } else if (!aborted && score + 1e-9 < min) enforce([`Mutation Score: ${score.toFixed(1)} % < ${min} %`]);
+}
+
 function loadConfig(path: string | undefined): RunConfig {
   if (!path) throw new Error('--config fehlt');
   const cfg = JSON.parse(readFileSync(path, 'utf8')) as RunConfig;
@@ -106,18 +119,16 @@ async function main() {
       const project = configFile || !db ? undefined : args.shift() ?? '.';
       const cfg = project === undefined ? loadConfig(configFile) : await projectCoverageConfig(project, db!, !skipInstall, (m) => console.error(m));
       const report = await runCoverage(cfg);
+      let exp = toCoverageExport(report);
       mkdirSync(out, { recursive: true });
       writeFileSync(join(out, 'coverage.json'), JSON.stringify(report, null, 1));
-      writeFileSync(join(out, 'plcov-coverage.json'), JSON.stringify(toCoverageExport(report), null, 1));
+      writeFileSync(join(out, 'plcov-coverage.json'), JSON.stringify(exp, null, 1));
       writeFileSync(join(out, 'index.html'), renderHtml(report));
       console.error(`Bericht: ${join(out, 'index.html')}`);
       if (!report.equivalent) {
         console.error('Testergebnisse mit Instrumentierung weichen ab');
         process.exitCode = 4;
       }
-      // changed code left in the schema: always a failure (set again after any gate below)
-      const unrestored = report.unrestored ?? 0;
-      let exp = toCoverageExport(report);
       if (diffRef) {
         const files = project !== undefined ? mutateFiles(loadProject(project), project) : src ? sqlFiles(src) : [];
         if (!files.length) throw new Error('--diff braucht ein Projekt oder --src mit den Quelldateien');
@@ -126,8 +137,9 @@ async function main() {
         console.error(`Geänderter Code (seit ${diffRef}): Anweisungen ${q.stmt.covered}/${q.stmt.total} · Branches ${q.branch.covered}/${q.branch.total} · Bedingungen ${q.cond.covered}/${q.cond.total}`);
       }
       enforce(checkQuotas(exp, th.cov));
-      if (unrestored) {
-        console.error(`FEHLER: ${unrestored} Objekte nicht wiederhergestellt: pltest restore`);
+      // changed code left in the schema: always a failure (set after the gate above)
+      if (report.unrestored) {
+        console.error(`FEHLER: ${report.unrestored} Objekte nicht wiederhergestellt: pltest restore`);
         process.exitCode = 1;
       }
       break;
@@ -181,19 +193,12 @@ async function main() {
       const src = opt('src');
       const j = JSON.parse(readFileSync(file, 'utf8'));
       if (Array.isArray(j.results)) {
-        const valid = j.results.filter((r: { status: string }) => ['KILLED', 'TIMEOUT', 'MEMORY', 'SURVIVED', 'NOT_COVERED'].includes(r.status));
-        const det = valid.filter((r: { status: string }) => ['KILLED', 'TIMEOUT', 'MEMORY'].includes(r.status)).length;
-        const score = valid.length ? (100 * det) / valid.length : 100;
-        const errors = j.results.some((r: { status: string }) => r.status === 'ERROR');
-        console.error(`Mutation Score ${score.toFixed(1)} % (${det}/${valid.length})`);
         // an aborted run's partial score says nothing (as in mutate run)
+        scoreGate(j.results, j.aborted ? undefined : th.score, false, true);
         if (j.aborted) {
           console.error(`Lauf abgebrochen: ${j.aborted}`);
           process.exitCode = 1;
-        } else if (th.score !== undefined && !valid.length && errors) {
-          console.error('Kein Mutant bewertbar (nur Fehler): die Schwelle lässt sich nicht prüfen');
-          process.exitCode = 1;
-        } else if (th.score !== undefined && score + 1e-9 < th.score) enforce([`Mutation Score: ${score.toFixed(1)} % < ${th.score} %`]);
+        }
       } else {
         let exp = loadExport(file);
         if (diffRef) {
@@ -307,15 +312,8 @@ async function main() {
       if (rep.aborted) process.exitCode = 1;
       if (jsonOut) writeFileSync(jsonOut, jsonReport(rep));
       if (reportOut) writeFileSync(reportOut, reportOut.endsWith('.html') ? htmlReport(rep, dir) : mutationTestingReport(rep, dir));
-      // nothing to score (no mutants in the diff, say): nothing fails the gate, as in pltest check
-      const scored = rep.results.some((r) => ['KILLED', 'TIMEOUT', 'MEMORY', 'SURVIVED', 'NOT_COVERED'].includes(r.status));
-      // an aborted run's partial score says nothing: its exit code (1) stands
-      if (minScore !== undefined && scored && !rep.aborted && score(rep) + 1e-9 < minScore) enforce([`Mutation Score: ${score(rep).toFixed(1)} % < ${minScore} %`]);
-      // mutants, but none scored (all ERROR: a unit that could not be compiled into): no pass
-      if (minScore !== undefined && !scored && rep.results.some((r) => r.status === 'ERROR')) {
-        console.error('Kein Mutant bewertbar (nur Fehler): die Schwelle lässt sich nicht prüfen');
-        process.exitCode = 1;
-      }
+      // (an aborted run's exit code (1) stands)
+      scoreGate(rep.results, minScore, !!rep.aborted);
       // changed code left in the schema outranks the score gate
       if (rep.unrestored?.length) process.exitCode = 1;
       break;

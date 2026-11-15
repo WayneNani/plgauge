@@ -66,8 +66,6 @@ export async function installRuntime(conn: oracledb.Connection): Promise<void> {
   await compileDdl(conn, RT_BODY, 'PACKAGE BODY', 'PLMUT_RT');
 }
 
-export { contextName };
-
 /** Context and plmut_ctl. */
 export async function installControl(conn: oracledb.Connection): Promise<void> {
   const schema = (await conn.execute<[string]>(`select sys_context('USERENV','CURRENT_SCHEMA') from dual`)).rows![0][0];
@@ -190,9 +188,7 @@ export async function hits(s: Session): Promise<Map<string, number[]>> {
     const id = Number(line.slice(k + 1));
     if (!Number.isFinite(id)) continue;
     const test = line.slice(0, k);
-    const list = m.get(test) ?? [];
-    list.push(id);
-    m.set(test, list);
+    (m.get(test) ?? m.set(test, []).get(test)!).push(id);
   }
   return m;
 }
@@ -223,17 +219,9 @@ export const isMemory = (e?: Error) => !!e && /ORA-04036|ORA-04030/.test(e.messa
 
 /** Reads the TeamCity service messages that utPLSQL prints. */
 export function parseTeamCity(out: string): TestResult[] {
-  const tests: TestResult[] = [];
+  // (in the order of first mention)
   const index = new Map<string, TestResult>();
-  const get = (name: string) => {
-    let t = index.get(name);
-    if (!t) {
-      t = { name, failed: false, ignored: false, durationMs: 0, message: '' };
-      index.set(name, t);
-      tests.push(t);
-    }
-    return t;
-  };
+  const get = (name: string) => index.get(name) ?? index.set(name, { name, failed: false, ignored: false, durationMs: 0, message: '' }).get(name)!;
   for (let line of out.split('\n')) {
     line = line.trim();
     if (!line.startsWith('##teamcity[') || !line.endsWith(']')) continue;
@@ -262,7 +250,7 @@ export function parseTeamCity(out: string): TestResult[] {
       }
     }
   }
-  return tests;
+  return [...index.values()];
 }
 
 /** name='value' pairs with TeamCity escapes (|' |n |r || |[ |]). */

@@ -41,19 +41,16 @@ export function textReport(rep: Report): string {
   const out: string[] = [];
   const line = (r: Result) =>
     `  ${r.status.padEnd(11)} ${basename(r.file)}:${r.line}  ${r.op}  ${r.sub}  ${oneLine(r.original)} → ${oneLine(r.mutated)}`;
+  const section = (title: string, rs: Result[], f = line) => {
+    if (rs.length) out.push('', title, ...rs.map(f));
+  };
   const order = ['pruefung', 'fehlerpfad', 'funktion', ''];
   const surv = rep.results.filter((r) => r.status === 'SURVIVED' || r.status === 'NOT_COVERED');
-  for (const cat of order) {
-    const group = surv.filter((r) => (order.includes(r.category) ? r.category : '') === cat);
-    if (!group.length) continue;
-    out.push('', `${catTitle[cat]}:`, ...group.map(line));
-  }
-  const side = rep.results.filter((r) => r.sideEffect);
-  if (side.length) out.push('', 'Nebenwirkung, ein Test hat committet:', ...side.map(line));
+  for (const cat of order) section(`${catTitle[cat]}:`, surv.filter((r) => (order.includes(r.category) ? r.category : '') === cat));
+  section('Nebenwirkung, ein Test hat committet:', rep.results.filter((r) => r.sideEffect));
   const shaky = rep.results.filter((r) => r.unstable);
-  if (shaky.length) out.push('', 'Urteil hängt von Umständen ab (Gegenprobe):', ...shaky.map((r) => `${line(r)}\n      ${r.unstable}`));
-  const errs = rep.results.filter((r) => r.status === 'ERROR');
-  if (errs.length) out.push('', 'Fehler des Werkzeugs:', ...errs.map((r) => `  ${basename(r.file)}:${r.line} ${r.op}: ${r.detail}`));
+  section('Urteil hängt von Umständen ab (Gegenprobe):', shaky, (r) => `${line(r)}\n      ${r.unstable}`);
+  section('Fehler des Werkzeugs:', rep.results.filter((r) => r.status === 'ERROR'), (r) => `  ${basename(r.file)}:${r.line} ${r.op}: ${r.detail}`);
   const c = counts(rep);
   const parts = (['KILLED', 'SURVIVED', 'NOT_COVERED', 'TIMEOUT', 'MEMORY', 'COMPILE_ERROR', 'ERROR'] as Status[])
     .filter((s) => c.get(s)).map((s) => `${s} ${c.get(s)}`);
@@ -147,11 +144,14 @@ export function compare(a: string, b: string): { text: string; same: number; dif
   const detectedSt = new Set(['KILLED', 'TIMEOUT', 'MEMORY']);
   const lines: string[] = [];
   let same = 0, diff = 0, detected = 0;
+  const only = (p: string, x: CompareRow) => {
+    diff++;
+    lines.push(`  nur in ${basename(p)}: ${basename(x.file)}:${x.line} ${x.op} ${x.original} → ${x.mutated}`);
+  };
   for (const [k, x] of ra) {
     const y = rb.get(k);
     if (!y) {
-      lines.push(`  nur in ${basename(a)}: ${basename(x.file)}:${x.line} ${x.op} ${x.original} → ${x.mutated}`);
-      diff++;
+      only(a, x);
       continue;
     }
     if (norm(x.status) === norm(y.status)) {
@@ -162,12 +162,7 @@ export function compare(a: string, b: string): { text: string; same: number; dif
     if (detectedSt.has(x.status) && detectedSt.has(y.status)) detected++;
     lines.push(`  ${basename(x.file)}:${x.line} ${x.op} ${JSON.stringify(x.original)} → ${JSON.stringify(x.mutated)}: ${x.status} / ${y.status}  (${x.detail ?? ''} | ${y.detail ?? ''})`);
   }
-  for (const [k, y] of rb) {
-    if (!ra.has(k)) {
-      lines.push(`  nur in ${basename(b)}: ${basename(y.file)}:${y.line} ${y.op} ${y.original} → ${y.mutated}`);
-      diff++;
-    }
-  }
+  for (const [k, y] of rb) if (!ra.has(k)) only(b, y);
   lines.push(`${same} gleich, ${diff} verschieden, davon ${detected} in beiden erkannt (getötet, Timeout oder Speicher)`);
   return { text: lines.join('\n'), same, diff, detected };
 }

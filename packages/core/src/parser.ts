@@ -329,48 +329,40 @@ class Parser {
     const a = this.i;
     while (this.at('CREATE', 'OR', 'REPLACE', 'EDITIONABLE', 'NONEDITIONABLE', 'EDITIONING', 'FORCE', 'NO')) this.i++;
     const kw = this.up();
-    let type: string;
-    let n: Node;
     if (kw === 'VIEW') return this.view(a);
-    if (kw === 'PACKAGE' || kw === 'TYPE') {
-      type = kw === 'PACKAGE' ? 'PACKAGE BODY' : 'TYPE BODY';
-      this.i++;
-      this.expect('BODY');
-      const name = this.unitName();
-      const is = this.need(this.i, IS_AS);
-      this.i = is + 1;
-      const kids: Node[] = [];
-      if (type === 'PACKAGE BODY') {
-        kids.push(this.decls(BEGIN_END));
-        if (this.at('BEGIN')) kids.push(this.body());
-        else this.end();
-      } else {
-        const ds: Node[] = [];
-        const da = this.i;
-        while (!this.at('END')) {
-          if (this.eof()) this.fail('END des Type Body fehlt');
-          while (this.at('MEMBER', 'STATIC', 'CONSTRUCTOR', 'MAP', 'ORDER', 'OVERRIDING', 'FINAL', 'INSTANTIABLE', 'NOT', ',')) this.i++;
-          if (this.at('PROCEDURE', 'FUNCTION')) ds.push(this.subprog(false));
-          else this.fail(`Unerwartetes "${this.t[this.i].text}" im Type Body`);
-        }
-        kids.push(node('decls', da, this.i, ds));
-        this.end();
-      }
-      n = node('unit', a, this.i, kids, { op: type, name, at: is });
-    } else if (kw === 'PROCEDURE' || kw === 'FUNCTION') {
-      type = kw;
+    if (kw === 'PROCEDURE' || kw === 'FUNCTION') {
       const name = this.unitName();
       const sp = this.subprog(true);
-      n = node('unit', a, this.i, [sp], { op: type, name, at: -1 });
-    } else if (kw === 'TRIGGER') {
-      type = 'TRIGGER';
-      this.i++;
-      const name = this.unitName();
-      n = this.trigger(a, name);
-    } else {
-      this.fail(`Nicht unterstützter Objekttyp "${this.t[this.i]?.text}"`);
+      return node('unit', a, this.i, [sp], { op: kw, name, at: -1 });
     }
-    return n;
+    if (kw === 'TRIGGER') {
+      this.i++;
+      return this.trigger(a, this.unitName());
+    }
+    if (kw !== 'PACKAGE' && kw !== 'TYPE') this.fail(`Nicht unterstützter Objekttyp "${this.t[this.i]?.text}"`);
+    this.i++;
+    this.expect('BODY');
+    const name = this.unitName();
+    const is = this.need(this.i, IS_AS);
+    this.i = is + 1;
+    const kids: Node[] = [];
+    if (kw === 'PACKAGE') {
+      kids.push(this.decls(BEGIN_END));
+      if (this.at('BEGIN')) kids.push(this.body());
+      else this.end();
+    } else {
+      const da = this.i;
+      const ds: Node[] = [];
+      while (!this.at('END')) {
+        if (this.eof()) this.fail('END des Type Body fehlt');
+        while (this.at('MEMBER', 'STATIC', 'CONSTRUCTOR', 'MAP', 'ORDER', 'OVERRIDING', 'FINAL', 'INSTANTIABLE', 'NOT', ',')) this.i++;
+        if (this.at('PROCEDURE', 'FUNCTION')) ds.push(this.subprog(false));
+        else this.fail(`Unerwartetes "${this.t[this.i].text}" im Type Body`);
+      }
+      kids.push(node('decls', da, this.i, ds));
+      this.end();
+    }
+    return node('unit', a, this.i, kids, { op: `${kw} BODY`, name, at: is });
   }
 
   /** END [kw] [name] ; (a unit's END, END CASE, END LOOP; END IF without a name). */
@@ -429,10 +421,8 @@ class Parser {
     else if (w(qb - 5, 'WITH') && w(qb - 4, 'CHECK') && w(qb - 3, 'OPTION') && w(qb - 2, 'CONSTRAINT')) qb -= 5;
     if (qb <= as + 1) this.fail('Abfrage der View fehlt', as);
     const q = this.query(as + 1, qb);
-    this.i = end;
-    const n = node('unit', a, end, [q], { op: 'VIEW', name, at: as });
-    if (this.isOp(this.i, ';')) this.i++;
-    return n;
+    this.i = this.isOp(end, ';') ? end + 1 : end;
+    return node('unit', a, end, [q], { op: 'VIEW', name, at: as });
   }
 
   private trigger(a: number, name: string): Node {
@@ -515,12 +505,8 @@ class Parser {
     const spec = (this.at('LANGUAGE') && ['C', 'JAVA', 'JAVASCRIPT'].includes(this.up(1)))
       || (this.at('EXTERNAL') && ['NAME', 'LIBRARY', 'WITH', 'PARAMETERS', ';'].includes(this.up(1)))
       || (this.at('MLE') && ['MODULE', 'LANGUAGE'].includes(this.up(1)));
-    if (spec) {
-      this.i = this.need(this.i, SEMI) + 1;
-      return node('subprog', a, this.i, kids, { op: kind, name, at: nameTok });
-    }
-    kids.push(this.decls(BEGIN_END));
-    kids.push(this.body());
+    if (spec) this.i = this.need(this.i, SEMI) + 1;
+    else kids.push(this.decls(BEGIN_END), this.body());
     return node('subprog', a, this.i, kids, { op: kind, name, at: nameTok });
   }
 
@@ -614,6 +600,12 @@ class Parser {
 
   // ----------------------------------------------------------- statements
 
+  /** The statement from a to its semicolon (la: its first label). */
+  private stmtTo(semi: number, a: number, la: number, op: string, kids: Node[] = [], extra: Partial<Node> = {}): Node {
+    this.i = semi + 1;
+    return node('stmt', a, this.i, kids, { op, at2: la, ...extra });
+  }
+
   private seq(): Node {
     const a = this.i;
     const kids: Node[] = [];
@@ -635,7 +627,6 @@ class Parser {
     const a = this.i;
     const u = this.up();
     const kind = this.t[a].kind;
-    const st = (op: string, kids: Node[] = [], extra: Partial<Node> = {}) => node('stmt', a, this.i, kids, { op, at2: la, ...extra });
     // OPEN, FETCH, ... are not reserved: open(x); calls a procedure named open
     const softKw = ['OPEN', 'FETCH', 'CLOSE', 'PIPE', 'SET', 'LOCK', 'EXECUTE', 'SAVEPOINT', 'COMMIT', 'ROLLBACK', 'MERGE'];
     const kw = kind === 'ident' && !this.isOp(a + 1, ':=') && !this.isOp(a + 1, '.') && !this.isOp(a + 1, '%')
@@ -647,32 +638,22 @@ class Parser {
         case 'LOOP': case 'WHILE': case 'FOR': return this.loop(a, la);
         case 'FORALL': return this.forall(a, la);
         case 'EXIT': case 'CONTINUE': {
-          this.i++;
-          const semi = this.need(this.i, SEMI);
-          const w = this.find(this.i, WHEN, semi);
-          const kids = w >= 0 ? [this.region(w + 1, semi)] : [];
-          this.i = semi + 1;
-          return st(u.toLowerCase(), kids, { at: w });
+          const semi = this.need(a + 1, SEMI);
+          const w = this.find(a + 1, WHEN, semi);
+          return this.stmtTo(semi, a, la, u.toLowerCase(), w >= 0 ? [this.region(w + 1, semi)] : [], { at: w });
         }
         case 'RETURN': {
-          this.i++;
-          const semi = this.need(this.i, SEMI);
-          const kids = semi > this.i ? [this.region(this.i, semi)] : [];
-          this.i = semi + 1;
-          return st('return', kids);
+          const semi = this.need(a + 1, SEMI);
+          return this.stmtTo(semi, a, la, 'return', semi > a + 1 ? [this.region(a + 1, semi)] : []);
         }
         case 'RAISE': case 'GOTO': case 'CLOSE':
-          this.i = this.need(this.i, SEMI) + 1;
-          return st(u.toLowerCase());
+          return this.stmtTo(this.need(a, SEMI), a, la, u.toLowerCase());
         case 'NULL':
-          if (this.isOp(a + 1, ';')) {
-            this.i += 2;
-            return st('null');
-          }
+          if (this.isOp(a + 1, ';')) return this.stmtTo(a + 1, a, la, 'null');
           break;
         case 'BEGIN': case 'DECLARE': {
           const kids = this.block();
-          return st('block', kids);
+          return node('stmt', a, this.i, kids, { op: 'block', at2: la });
         }
         case 'PRAGMA': {
           this.i = this.need(this.i, SEMI) + 1;
@@ -681,32 +662,24 @@ class Parser {
         case 'EXECUTE': return this.execImmediate(a, la);
         case 'OPEN': return this.openStmt(a, la);
         case 'FETCH': {
-          const semi = this.need(this.i, SEMI);
-          const lim = this.find(this.i, LIMIT, semi);
-          const kids = lim >= 0 ? [this.region(lim + 1, semi)] : [];
-          this.i = semi + 1;
-          return st('fetch', kids);
+          const semi = this.need(a, SEMI);
+          const lim = this.find(a, LIMIT, semi);
+          return this.stmtTo(semi, a, la, 'fetch', lim >= 0 ? [this.region(lim + 1, semi)] : []);
         }
         case 'PIPE': {
-          const semi = this.need(this.i, SEMI);
-          const kids = this.isOp(a + 2, '(') && this.close(a + 2) < semi ? [this.region(a + 3, this.close(a + 2))] : [];
-          this.i = semi + 1;
-          return st('pipe', kids);
+          const semi = this.need(a, SEMI);
+          return this.stmtTo(semi, a, la, 'pipe', this.isOp(a + 2, '(') && this.close(a + 2) < semi ? [this.region(a + 3, this.close(a + 2))] : []);
         }
       }
     }
+    const semi = this.need(a, SEMI);
     if ((kw && (SQL_STMT.has(u) || (u === 'SET' && this.upAt(a + 1) === 'TRANSACTION'))) || (kind === 'op' && u === '(' && this.isQuery(a + 1))) {
-      const semi = this.need(this.i, SEMI);
-      const q = this.sqlStatement(a, semi);
-      this.i = semi + 1;
-      return st('sql', [q]);
+      return this.stmtTo(semi, a, la, 'sql', [this.sqlStatement(a, semi)]);
     }
     // assignment or procedure call
-    const semi = this.need(this.i, SEMI);
     const asg = this.find(a, ASSIGN, semi);
-    const kids = asg >= 0 ? [this.region(a, asg), this.region(asg + 1, semi)] : [this.region(a, semi)];
-    this.i = semi + 1;
-    return asg >= 0 ? st('assign', kids, { at: asg }) : st('call', kids);
+    if (asg < 0) return this.stmtTo(semi, a, la, 'call', [this.region(a, semi)]);
+    return this.stmtTo(semi, a, la, 'assign', [this.region(a, asg), this.region(asg + 1, semi)], { at: asg });
   }
 
   private ifStmt(a: number, la: number): Node {
@@ -830,8 +803,7 @@ class Parser {
     } else {
       kids.push(this.sqlStatement(k, semi));
     }
-    this.i = semi + 1;
-    return node('stmt', a, this.i, kids, { op: 'forall', at2: la });
+    return this.stmtTo(semi, a, la, 'forall', kids);
   }
 
   private execImmediate(a: number, la: number): Node {
@@ -845,8 +817,7 @@ class Parser {
       const ue = this.find(using + 1, USING_END, semi);
       this.binds(using + 1, ue >= 0 ? ue : semi, kids);
     }
-    this.i = semi + 1;
-    return node('stmt', a, this.i, kids, { op: 'exec', at2: la });
+    return this.stmtTo(semi, a, la, 'exec', kids);
   }
 
   private openStmt(a: number, la: number): Node {
@@ -858,15 +829,10 @@ class Parser {
     } else {
       const using = this.find(f + 1, USING, semi);
       const qe = using >= 0 ? using : semi;
-      if (this.isQuery(f + 1) || (this.isOp(f + 1, '(') && this.isQuery(f + 2))) {
-        kids.push(this.query(f + 1, qe));
-      } else {
-        kids.push(this.region(f + 1, qe));
-      }
+      kids.push(this.isQuery(f + 1) || (this.isOp(f + 1, '(') && this.isQuery(f + 2)) ? this.query(f + 1, qe) : this.region(f + 1, qe));
       if (using >= 0) this.binds(using + 1, semi, kids);
     }
-    this.i = semi + 1;
-    return node('stmt', a, this.i, kids, { op: 'open', at2: la });
+    return this.stmtTo(semi, a, la, 'open', kids);
   }
 
   /** The bind arguments of USING in [a, b): [IN] [OUT] expression, comma separated. */
@@ -996,8 +962,7 @@ class Parser {
           if (this.isOp(k + 1, '(')) {
             const m = this.match[k + 1];
             if (m > 0 && m < b) {
-              if (this.isQuery(k + 2)) out.push(this.query(k + 2, m));
-              else out.push(this.region(k + 2, m));
+              out.push(this.isQuery(k + 2) ? this.query(k + 2, m) : this.region(k + 2, m));
               k = m + 1;
               continue;
             }
@@ -1179,6 +1144,11 @@ class Parser {
     return this.predicate();
   }
 
+  /** l with its right operand r (null: not parsed). */
+  private two(k: NodeKind, l: Node, r: Node | null, op: string, at: number): Node | null {
+    return r ? node(k, l.a, r.b, [l, r], { op, at }) : null;
+  }
+
   private predicate(): Node | null {
     const l = this.additive();
     if (!l) return null;
@@ -1186,15 +1156,9 @@ class Parser {
     if (!x || this.i >= this.lim) return l;
     if (x.kind === 'op' && CMP_OPS.has(x.text)) {
       const opTok = this.i++;
-      if (this.isWord(this.i, 'ANY', 'SOME', 'ALL')) {
-        this.i++;
-        const r = this.primary();
-        if (!r) return null;
-        return node('pred', l.a, r.b, [l, r], { op: x.text + ' ANY', at: opTok });
-      }
-      const r = this.additive();
-      if (!r) return null;
-      return node('cmp', l.a, r.b, [l, r], { op: x.text, at: opTok });
+      if (!this.isWord(this.i, 'ANY', 'SOME', 'ALL')) return this.two('cmp', l, this.additive(), x.text, opTok);
+      this.i++;
+      return this.two('pred', l, this.primary(), x.text + ' ANY', opTok);
     }
     if (x.kind !== 'ident') return l;
     if (x.up === 'IS') {
@@ -1214,9 +1178,7 @@ class Parser {
         this.i++;
         if (!this.isWord(this.i, 'FROM')) return null;
         this.i++;
-        const r = this.additive();
-        if (!r) return null;
-        return node('pred', l.a, r.b, [l, r], { op: 'IS DISTINCT FROM', at: isTok });
+        return this.two('pred', l, this.additive(), 'IS DISTINCT FROM', isTok);
       } else if (this.isWord(this.i, 'A')) {
         this.i += 2;
       } else if (this.isWord(this.i, 'JSON')) {
@@ -1259,16 +1221,12 @@ class Parser {
     }
     if (w === 'IN') {
       this.i = k + 1;
-      const r = this.primary();
-      if (!r) return null;
-      return node('pred', l.a, r.b, [l, r], { op: 'IN', at: k });
+      return this.two('pred', l, this.primary(), 'IN', k);
     }
     if (w === 'MEMBER' || w === 'SUBMULTISET') {
       this.i = k + 1;
       if (this.isWord(this.i, 'OF')) this.i++;
-      const r = this.additive();
-      if (!r) return null;
-      return node('pred', l.a, r.b, [l, r], { op: w, at: k });
+      return this.two('pred', l, this.additive(), w, k);
     }
     return l;
   }
@@ -1304,14 +1262,9 @@ class Parser {
   /** ** binds tighter than the sign: -2 ** 2 = -(2 ** 2); the exponent may carry a sign. */
   private power(): Node | null {
     const l = this.postfix();
-    if (!l) return null;
-    if (this.isOp(this.i, '**')) {
-      const op = this.i++;
-      const r = this.unary();
-      if (!r) return null;
-      return node('bin', l.a, r.b, [l, r], { op: '**', at: op });
-    }
-    return l;
+    if (!l || !this.isOp(this.i, '**')) return l;
+    const op = this.i++;
+    return this.two('bin', l, this.unary(), '**', op);
   }
 
   private unary(): Node | null {

@@ -106,7 +106,8 @@ export async function runCorpus(dirs: string[], db?: { user: string; password: s
   for (const u of units.filter(isBody)) {
     const id = idOf(u);
     try {
-      const r = instrument(preprocess(u.text), 'CORPUS', newIds(), { sqlProbes: true });
+      const src = preprocess(u.text);
+      const r = instrument(src, 'CORPUS', newIds(), { sqlProbes: true });
       if (r.instrumented.split('\n').length !== u.text.split('\n').length) throw new Error('Zeilenzahl verändert');
       res.parsed++;
       res.decisions += r.map.decisions.length;
@@ -114,7 +115,7 @@ export async function runCorpus(dirs: string[], db?: { user: string; password: s
       res.statements += r.map.statements.length;
       res.gaps += r.map.gaps.length;
       instrumented.set(u, r.instrumented);
-      const p = parseUnit(preprocess(u.text));
+      const p = parseUnit(src);
       res.opaque.totalTokens += p.tokens.length;
       walkTree(p.unit, (n) => {
         if (n.k !== 'opaque' || n.b <= n.a) return;
@@ -139,11 +140,11 @@ async function compileCheck(units: CorpusUnit[], instrumented: Map<CorpusUnit, s
   const conn = await oracledb.getConnection(db);
   const out = { originalOk: 0, instrumentedOk: 0, failures: [] as { unit: string; error: string }[] };
   const errorsOf = async (u: CorpusUnit) => {
-    const name = u.name.split('.').pop()!.replace(/"/g, '');
-    const type = u.kind.toUpperCase();
+    const last = u.name.split('.').pop()!;
+    const name = last.replace(/"/g, '');
     const r = await conn.execute<[number, string]>(
       `select line, text from user_errors where name = :n and type = :t and attribute = 'ERROR' order by sequence`,
-      { n: /^".*"$/.test(u.name.split('.').pop()!) ? name : name.toUpperCase(), t: type },
+      { n: /^".*"$/.test(last) ? name : name.toUpperCase(), t: u.kind.toUpperCase() },
     );
     return r.rows?.length ? r.rows.slice(0, 2).map((x) => `Zeile ${x[0]}: ${x[1].trim().split('\n')[0]}`).join('; ') : null;
   };

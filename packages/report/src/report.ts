@@ -529,9 +529,8 @@ function renderObject(o: ObjectResult, idx: number, tip: (html: string) => strin
     const ms = muts?.get(line);
     if (ms?.length) {
       const v = mutScore(ms);
-      const det = v.covered;
       const id = tip(`<b>Mutanten in Zeile ${line}</b><hr>${ms.map((m) => `<div class="row"><span><code>${esc(one(m.original))}</code> → <code>${esc(one(m.mutated))}</code> <span style="opacity:.7">${esc(m.op)}</span></span><span>${STATUS_DE[m.status] ?? esc(m.status)}</span></div>${m.status === 'KILLED' && m.killedBy ? `<div style="opacity:.75">von ${esc(m.killedBy)}</div>` : ''}`).join('')}`);
-      badge += `<span class="br mut t-${tone(pctNum(v))}" data-tip="${id}" tabindex="0">✱ ${det}/${v.total} Mutanten</span>`;
+      badge += `<span class="br mut t-${tone(pctNum(v))}" data-tip="${id}" tabindex="0">✱ ${v.covered}/${v.total} Mutanten</span>`;
     }
     return `<tr id="o${idx}-L${line}" class="${st ? `s-${st}` : ''}"><td class="ln">${line}</td><td class="ut">${utMark}</td><td class="hits">${hits === undefined ? '' : o.lineTests?.[line]?.length || hits === 0
       ? `<span data-tip="${tip(`<b>Zeile ${line}: ${hits.toLocaleString('de-DE')}× ausgeführt</b><hr>${testList(o.lineTests?.[line], names)}`)}" tabindex="0">${hits.toLocaleString('de-DE')}×</span>`

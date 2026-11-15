@@ -67,9 +67,7 @@ export async function runTestsJunit(conn: oracledb.Connection, paths: string[], 
     await rs.close();
     return rows.map((r) => String(r[0] ?? '')).join('\n');
   };
-  const junit = await readAll(out.junit);
-  const sonar = await readAll(out.sonar);
-  return { run: { tests: parseJunit(junit), ms } as TestRun, sonar: parseSonar(sonar) };
+  return { run: { tests: parseJunit(await readAll(out.junit)), ms } as TestRun, sonar: parseSonar(await readAll(out.sonar)) };
 }
 
 function unescapeXml(s: string): string {

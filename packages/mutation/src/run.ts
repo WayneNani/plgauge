@@ -12,7 +12,7 @@
  * Several databases (workers) share the mutants; the first one decides schema,
  * baseline and coverage. Every code change goes through the core's restore journal.
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, globSync, readFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { join, resolve } from 'node:path';
@@ -26,13 +26,12 @@ import type { CoverageExport } from '@pltest/coverage';
 import { CoverageIndex, unitLineOf } from './link.js';
 import { expand, mutatedUnit, objectName, objectOwner, unitKey, withoutCreate, withoutLeadingComments, type Mutant, type Point } from './mutant.js';
 import { findPoints } from './find.js';
-import { buildSchema, livePlan, locate, planDiff, positionOf, switchable, type PlanRow, type SchemaUnit } from './schema.js';
+import { buildSchema, livePlan, locate, orderedMain, planDiff, positionOf, switchable, type PlanRow, type SchemaUnit } from './schema.js';
 import {
   activate, aborted, failed, firstFailure, firstLine, hits, installControl, installRuntime, isMemory,
   loops, newSession, parseDbUrl, resetPackages, runTests, setLoopLimits,
   type ConnectConfig, type RunResult, type Session, type TestResult,
 } from './session.js';
-import { globSync } from 'node:fs';
 
 export type Status = 'KILLED' | 'SURVIVED' | 'TIMEOUT' | 'MEMORY' | 'NOT_COVERED' | 'COMPILE_ERROR' | 'ERROR';
 
@@ -1069,7 +1068,7 @@ class Run {
    * Re-runs every killing test twice alone against the original behaviour. A test
    * failing there depends on state or order: it is excluded and its mutants run again.
    */
-  async recheckKillers(rep: Report, rerun: (ms: Mutant[]) => Promise<Result[]>, stop: () => boolean = () => false, only?: Set<number>): Promise<void> {
+  async recheckKillers(rep: Report, rerun: (ms: Mutant[]) => Promise<Result[]>, stop: () => boolean, only?: Set<number>): Promise<void> {
     if (stop()) return;
     // the baseline's worker unless it retired (its connections are closed then)
     const w = this.workers.find((x) => !x.retired);
@@ -1097,7 +1096,7 @@ class Run {
       this.logf(`Nachprüfung der erkennenden Tests abgebrochen: ${firstLine(e as Error)}`);
     }
     if (!flaky.size) return;
-    rep.flakyTests.push(...[...flaky].sort());
+    rep.flakyTests.push(...flaky);
     rep.flakyTests.sort();
     this.exclude(flaky);
     // every kill of a test found unreliable, also one checked earlier (another recheck call)
@@ -1212,7 +1211,7 @@ export async function runMutation(opt: Options): Promise<Report> {
   const { cfg, files, mutants } = projectMutants(opt.dir, opt);
   let ms = mutants;
   const run = new Run(opt, cfg);
-  run.total = ms.length;
+  const mode = opt.mode ?? 'schema';
   let skipped = 0;
   for (const f of files) {
     skipped += f.skipped;
@@ -1232,15 +1231,12 @@ export async function runMutation(opt: Options): Promise<Report> {
         run.logf(`übersprungen, vom Installationsskript nicht angelegt (kein "/" danach?): ${f.path}#${u.type} ${u.name}`);
       }
     }
-    if (missing.size) {
-      ms = ms.filter((m) => !missing.has(m.unitRef));
-      run.total = ms.length;
-    }
+    ms = ms.filter((m) => !missing.has(m.unitRef));
   }
   run.logf(`${ms.length} Mutanten in ${files.length} Dateien${opt.diff ? ' (nur geänderte Zeilen)' : ''}, ${skipped} gleichwertige oder sinnlose Varianten ausgelassen`);
   if (!ms.length) {
     run.logf('keine Mutanten: nichts zu tun');
-    return { mode: opt.mode ?? 'schema', baselineMs: 0, limitMs: 0, tests: 0, excludedTests: 0, flakyTests: [], skippedVariants: skipped, results: [], elapsedMs: performance.now() - t0 };
+    return { ...emptyReport(0), mode, skippedVariants: skipped, elapsedMs: performance.now() - t0 };
   }
   if (!opt.dbUrls.length) throw new Error('keine Datenbank: --db oder PLMUT_DB setzen');
   opt.dbUrls.forEach((u, i) => run.workers.push(new Worker(u, opt.dbUrls.length > 1 ? ` w${i + 1}` : '', run)));
@@ -1278,13 +1274,9 @@ export async function runMutation(opt: Options): Promise<Report> {
       if (first === undefined) objectOf.set(id, unitKey(m));
       else if (first !== unitKey(m)) twice.add(unitKey(m));
     }
-    if (twice.size) {
-      for (const k of twice) run.logf(`übersprungen, Objekt schon in einer anderen Datei definiert: ${k}`);
-      ms = ms.filter((m) => !twice.has(unitKey(m)));
-    }
-    ms = await withoutTriggeredViews(run, ms);
+    for (const k of twice) run.logf(`übersprungen, Objekt schon in einer anderen Datei definiert: ${k}`);
+    ms = await withoutTriggeredViews(run, ms.filter((m) => !twice.has(unitKey(m))));
     run.total = ms.length;
-    const mode = opt.mode ?? 'schema';
     const stop = () => run.interrupted || !!run.abort;
     const rep = mode === 'naive' ? await runNaive(run, ms, stop) : await runSchema(run, ms, stop);
     if (run.abort) rep.aborted = run.abort;
@@ -1298,10 +1290,8 @@ export async function runMutation(opt: Options): Promise<Report> {
   } finally {
     // (a worker whose lock went to another run restores nothing: Worker.restoreAll)
     await run.restoreEverywhere().catch(() => {});
-    // a retired worker, or one whose deploy connection died before the end, still has changed
-    // code: its journal knows what (on a fresh connection)
-    // every worker's journal, also after a restore that failed above: changed code that stays is
-    // reported always (also with -q) and in the report
+    // what a retired worker, a dead deploy connection or a failed restore above left changed is in
+    // the worker's journal (read on a fresh connection); what stays is reported always (also with -q)
     // (a worker that never held the lock changed nothing: another run has the schema)
     const left = (await Promise.all(run.workers.filter((w) => w.held && !w.foreign).map((w) => w.finalRestore()))).flat();
     // (the lock lost while restoring: the report must not look complete)
@@ -1361,11 +1351,9 @@ async function runSchema(run: Run, ms: Mutant[], stop: () => boolean): Promise<R
   if (ms.some((m) => m.point.naiveOnly === 'cache') || [...new Set(ms.map((m) => m.sourceFile))].some((f) => /\bRESULT_CACHE\b/i.test(f.src.toString('utf8')))) {
     run.logf('Hinweis: RESULT_CACHE-Funktionen laufen einzeln; ihre gecachten Ergebnisse können Mutanten in Code verdecken, den sie aufrufen (dafür --mode naive)');
   }
-  // the main block of an ordered view gets no wrapper (its order must hold): its points run one by one
-  const orderedMain = (m: Mutant) => !!m.unitRef.ordered && !!m.unitRef.main && m.point.scope?.[0] === m.unitRef.main[0] && m.point.scope?.[1] === m.unitRef.main[1];
   run.ms = ms;
   const { naive, dropped } = run;
-  for (const m of ms) if (!switchable(m.point) || orderedMain(m)) naive.add(m.point);
+  for (const m of ms) if (!switchable(m.point) || orderedMain(m.unitRef, m.point.scope)) naive.add(m.point);
   const t0 = performance.now();
   await installControl(w.deploy);
   const plans = await capBranches(run);
@@ -1616,8 +1604,7 @@ async function checkPlans(run: Run, plans: Map<string, ViewPlans>): Promise<numb
         d = `nicht prüfbar: ${firstLine(e as Error)}`;
       }
       if (!d) continue;
-      const own = ms.filter((m) => unitKey(m) === v.key);
-      if (pass < 2 && own.some((m) => !naive.has(m.point) && !dropped.has(m.id))) {
+      if (pass < 2 && ms.some((m) => unitKey(m) === v.key && !naive.has(m.point) && !dropped.has(m.id))) {
         run.oneByOne(v.key);
         run.logf(`${v.key}: Plan mit Zweigen weicht ab (${d}), Mutanten einzeln, Block nur zur Aufzeichnung`);
       } else {
@@ -1752,10 +1739,7 @@ async function record(run: Run, tests: TestResult[], ids: number[], loopCount: n
   const all = tests.map((t) => t.name);
   const byId = new Map<number, Set<string>>();
   for (const [test, ids] of h) for (const id of ids) for (const n of test === '' ? all : [test]) (byId.get(id) ?? byId.set(id, new Set()).get(id)!).add(n);
-  const covering = new Map<number, string[]>();
-  for (const [id, set] of byId) {
-    covering.set(id, [...set].sort((a, b) => (dur.get(a) ?? 0) - (dur.get(b) ?? 0) || (a < b ? -1 : a > b ? 1 : 0)));
-  }
+  const covering = new Map<number, string[]>([...byId].map(([id, set]) => [id, [...set].sort((a, b) => (dur.get(a) ?? 0) - (dur.get(b) ?? 0) || (a < b ? -1 : a > b ? 1 : 0))]));
   if (!intact) {
     // no mutant may come out NOT_COVERED on lost hits: all tests for every switched mutant
     run.logf('WARNUNG: Ein Test hat den Paketzustand zurückgesetzt (DBMS_SESSION.RESET_PACKAGE?): die Aufzeichnung ist unvollständig, jeder Mutant läuft mit allen Tests');
