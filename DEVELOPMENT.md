@@ -14,7 +14,7 @@ no build step.
 | `packages/cli` | The `plgauge` command |
 | `bin/plgauge` | Wrapper that runs the CLI from a checkout |
 | `examples/` | `order_pricing` (coverage demo) and `shop_pricing` (mutation, with the expected verdicts in `expected.tsv`) |
-| `eval/` | Runs on public open-source code (write-ups in German); `src` links into `corpus/.cache` |
+| `eval/` | Runs on public open-source code; `src` links into `corpus/.cache` |
 | `corpus/` | `fetch.sh` downloads the robustness corpus at fixed commits into `corpus/.cache` (not checked in) |
 | `ci/` | `setup-db.sh` (Oracle Free plus utPLSQL in a container) and CI templates for users |
 | `baseline/` | Frozen output of the earlier prototypes (plcov, plmut in Go) for the parity checks |
@@ -77,7 +77,7 @@ npm run parity:coverage    # instrumenter against the frozen results of the plco
 bin/plgauge corpus corpus/.cache            # offline robustness check over all files
 ```
 
-Intended differences from the earlier versions are listed in `baseline/plmut/PARITY.md` (in German).
+Intended differences from the earlier versions are listed in `baseline/plmut/PARITY.md`.
 
 `scripts/sql-compile-check.ts` compiles the schema rewrite of a corpus in a scratch schema. It checks that
 switched SQL mutants are valid SQL.
@@ -91,3 +91,6 @@ plgauge merges two prototypes:
 
 Both were ported onto a common core with a single parser. Their outputs on the example projects and on the
 corpus are kept in `baseline/` and serve as the reference for the parity checks.
+
+The frozen outputs in `baseline/` predate the English translation of the project. They still show the
+original German identifiers of the `shop_pricing` example (`rabatt`, `versandkosten`, …) and German messages.

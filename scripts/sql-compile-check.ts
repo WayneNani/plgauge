@@ -132,10 +132,10 @@ for (const path of files) {
   }
 }
 await conn.close();
-console.log(`Units mit SQL-Mutanten: ${res.units}, davon kompilieren im Original ${res.unitsCompiling}`);
-console.log(`SQL-Mutanten darin: ${res.mutants}; einzeln kompiliert: ${res.oracle.ok} ok, ${res.oracle.failed.length} Fehler`);
-for (const [op, s] of Object.entries(res.byOp).sort()) console.log(`  ${op}: ${s.mutants} Mutanten, ${s.oracleFailed} kompilieren nicht`);
-console.log(`Schema: ${res.schema.units} Units, ${res.schema.rounds} Runden, ${res.schema.switched} Mutanten umgeschaltet, ${res.schema.dropped} verworfen, ${res.schema.naivePoints} umschaltbare Stellen ohne Schema, ${res.schema.unassigned.length} Fehler ohne Zuordnung`);
+console.log(`Units with SQL mutants: ${res.units}, of which compile in the original: ${res.unitsCompiling}`);
+console.log(`SQL mutants in them: ${res.mutants}; compiled one by one: ${res.oracle.ok} ok, ${res.oracle.failed.length} errors`);
+for (const [op, s] of Object.entries(res.byOp).sort()) console.log(`  ${op}: ${s.mutants} mutants, ${s.oracleFailed} do not compile`);
+console.log(`Schema: ${res.schema.units} Units, ${res.schema.rounds} rounds, ${res.schema.switched} mutants switched, ${res.schema.dropped} dropped, ${res.schema.naivePoints} switchable points without schema, ${res.schema.unassigned.length} unassigned errors`);
 for (const x of res.oracle.failed.slice(0, 30)) console.log(`  ${x.op} ${x.at}: ${x.orig.replace(/\s+/g, ' ').slice(0, 50)} → ${x.mutated.replace(/\s+/g, ' ').slice(0, 50)}: ${x.error}`);
-for (const x of res.schema.unassigned.slice(0, 10)) console.log(`  ohne Zuordnung: ${x}`);
+for (const x of res.schema.unassigned.slice(0, 10)) console.log(`  unassigned: ${x}`);
 if (jsonOut) writeFileSync(jsonOut, JSON.stringify(res, null, 1));

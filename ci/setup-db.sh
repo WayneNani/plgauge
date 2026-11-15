@@ -25,16 +25,16 @@ if [ -n "${CONTAINER_CMD:-}" ]; then C=$CONTAINER_CMD
 elif type -P docker >/dev/null; then C=docker
 elif type -P podman >/dev/null; then C=podman
 elif type -P host-spawn >/dev/null; then C="host-spawn podman"
-else echo "weder docker noch podman gefunden" >&2; exit 1; fi
+else echo "neither docker nor podman found" >&2; exit 1; fi
 
 $C run -d --name "$NAME" -p "127.0.0.1:$PORT:1521" -e ORACLE_PASSWORD="$ORACLE_PASSWORD" \
   -e APP_USER="$APP" -e APP_USER_PASSWORD="$APP_PASSWORD" "$IMAGE" >/dev/null
-echo "warte auf die Datenbank …" >&2
+echo "waiting for the database …" >&2
 for _ in $(seq 1 120); do
   if [ "$($C logs "$NAME" 2>&1 | grep -c 'DATABASE IS READY')" -gt 0 ]; then break; fi
   sleep 5
 done
-[ "$($C logs "$NAME" 2>&1 | grep -c 'DATABASE IS READY')" -gt 0 ] || { echo "Datenbank nicht bereit" >&2; exit 1; }
+[ "$($C logs "$NAME" 2>&1 | grep -c 'DATABASE IS READY')" -gt 0 ] || { echo "database not ready" >&2; exit 1; }
 
 src=$(mktemp -d)
 git clone -q --depth 1 --branch "$UTPLSQL" https://github.com/utPLSQL/utPLSQL.git "$src/utPLSQL"
@@ -60,5 +60,5 @@ create user ${APP}_lib no authentication quota unlimited on users;
 grant create any procedure, execute any procedure to $APP;
 exit
 SQL" || { $C exec "$NAME" cat /tmp/grants.log >&2; exit 1; }
-echo "utPLSQL $UTPLSQL installiert" >&2
+echo "utPLSQL $UTPLSQL installed" >&2
 echo "oracle://$APP:$APP_PASSWORD@127.0.0.1:$PORT/FREEPDB1"

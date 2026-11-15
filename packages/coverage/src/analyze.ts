@@ -98,7 +98,7 @@ export interface ObjectResult {
 }
 
 const tfn = <X>(f: (v: 'T' | 'F' | 'N') => X) => ({ T: f('T'), F: f('F'), N: f('N') });
-const WORD: Record<string, string> = { T: 'WAHR', F: 'FALSCH', N: 'NULL', '-': 'nicht ausgewertet' };
+const WORD: Record<string, string> = { T: 'TRUE', F: 'FALSE', N: 'NULL', '-': 'not evaluated' };
 
 export function analyze(map: ObjectMap, hits: Hits, testIndex: Map<string, number> = new Map()): ObjectResult {
   const g = <K>(m: Map<K, number>, k: K) => m.get(k) ?? 0;
@@ -152,8 +152,8 @@ export function analyze(map: ObjectMap, hits: Hits, testIndex: Map<string, numbe
         const T = dk.outcome === 'T';
         if (withTests) tests = testsWhere((th) => T ? th.d.has(`${dk.decision}:T`) : th.d.has(`${dk.decision}:F`) || th.d.has(`${dk.decision}:N`));
         h = T ? d.outcomes.T : d.outcomes.F + d.outcomes.N;
-        const never = d.outcomes.T + d.outcomes.F + d.outcomes.N === 0 ? 'wurde nie ausgewertet' : T ? 'war nie WAHR' : 'war nie FALSCH oder NULL';
-        if (h === 0) reason = `Bedingung \`${short(d.text)}\` ${never}`;
+        const never = d.outcomes.T + d.outcomes.F + d.outcomes.N === 0 ? 'was never evaluated' : T ? 'was never TRUE' : 'was never FALSE or NULL';
+        if (h === 0) reason = `Condition \`${short(d.text)}\` ${never}`;
       }
       branches.push({
         construct: c.id, constructKind: c.kind, ctx: c.ctx, label: b.label, line: b.line, col: b.col, hits: h,
@@ -211,7 +211,7 @@ export function analyze(map: ObjectMap, hits: Hits, testIndex: Map<string, numbe
   let run: { from: number; to: number } | null = null;
   const flushRun = () => {
     if (!run) return;
-    findings.push({ kind: 'stmt', line: run.from, title: run.from === run.to ? `Zeile ${run.from} nie ausgeführt` : `Zeilen ${run.from}–${run.to} nie ausgeführt` });
+    findings.push({ kind: 'stmt', line: run.from, title: run.from === run.to ? `Line ${run.from} never executed` : `Lines ${run.from}–${run.to} never executed` });
     run = null;
   };
   for (const s of [...statements].sort((a, b) => a.line - b.line)) {
@@ -222,29 +222,29 @@ export function analyze(map: ObjectMap, hits: Hits, testIndex: Map<string, numbe
   flushRun();
   for (const b of branches) {
     if (b.nf || b.hits > 0) continue;
-    findings.push({ kind: 'branch', line: b.line, title: `Zweig ${b.label} nie durchlaufen`, detail: b.reason });
+    findings.push({ kind: 'branch', line: b.line, title: `Branch ${b.label} never taken`, detail: b.reason });
   }
   for (const d of decisions) {
     if (d.nf) continue;
     for (const c of d.conds) {
-      const miss = [c.t === 0 ? 'WAHR' : '', c.f === 0 ? 'FALSCH' : ''].filter(Boolean);
+      const miss = [c.t === 0 ? 'TRUE' : '', c.f === 0 ? 'FALSE' : ''].filter(Boolean);
       if (miss.length && (c.t || c.f || c.n)) {
-        findings.push({ kind: 'cond', line: c.span.line, title: `Teilbedingung \`${short(c.text)}\` nie ${miss.join(' und nie ')}` });
+        findings.push({ kind: 'cond', line: c.span.line, title: `Sub-condition \`${short(c.text)}\` never ${miss.join(' and never ')}` });
       }
       if (c.mcdc === 'no' && d.conds.length > 1) {
         findings.push({
           kind: 'mcdc', line: c.span.line,
-          title: `MC/DC: unabhängige Wirkung von \`${short(c.text)}\` nicht nachgewiesen`,
-          detail: c.suggestion ? `Fehlender Testfall: ${c.suggestion}` : undefined,
+          title: `MC/DC: independent effect of \`${short(c.text)}\` not shown`,
+          detail: c.suggestion ? `Missing test case: ${c.suggestion}` : undefined,
         });
       }
     }
   }
   for (const l of loops) {
     if (l.nf) continue;
-    const miss = [l.zero || l.kind === 'loop' ? '' : '0-mal', l.one ? '' : 'genau 1-mal', l.many ? '' : 'mehrfach'].filter(Boolean);
+    const miss = [l.zero || l.kind === 'loop' ? '' : '0 times', l.one ? '' : 'exactly once', l.many ? '' : 'more than once'].filter(Boolean);
     if (miss.length && (l.zero || l.one || l.many)) {
-      findings.push({ kind: 'loop', line: l.line, title: `Schleife nie ${miss.join(', nie ')} durchlaufen` });
+      findings.push({ kind: 'loop', line: l.line, title: `Loop never ran ${miss.join(', never ')}` });
     }
   }
   findings.sort((a, b) => a.line - b.line);
@@ -312,7 +312,7 @@ function computeMcdc(tree: CondNode, conds: CondResult[], vectors: DecisionResul
     if (ok || !candidates.length) continue;
     const fmt = (x: { v: string; out: boolean }) =>
       conds.map((cc, k) => (x.v[k] === '-' ? null : `\`${short(cc.text, 40)}\` = ${WORD[x.v[k]]}`)).filter(Boolean).join(', ') +
-      ` → Ergebnis ${x.out ? 'WAHR' : 'FALSCH'}`;
+      ` → result ${x.out ? 'TRUE' : 'FALSE'}`;
     let suggestion: string | undefined;
     for (const o of observed) {
       const partner = candidates.find((cand) => isPair(i, o, cand));
@@ -320,7 +320,7 @@ function computeMcdc(tree: CondNode, conds: CondResult[], vectors: DecisionResul
     }
     if (!suggestion) {
       outer: for (const x of candidates) for (const y of candidates) {
-        if (isPair(i, x, y)) { suggestion = `${fmt(x)} sowie ${fmt(y)}`; break outer; }
+        if (isPair(i, x, y)) { suggestion = `${fmt(x)} as well as ${fmt(y)}`; break outer; }
       }
     }
     c.suggestion = suggestion;

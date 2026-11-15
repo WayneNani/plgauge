@@ -203,7 +203,7 @@ export function toJunit(exp: CoverageExport): string {
  * by the consumers from the hits.
  */
 export function mergeExports(list: CoverageExport[]): CoverageExport {
-  if (!list.length) throw new Error('nichts zusammenzuführen');
+  if (!list.length) throw new Error('nothing to merge');
   const tests: CoverageExport['tests'] = [];
   const testIdx = new Map<string, number>();
   const remap = (e: CoverageExport) => e.tests.map((t) => {
@@ -222,7 +222,7 @@ export function mergeExports(list: CoverageExport[]): CoverageExport {
     if (cur?.[i]) Object.assign(p, { hits: p.hits + cur[i].hits, tests: uniq([...p.tests, ...cur[i].tests]) });
   });
   for (const e of list) {
-    if (e.format !== 'plgauge-coverage/1') throw new Error(`unbekanntes Format ${e.format}`);
+    if (e.format !== 'plgauge-coverage/1') throw new Error(`unknown format ${e.format}`);
     const m = remap(e);
     const mi = (ix: number[]) => ix.map((k) => m[k]);
     for (const o of e.objects) {
@@ -241,7 +241,7 @@ export function mergeExports(list: CoverageExport[]): CoverageExport {
         continue;
       }
       if (prev.rawSha256 && cur.rawSha256 && prev.rawSha256 !== cur.rawSha256) {
-        throw new Error(`${o.type} ${o.owner}.${o.name}: verschiedener Quelltext in den Läufen, nicht zusammenführbar`);
+        throw new Error(`${o.type} ${o.owner}.${o.name}: different source in the runs, cannot be merged`);
       }
       for (const [l, v] of Object.entries(cur.lines)) {
         const p = prev.lines[l];
@@ -326,7 +326,7 @@ export function quotas(exp: CoverageExport): Record<QuotaKey, { covered: number;
   return q;
 }
 
-const LABEL: Record<QuotaKey, string> = { stmt: 'Anweisungen', branch: 'Branches', cond: 'Bedingungen', mcdc: 'MC/DC' };
+const LABEL: Record<QuotaKey, string> = { stmt: 'Statements', branch: 'Branches', cond: 'Conditions', mcdc: 'MC/DC' };
 
 /** Checks minimum quotas (percent). Returns the violations as text; empty if all hold. */
 export function checkQuotas(exp: CoverageExport, min: Partial<Record<QuotaKey, number>>): string[] {

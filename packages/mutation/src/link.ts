@@ -35,7 +35,7 @@ export class CoverageIndex {
   flaky: Set<string>;
 
   constructor(public exp: CoverageExport) {
-    if (exp.format !== 'plgauge-coverage/1') throw new Error(`unbekanntes Coverage-Format: ${exp.format}`);
+    if (exp.format !== 'plgauge-coverage/1') throw new Error(`unknown coverage format: ${exp.format}`);
     this.flaky = new Set(exp.tests.filter((t) => t.status === 'flaky').map((t) => t.path));
     for (const o of exp.objects) this.objects.set(`${o.type} ${o.name}`, o);
   }
@@ -130,11 +130,11 @@ export function crossCheck(results: LinkedResult[], idx: CoverageIndex): CrossCh
 
 export function crossCheckText(c: CrossCheck): string {
   const lines = [
-    `${c.checked} Mutanten geprüft: ${c.consistent} stimmig, ${c.contradictions.length} Widersprüche; ${c.unknown} ohne Vergleich (keine Anweisung drumherum oder keine Coverage)`,
-    `${c.executedNotReached} nicht erreichte Mutanten liegen in ausgeführten Anweisungen (z. B. nicht gewählter Zweig eines Ausdrucks)`,
+    `${c.checked} mutants checked: ${c.consistent} consistent, ${c.contradictions.length} contradictions; ${c.unknown} not comparable (no enclosing statement or no coverage)`,
+    `${c.executedNotReached} unreached mutants lie in executed statements (e.g. a branch of an expression not taken)`,
   ];
   for (const x of c.contradictions.slice(0, 50)) {
-    lines.push(`  ${x.r.file.split('/').pop()}:${x.r.line} ${x.r.op} ${x.r.original.replace(/\s+/g, ' ').slice(0, 50)}: ${x.test} erreicht den Mutanten, führt laut Coverage die Anweisung aber nicht aus`);
+    lines.push(`  ${x.r.file.split('/').pop()}:${x.r.line} ${x.r.op} ${x.r.original.replace(/\s+/g, ' ').slice(0, 50)}: ${x.test} reaches the mutant but, according to coverage, does not execute the statement`);
   }
   return lines.join('\n') + '\n';
 }

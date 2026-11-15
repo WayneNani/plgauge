@@ -17,7 +17,7 @@ export async function projectCoverageConfig(dir: string, db: string, install: bo
   for (const f of findPoints(mutateFiles(p, dir))) for (const u of f.units) names.add(objectName(u.name));
   // runCoverage installs them, under the run lock and after restoring what a crashed run left
   const installScripts = install ? p.install.map((s) => join(dir, s)) : [];
-  if (installScripts.length) log(`${installScripts.length} Installationsskripte`);
+  if (installScripts.length) log(`${installScripts.length} install scripts`);
   const esc = (n: string) => n.replace(/[$#]/g, '\\$&');
   return {
     ...c,

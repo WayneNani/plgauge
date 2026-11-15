@@ -1,92 +1,92 @@
-# Auswertung an console (A11)
+# Evaluation on console
 
-Stand 14.11.2026. Ersatz für M4 auf eurem Code: Mutation Testing auf einem fremden, gepflegten Projekt mit echter
-Testsuite. Ergebnis: **89 von 100 überlebenden Mutanten zeigen eine echte Testlücke**; 11 sind äquivalent oder in der
-Praxis bedeutungslos. Die Operatoren der Stufe 1 liefern also verwertbare Hinweise. Für Stufe 2 (SQL-Operatoren, A10)
-gibt console keinen Anlass, weil nur 3 % seiner Mutanten in SQL liegen.
+As of 14 Nov 2026. A stand-in for a run on your own code: mutation testing on a third-party, maintained project with a
+real test suite. Result: **89 of 100 surviving mutants show a real test gap**; 11 are equivalent or meaningless in
+practice. So the level 1 operators produce usable findings. console gives no reason for level 2 (SQL operators),
+because only 3 % of its mutants are in SQL.
 
-## Lauf
+## Run
 
 | | |
 | --- | --- |
-| Code | `CONSOLE.pkb` von [console](https://github.com/ogobrecht/console) (`72ff8f85`), rund 4 000 Zeilen |
-| Tests | 258 utPLSQL-Tests; 2 scheitern schon ohne Mutanten, 11 sind unzuverlässig (Level-Prüfungen, die vom Konfigurationszustand abhängen) |
-| Datenbank | Oracle 23.26.1 Free, utPLSQL 3.2.2, drei Worker |
-| Modus | Schema, Aufzeichnung pro Test, Fail-Fast |
-| Laufzeit | 271 s für 1 630 Mutanten (Baseline 4,9 s) |
-| Mutation Score | **63,0 %**: 1 022 erkannt, 374 überlebt, 225 von keinem Test erreicht, 8 kompilieren nicht |
+| Code | `CONSOLE.pkb` from [console](https://github.com/ogobrecht/console) (`72ff8f85`), about 4 000 lines |
+| Tests | 258 utPLSQL tests; 2 already fail without mutants, 11 are unreliable (level checks that depend on the configuration state) |
+| Database | Oracle 23.26.1 Free, utPLSQL 3.2.2, three workers |
+| Mode | schema, recording per test, fail-fast |
+| Run time | 271 s for 1 630 mutants (baseline 4.9 s) |
+| Mutation score | **63.0 %**: 1 022 killed, 374 survived, 225 not reached by any test, 8 do not compile |
 
-| Operator | Mutanten | erkannt | überlebt | nicht erreicht | Score |
+| Operator | Mutants | killed | survived | not reached | Score |
 | --- | --- | --- | --- | --- | --- |
-| AOR | 246 | 132 | 74 | 38 | 54,1 % |
-| CUR | 38 | 25 | 5 | 8 | 65,8 % |
-| EXC | 6 | 3 | 0 | 3 | 50,0 % |
-| LCR | 112 | 66 | 26 | 20 | 58,9 % |
-| NUL | 118 | 83 | 24 | 11 | 70,3 % |
-| RET | 294 | 248 | 4 | 36 | 86,1 % |
-| ROR | 234 | 127 | 79 | 27 | 54,5 % |
-| SBR | 582 | 338 | 162 | 82 | 58,1 % |
+| AOR | 246 | 132 | 74 | 38 | 54.1 % |
+| CUR | 38 | 25 | 5 | 8 | 65.8 % |
+| EXC | 6 | 3 | 0 | 3 | 50.0 % |
+| LCR | 112 | 66 | 26 | 20 | 58.9 % |
+| NUL | 118 | 83 | 24 | 11 | 70.3 % |
+| RET | 294 | 248 | 4 | 36 | 86.1 % |
+| ROR | 234 | 127 | 79 | 27 | 54.5 % |
+| SBR | 582 | 338 | 162 | 82 | 58.1 % |
 
-Die meisten Überlebenden sammeln sich in den Diagnosefunktionen: `user_env` (81), `console_env` (28),
+Most survivors cluster in the diagnostic functions: `user_env` (81), `console_env` (28),
 `to_html_table` (34), `call_stack` (25), `status` (25), `utl_last_error` (22).
 
-## 100 Überlebende von Hand eingeordnet
+## 100 survivors classified by hand
 
-Stichprobe: 100 der 374 Überlebenden, zufällig mit festem Seed (11). Jede Zeile mit Begründung in
+Sample: 100 of the 374 survivors, chosen at random with a fixed seed (11). Each row with its reason in
 [`survivors-sample.tsv`](survivors-sample.tsv).
 
-| Klasse | Anzahl | Typisches Beispiel |
+| Class | Count | Typical example |
 | --- | --- | --- |
-| Ergebnis oder Text ungeprüft | 67 | `user_env` ohne die Zeile `CURRENT_USER`; HTML von `to_html_table` ohne `<!-- header -->`; Zählermeldung ohne `' - ' \|\| p_message` |
-| Fall oder Grenzwert fehlt | 18 | Grenze von genau 4 000 Byte für Client-Einstellungen; doppelte Fehlermeldungen werden nicht mehr unterdrückt; Logging im Exception-Handler bei niedrigem Level; Rechteprüfung nur mit dem Eigentümer |
-| Zustand oder Ressource ungeprüft | 4 | Cursor bleibt offen (`close_cursor` entfernt); Parameterliste wird nicht geleert |
-| praktisch äquivalent | 4 | `exit when n = p_max_rows` gegen `>=` (verschieden nur bei negativem Limit) |
-| nur Laufzeit | 2 | Konfiguration wird bei jedem Aufruf statt nach Ablauf neu gelesen |
-| Umgebung fehlt | 2 | CGI-Variablen gibt es nur in einer OWA-Session |
-| äquivalent | 3 | `< 30` gegen `<= 30` vor `rpad(…, 30)`; Tiefe aus einer Variable, die nie negativ ist |
+| Result or text unchecked | 67 | `user_env` without the `CURRENT_USER` row; HTML from `to_html_table` without `<!-- header -->`; counter message without `' - ' \|\| p_message` |
+| Case or boundary value missing | 18 | boundary of exactly 4 000 bytes for client preferences; duplicate error messages are no longer suppressed; logging in the exception handler at a low level; privilege check only with the owner |
+| State or resource unchecked | 4 | cursor stays open (`close_cursor` removed); parameter list is not cleared |
+| Practically equivalent | 4 | `exit when n = p_max_rows` vs. `>=` (differs only for a negative limit) |
+| Run time only | 2 | configuration is re-read on every call instead of after expiry |
+| Environment missing | 2 | CGI variables only exist in an OWA session |
+| Equivalent | 3 | `< 30` vs. `<= 30` before `rpad(…, 30)`; depth from a variable that is never negative |
 
-Was das für ein Team heißt: Die 18 Fälle der zweiten Zeile sind die wertvollsten Funde, echte fehlende Testfälle an
-Grenzen und in Fehlerpfaden. Die 67 der ersten Zeile sind meist Diagnoseausgaben, deren Text niemand Wort für Wort
-prüfen will. Für sie bietet sich an, solche Funktionen per Konfiguration auszuschließen oder als bekannt zu markieren.
+What this means for a team: the 18 cases in the second row are the most valuable findings, real missing test cases at
+boundaries and in error paths. The 67 in the first row are mostly diagnostic output whose text nobody wants to check
+word for word. For these, it makes sense to exclude such functions by configuration or mark them as known.
 
-## Was der Lauf am Werkzeug verbessert hat
+## What the run improved in the tool
 
-Der erste echte Fremdcode hat vier Schwächen gezeigt, alle behoben und mit Tests abgesichert:
+The first real third-party code exposed four weaknesses, all fixed and covered by tests:
 
-- **Tests, die selbst committen:** console schreibt Konfiguration fest. Die Commit-Erkennung hielt deshalb fast jeden
-  Mutanten für eine Nebenwirkung und setzte die Datenbank jedes Mal zurück. Jetzt gilt: Committet schon die Baseline,
-  gibt es eine Warnung und kein Zurücksetzen.
-- **Absturz eines Serverprozesses** (ORA-07445 beim Abbrechen einer Anweisung): Ein Worker verlor seine Verbindungen und
-  hakte danach 816 Mutanten als Fehler ab. Jetzt baut er sich neu auf, holt die Originale aus dem Journal und
-  wiederholt den Mutanten; im zweiten Lauf geschah genau das einmal, ohne Folgen.
-- **Kontextname global:** Zwei Benutzer, die gleichzeitig in einer Datenbank mutieren, nahmen sich den Kontext für die
-  Schleifengrenzen weg. Er heißt jetzt pro Schema anders.
-- **Unzuverlässige Tests:** Die 11 Level-Tests scheitern je nach Konfigurationszustand. Die Nachprüfung tötender Tests
-  hat sie erkannt, ausgeschlossen und die betroffenen Mutanten ohne sie wiederholt.
+- **Tests that commit themselves:** console commits configuration. The commit detection therefore took almost every
+  mutant for a side effect and reset the database each time. Now, if the baseline already commits, there is a warning
+  and no reset.
+- **Crash of a server process** (ORA-07445 when cancelling a statement): a worker lost its connections and then
+  marked 816 mutants as errors. Now it rebuilds itself, fetches the originals from the journal and repeats the
+  mutant; in the second run exactly this happened once, without consequences.
+- **Global context name:** two users mutating in one database at the same time took the context for the loop limits
+  away from each other. Its name is now different per schema.
+- **Unreliable tests:** the 11 level tests fail depending on the configuration state. Re-checking the killing tests
+  detected them, excluded them and repeated the affected mutants without them.
 
-## Entscheidung über Stufe 2 (A10)
+## Decision on level 2
 
-Nachtrag: Stufe 2 ist inzwischen umgesetzt und an SQL-lastigem Code ausgewertet, siehe
-[`eval/plscope-utils/EVAL.md`](../plscope-utils/EVAL.md). In console erzeugt sie 6 Mutanten.
+Addendum: level 2 has since been implemented and evaluated on SQL-heavy code, see
+[`eval/plscope-utils/EVAL.md`](../plscope-utils/EVAL.md). In console it produces 6 mutants.
 
-Ursprünglich zurückgestellt. Gründe:
+Originally postponed. Reasons:
 
-1. Nur 47 der 1 630 Mutanten liegen in SQL (2,9 %), davon überleben 7. SQL-Operatoren (DISTINCT, Joins, GROUP BY,
-   Spalten tauschen) hätten in console kaum Angriffsfläche.
-2. Die Operatoren der Stufe 1 liefern schon 89 % verwertbare Funde bei 3 % echten Äquivalenten. Mehr Operatoren hieße
-   hier vor allem mehr Laufzeit.
-3. Ob sich Stufe 2 lohnt, hängt am Anteil von SQL im Code. Das entscheidet ein Lauf auf SQL-lastigem Code, idealerweise
-   eurem: `plgauge mutate run <projekt>` und der Anteil `ctx = sql` im Bericht.
+1. Only 47 of the 1 630 mutants are in SQL (2.9 %), and 7 of them survive. SQL operators (DISTINCT, joins, GROUP BY,
+   swapping columns) would have hardly any surface to attack in console.
+2. The level 1 operators already produce 89 % usable findings with 3 % real equivalents. More operators would mainly
+   mean more run time here.
+3. Whether level 2 pays off depends on the share of SQL in the code. A run on SQL-heavy code decides that, ideally on
+   your own: `plgauge mutate run <project>` and the share of `ctx = sql` in the report.
 
-Eine kleine Verbesserung für Stufe 1 hat die Stichprobe gezeigt: Die Heuristik „nie negativ“ erkennt `x > 0` gegen
-`x <> 0` nur bei direkten Ausdrücken wie `length(…)`, nicht bei einer Variable, der so ein Ausdruck zugewiesen wurde.
-Das betrifft 1 von 100 Fällen und lohnt sich erst, wenn es auf anderem Code häufiger auftritt.
+The sample showed one small improvement for level 1: the "never negative" heuristic recognizes `x > 0` vs. `x <> 0`
+only for direct expressions such as `length(…)`, not for a variable that was assigned such an expression. This affects
+1 of 100 cases and only pays off if it occurs more often on other code.
 
-## Wiederholen
+## Reproducing
 
 ```bash
-corpus/fetch.sh                                  # console nach corpus/.cache
-# console in der Datenbank installieren: eval/console/README.md
-PLGAUGE_DB=oracle://console_eval:…@…/FREEPDB1 npx plgauge mutate run eval/console --json run.json --report run.html
+corpus/fetch.sh                                  # console into corpus/.cache
+# install console in the database: eval/console/README.md
+PLGAUGE_DB=oracle://console_eval:…@…/FREEPDB1 bin/plgauge mutate run eval/console --json run.json --report run.html
 npx tsx scripts/eval-summary.ts run.json survivors.tsv
 ```

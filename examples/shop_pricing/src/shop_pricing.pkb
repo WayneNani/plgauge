@@ -1,103 +1,103 @@
 CREATE OR REPLACE PACKAGE BODY shop_pricing AS
 
-  -- 10 % Rabatt ab der Rabattgrenze.
-  FUNCTION rabatt(p_summe NUMBER) RETURN NUMBER IS
+  -- 10 % discount from the discount threshold on.
+  FUNCTION discount(p_amount NUMBER) RETURN NUMBER IS
   BEGIN
-    IF p_summe >= c_rabattgrenze THEN
-      RETURN p_summe * 0.1;
+    IF p_amount >= c_discount_threshold THEN
+      RETURN p_amount * 0.1;
     END IF;
     RETURN 0;
-  END rabatt;
+  END discount;
 
-  -- Versand ist ab c_versandfrei kostenlos, außer bei Express.
-  FUNCTION versandkosten(p_summe NUMBER, p_express BOOLEAN) RETURN NUMBER IS
-    l_kosten NUMBER := 0;
+  -- Shipping is free from c_free_shipping on, except for express.
+  FUNCTION shipping_cost(p_amount NUMBER, p_express BOOLEAN) RETURN NUMBER IS
+    l_cost NUMBER := 0;
   BEGIN
     IF p_express THEN
-      l_kosten := 15;
-    ELSIF p_summe < c_versandfrei THEN
-      l_kosten := 5;
+      l_cost := 15;
+    ELSIF p_amount < c_free_shipping THEN
+      l_cost := 5;
     END IF;
-    RETURN l_kosten;
-  END versandkosten;
+    RETURN l_cost;
+  END shipping_cost;
 
-  FUNCTION endpreis(p_summe NUMBER, p_express BOOLEAN) RETURN NUMBER IS
+  FUNCTION final_price(p_amount NUMBER, p_express BOOLEAN) RETURN NUMBER IS
   BEGIN
-    IF p_summe IS NULL OR p_summe <= 0 THEN
-      RAISE_APPLICATION_ERROR(-20001, 'Summe muss positiv sein');
+    IF p_amount IS NULL OR p_amount <= 0 THEN
+      RAISE_APPLICATION_ERROR(-20001, 'Amount must be positive');
     END IF;
-    RETURN p_summe - rabatt(p_summe) + versandkosten(p_summe, p_express);
-  END endpreis;
+    RETURN p_amount - discount(p_amount) + shipping_cost(p_amount, p_express);
+  END final_price;
 
-  PROCEDURE buche(p_kunde VARCHAR2, p_summe NUMBER) IS
-    l_rabatt NUMBER;
+  PROCEDURE place_order(p_customer VARCHAR2, p_amount NUMBER) IS
+    l_discount NUMBER;
   BEGIN
-    l_rabatt := rabatt(p_summe);
-    INSERT INTO bestellungen (kunde, summe, rabatt, versand)
-    VALUES (p_kunde, p_summe, l_rabatt, versandkosten(p_summe, FALSE));
-  END buche;
+    l_discount := discount(p_amount);
+    INSERT INTO shop_orders (customer, amount, discount, shipping)
+    VALUES (p_customer, p_amount, l_discount, shipping_cost(p_amount, FALSE));
+  END place_order;
 
-  -- Löscht eine Bestellung; im Modus 'final' wird sofort festgeschrieben.
-  PROCEDURE storniere(p_id NUMBER, p_modus VARCHAR2) IS
+  -- Deletes an order; in mode 'final' it commits at once.
+  PROCEDURE cancel_order(p_id NUMBER, p_mode VARCHAR2) IS
   BEGIN
-    DELETE FROM bestellungen WHERE id = p_id;
-    IF p_modus = 'final' THEN
+    DELETE FROM shop_orders WHERE id = p_id;
+    IF p_mode = 'final' THEN
       COMMIT;
     END IF;
-  END storniere;
+  END cancel_order;
 
-  -- Umsatz eines Kunden; unbekannte Kunden haben 0 Umsatz.
-  FUNCTION umsatz(p_kunde VARCHAR2) RETURN NUMBER IS
-    CURSOR c IS SELECT summe FROM bestellungen WHERE kunde = p_kunde;
-    l_summe  NUMBER;
-    l_gesamt NUMBER := 0;
+  -- Revenue of a customer; unknown customers have 0 revenue.
+  FUNCTION revenue(p_customer VARCHAR2) RETURN NUMBER IS
+    CURSOR c IS SELECT amount FROM shop_orders WHERE customer = p_customer;
+    l_amount  NUMBER;
+    l_total NUMBER := 0;
   BEGIN
     OPEN c;
     LOOP
-      FETCH c INTO l_summe;
+      FETCH c INTO l_amount;
       EXIT WHEN c%NOTFOUND;
-      l_gesamt := l_gesamt + NVL(l_summe, 0);
+      l_total := l_total + NVL(l_amount, 0);
     END LOOP;
     CLOSE c;
-    RETURN l_gesamt;
-  END umsatz;
+    RETURN l_total;
+  END revenue;
 
-  -- Treuepunkte: für die k-te Bestellung gibt es k Punkte.
-  FUNCTION treuepunkte(p_n PLS_INTEGER) RETURN PLS_INTEGER IS
+  -- Loyalty points: the k-th order earns k points.
+  FUNCTION loyalty_points(p_n PLS_INTEGER) RETURN PLS_INTEGER IS
     l PLS_INTEGER := 0;
   BEGIN
     FOR k IN 1 .. p_n LOOP
       l := l + k;
     END LOOP;
     RETURN l;
-  END treuepunkte;
+  END loyalty_points;
 
-  FUNCTION anteil(p_teil NUMBER, p_ganzes NUMBER) RETURN NUMBER IS
+  FUNCTION ratio(p_part NUMBER, p_whole NUMBER) RETURN NUMBER IS
   BEGIN
-    RETURN p_teil / p_ganzes;
+    RETURN p_part / p_whole;
   EXCEPTION
     WHEN ZERO_DIVIDE THEN
-      DBMS_OUTPUT.PUT_LINE('anteil: Ganzes ist 0');
-      RAISE_APPLICATION_ERROR(-20002, 'Ganzes ist 0');
-  END anteil;
+      DBMS_OUTPUT.PUT_LINE('ratio: whole is 0');
+      RAISE_APPLICATION_ERROR(-20002, 'whole is 0');
+  END ratio;
 
-  -- Kurze Bestellnummer: die letzten vier Stellen der ID.
-  FUNCTION bestellnummer(p_id NUMBER) RETURN VARCHAR2 IS
+  -- Short order number: the last four digits of the ID.
+  FUNCTION order_number(p_id NUMBER) RETURN VARCHAR2 IS
   BEGIN
-    RETURN 'B-' || LPAD(MOD(p_id, 10000), 4, '0');
-  END bestellnummer;
+    RETURN 'O-' || LPAD(MOD(p_id, 10000), 4, '0');
+  END order_number;
 
-  -- Anzahl der Raten, bis die Summe abbezahlt ist.
-  FUNCTION raten(p_summe NUMBER, p_rate NUMBER) RETURN PLS_INTEGER IS
-    l_rest NUMBER := p_summe;
+  -- Number of installments until the amount is paid off.
+  FUNCTION installments(p_amount NUMBER, p_rate NUMBER) RETURN PLS_INTEGER IS
+    l_remaining NUMBER := p_amount;
     l_n    PLS_INTEGER := 0;
   BEGIN
-    WHILE l_rest > 0 LOOP
-      l_rest := l_rest - p_rate;
+    WHILE l_remaining > 0 LOOP
+      l_remaining := l_remaining - p_rate;
       l_n := l_n + 1;
     END LOOP;
     RETURN l_n;
-  END raten;
+  END installments;
 
 END shop_pricing;
 /

@@ -18,7 +18,7 @@ export function changedLines(ref: string, cwd = process.cwd()): ChangedLines {
   try {
     base = git('merge-base', ref, 'HEAD').trim();
   } catch {
-    throw new Error(`git: keine gemeinsame Basis mit ${ref} (fetch-depth 0 im CI-Checkout?)`);
+    throw new Error(`git: no merge base with ${ref} (fetch-depth 0 in the CI checkout?)`);
   }
   return parseUnifiedDiff(git('diff', '--unified=0', '--no-color', '--no-ext-diff', base), root);
 }

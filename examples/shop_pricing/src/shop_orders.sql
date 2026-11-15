@@ -1,0 +1,8 @@
+CREATE TABLE shop_orders (
+  id        NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  customer  VARCHAR2(100) NOT NULL,
+  amount    NUMBER(12,2)  NOT NULL,
+  discount  NUMBER(12,2)  NOT NULL,
+  shipping  NUMBER(12,2)  NOT NULL
+)
+/

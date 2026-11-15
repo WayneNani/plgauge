@@ -1,101 +1,101 @@
-Nr	ID	Zeile	Operator	Unterprogramm	Original	Mutant	Klasse	Begründung
-1	1	7	AOR		chr(13) || chr(10)	chr(13)	Ergebnis oder Text ungeprüft	CRLF-Konstante: Zeilenumbrüche der Ausgabe ungeprüft
-2	32	384	SBR	info	g_params.delete;	NULL;	Zustand oder Ressource ungeprüft	Parameterliste wird bei deaktiviertem Logging nicht geleert: ungeprüft
-3	56	609	SBR	trace	g_params.delete;	NULL;	Zustand oder Ressource ungeprüft	Parameterliste wird bei deaktiviertem Logging nicht geleert: ungeprüft
-4	78	699	AOR	count_current	l_label || ': ' || to_char(g_counters(l_label)) || case when p_message is not nu	l_label || ': ' || to_char(g_counters(l_label))	Ergebnis oder Text ungeprüft	Text der Zähler- und Timer-Meldung ungeprüft
-5	79	701	NUL	count_current	p_message is not null	p_message is null	Ergebnis oder Text ungeprüft	Text der Zähler- und Timer-Meldung ungeprüft
-6	118	804	AOR	time_current	l_label || ': ' || runtime (g_timers(l_label)) || case when p_message is not nul	l_label || ': ' || runtime (g_timers(l_label))	Ergebnis oder Text ungeprüft	Text der Zähler- und Timer-Meldung ungeprüft
-7	129	830	AOR	time_end	l_label || ': ' || runtime (g_timers(l_label))	l_label || ': '	Ergebnis oder Text ungeprüft	Text der Zähler- und Timer-Meldung ungeprüft
-8	307	1775	ROR	conf	c_console_owner = sys_context('USERENV','SESSION_USER')	c_console_owner <= sys_context('USERENV','SESSION_USER')	Fall oder Grenzwert fehlt	Rechteprüfung nur mit dem Eigentümer getestet
-9	314	1780	NUL	conf	coalesce(sys_context('USERENV','OS_USER'), sys_context('USERENV','SESSION_USER')	sys_context('USERENV','SESSION_USER')	Ergebnis oder Text ungeprüft	conf_user wird nicht geprüft
-10	327	1792	AOR	conf	'Check interval needs to be between %s and %s (seconds). ' || 'Values between %s	'Check interval needs to be between %s and %s (seconds). '	Ergebnis oder Text ungeprüft	Text der Fehlermeldung ungeprüft
-11	350	1844	SBR	init	l_prefs.level_name := level_name(p_level);	NULL;	Ergebnis oder Text ungeprüft	level_name in den Client-Einstellungen ungeprüft
-12	363	1863	ROR	init	p_client_identifier = g_conf_client_identifier	p_client_identifier <= g_conf_client_identifier	Fall oder Grenzwert fehlt	init/exit nur mit gleichem Client-Identifier getestet
-13	364	1863	ROR	init	p_client_identifier = g_conf_client_identifier	p_client_identifier >= g_conf_client_identifier	Fall oder Grenzwert fehlt	init/exit nur mit gleichem Client-Identifier getestet
-14	376	1914	ROR	exit_	p_client_identifier = g_conf_client_identifier	p_client_identifier >= g_conf_client_identifier	Fall oder Grenzwert fehlt	init/exit nur mit gleichem Client-Identifier getestet
-15	543	2246	RET	to_html_table.close_cursor		RETURN;	Zustand oder Ressource ungeprüft	Cursor wird nicht geschlossen: kein Test merkt das Leck
-16	545	2248	SBR	to_html_table.close_cursor	sys.dbms_sql.close_cursor(p_cursor_id);	NULL;	Zustand oder Ressource ungeprüft	Cursor wird nicht geschlossen: kein Test merkt das Leck
-17	563	2279	ROR	to_html_table.describe_columns	l_desc_tab(i).col_type = c_long	FALSE	Fall oder Grenzwert fehlt	keine LONG-Spalte in den to_html_table-Tests
-18	569	2296	AOR	to_html_table.create_header	c_lf || '<tr><!--- header -->'	c_lf	Ergebnis oder Text ungeprüft	HTML-Ausgabe von to_html_table nur grob geprüft
-19	572	2299	AOR	to_html_table.create_header	'<th id="row_num">Row#</th>' || c_lf	'<th id="row_num">Row#</th>'	Ergebnis oder Text ungeprüft	HTML-Ausgabe von to_html_table nur grob geprüft
-20	582	2312	AOR	to_html_table.create_header	'</tr><!-- header -->' || c_lf	'</tr><!-- header -->'	Ergebnis oder Text ungeprüft	HTML-Ausgabe von to_html_table nur grob geprüft
-21	594	2319	ROR	to_html_table.create_data	l_data_count = p_max_rows	l_data_count >= p_max_rows	praktisch äquivalent	nur bei unrealistischen Werten verschieden (negatives Limit, Aufruf direkt aus SQL, Fehler ohne Backtrace, gleiche Sekunde)
-22	601	2325	AOR	to_html_table.create_data	c_lf || '<tr><!--- row ' || to_char(l_data_count) || ' -->'	c_lf || '<tr><!--- row ' || to_char(l_data_count)	Ergebnis oder Text ungeprüft	HTML-Ausgabe von to_html_table nur grob geprüft
-23	620	2348	ROR	to_html_table.create_data	length(l_buffer_clob) > p_max_column_length	FALSE	Fall oder Grenzwert fehlt	Kürzung langer CLOB/XML-Werte ("...") nicht getestet
-24	631	2362	ROR	to_html_table.create_data	length(l_buffer_clob) > p_max_column_length	FALSE	Fall oder Grenzwert fehlt	Kürzung langer CLOB/XML-Werte ("...") nicht getestet
-25	658	2414	AOR	to_html_table	'<table>' || c_lf	'<table>'	Ergebnis oder Text ungeprüft	HTML-Ausgabe von to_html_table nur grob geprüft
-26	691	2466	ROR	to_md_tab_header	nvl(length(l_value), 0) < 43	FALSE	Ergebnis oder Text ungeprüft	Markdown-Auffüllung (rpad, NULL-Schlüssel) ungeprüft
-27	710	2495	ROR	to_md_tab_data	nvl(length(l_key), 0) < 30	nvl(length(l_key), 0) <= 30	äquivalent	rpad auf genau 30 Zeichen ändert nichts: äquivalent
-28	712	2495	ROR	to_md_tab_data	nvl(length(l_key), 0) < 30	FALSE	Ergebnis oder Text ungeprüft	Markdown-Auffüllung (rpad, NULL-Schlüssel) ungeprüft
-29	713	2495	NUL	to_md_tab_data	nvl(length(l_key), 0)	length(l_key)	Ergebnis oder Text ungeprüft	Markdown-Auffüllung (rpad, NULL-Schlüssel) ungeprüft
-30	715	2496	NUL	to_md_tab_data	nvl(l_key ,' ')	l_key	Ergebnis oder Text ungeprüft	Markdown-Auffüllung (rpad, NULL-Schlüssel) ungeprüft
-31	720	2501	NUL	to_md_tab_data	nvl(length(l_value), 0)	length(l_value)	Ergebnis oder Text ungeprüft	Markdown-Auffüllung (rpad, NULL-Schlüssel) ungeprüft
-32	722	2502	NUL	to_md_tab_data	nvl(l_value,' ')	l_value	Ergebnis oder Text ungeprüft	Markdown-Auffüllung (rpad, NULL-Schlüssel) ungeprüft
-33	749	2540	AOR	to_unibar	l_return || unistr('\258E')	l_return	Ergebnis oder Text ungeprüft	Teilblöcke von to_unibar ungeprüft
-34	753	2544	AOR	to_unibar	l_return || unistr('\258C')	l_return	Ergebnis oder Text ungeprüft	Teilblöcke von to_unibar ungeprüft
-35	803	2678	CUR	scope	sys.utl_call_stack.dynamic_depth	(sys.utl_call_stack.dynamic_depth) - 1	Ergebnis oder Text ungeprüft	Inhalt des Call-Stack-Textes ungeprüft
-36	827	2716	AOR	call_stack	l_return || '- '	l_return	Ergebnis oder Text ungeprüft	Inhalt des Call-Stack-Textes ungeprüft
-37	832	2722	ROR	call_stack	sys.utl_call_stack.dynamic_depth > 1	sys.utl_call_stack.dynamic_depth >= 1	praktisch äquivalent	nur bei unrealistischen Werten verschieden (negatives Limit, Aufruf direkt aus SQL, Fehler ohne Backtrace, gleiche Sekunde)
-38	838	2726	CUR	call_stack	2	(2) + 1	Ergebnis oder Text ungeprüft	Inhalt des Call-Stack-Textes ungeprüft
-39	845	2732	AOR	call_stack	l_return || '- ' || case when sys.utl_call_stack.owner(i) is not null then sys.u	l_return || '- '	Ergebnis oder Text ungeprüft	Inhalt des Call-Stack-Textes ungeprüft
-40	857	2748	ROR	call_stack	sys.utl_call_stack.error_depth > 0	FALSE	Ergebnis oder Text ungeprüft	Inhalt des Call-Stack-Textes ungeprüft
-41	889	2774	AOR	call_stack	l_return || chr(10)	l_return	Ergebnis oder Text ungeprüft	Inhalt des Call-Stack-Textes ungeprüft
-42	898	2869	CUR	cgi_env	nvl(sys.owa.num_cgi_vars, 0)	(nvl(sys.owa.num_cgi_vars, 0)) - 1	Umgebung fehlt	OWA-Umgebung (Web) fehlt in den Tests
-43	899	2869	NUL	cgi_env	nvl(sys.owa.num_cgi_vars, 0)	sys.owa.num_cgi_vars	Umgebung fehlt	OWA-Umgebung (Web) fehlt in den Tests
-44	903	2877	SBR	cgi_env	l_return := l_return || c_lf;	NULL;	Ergebnis oder Text ungeprüft	cgi_env: Zeilenende ungeprüft
-45	917	2903	SBR	console_env	append_row('sysdate', to_char( sysdate, c_date_format ));	NULL;	Ergebnis oder Text ungeprüft	console_env: einzelne Zeilen ungeprüft
-46	921	2907	SBR	console_env	append_row('g_conf_level', to_char( g_conf_level ));	NULL;	Ergebnis oder Text ungeprüft	console_env: einzelne Zeilen ungeprüft
-47	924	2910	SBR	console_env	append_row('g_conf_enable_ascii_art', to_string( g_conf_enable_ascii_art ));	NULL;	Ergebnis oder Text ungeprüft	console_env: einzelne Zeilen ungeprüft
-48	932	2918	SBR	console_env	append_row('g_saved_stack.count', to_char( g_saved_stack.count ));	NULL;	Ergebnis oder Text ungeprüft	console_env: einzelne Zeilen ungeprüft
-49	935	2921	AOR	console_env	l_return || c_lf	l_return	Ergebnis oder Text ungeprüft	console_env: einzelne Zeilen ungeprüft
-50	940	2924	AOR	console_env	l_return || '##### Running Timers' || c_lflf	l_return || '##### Running Timers'	Ergebnis oder Text ungeprüft	console_env: einzelne Zeilen ungeprüft
-51	982	2993	SBR	user_env	append_row('CLIENT_PROGRAM_NAME');	NULL;	Ergebnis oder Text ungeprüft	user_env: einzelne Zeilen ungeprüft
-52	987	2998	SBR	user_env	append_row('CURRENT_EDITION_NAME');	NULL;	Ergebnis oder Text ungeprüft	user_env: einzelne Zeilen ungeprüft
-53	992	3003	SBR	user_env	append_row('CURRENT_USER');	NULL;	Ergebnis oder Text ungeprüft	user_env: einzelne Zeilen ungeprüft
-54	993	3004	SBR	user_env	append_row('CURRENT_USERID');	NULL;	Ergebnis oder Text ungeprüft	user_env: einzelne Zeilen ungeprüft
-55	995	3006	SBR	user_env	append_row('DB_DOMAIN');	NULL;	Ergebnis oder Text ungeprüft	user_env: einzelne Zeilen ungeprüft
-56	998	3009	SBR	user_env	append_row('DB_UNIQUE_NAME');	NULL;	Ergebnis oder Text ungeprüft	user_env: einzelne Zeilen ungeprüft
-57	999	3010	SBR	user_env	append_row('DBLINK_INFO');	NULL;	Ergebnis oder Text ungeprüft	user_env: einzelne Zeilen ungeprüft
-58	1004	3015	SBR	user_env	append_row('GLOBAL_UID');	NULL;	Ergebnis oder Text ungeprüft	user_env: einzelne Zeilen ungeprüft
-59	1015	3026	SBR	user_env	append_row('LANG');	NULL;	Ergebnis oder Text ungeprüft	user_env: einzelne Zeilen ungeprüft
-60	1018	3029	SBR	user_env	append_row('MODULE');	NULL;	Ergebnis oder Text ungeprüft	user_env: einzelne Zeilen ungeprüft
-61	1019	3030	SBR	user_env	append_row('NETWORK_PROTOCOL');	NULL;	Ergebnis oder Text ungeprüft	user_env: einzelne Zeilen ungeprüft
-62	1021	3032	SBR	user_env	append_row('NLS_CURRENCY');	NULL;	Ergebnis oder Text ungeprüft	user_env: einzelne Zeilen ungeprüft
-63	1024	3035	SBR	user_env	append_row('NLS_SORT');	NULL;	Ergebnis oder Text ungeprüft	user_env: einzelne Zeilen ungeprüft
-64	1027	3038	SBR	user_env	append_row('OS_USER');	NULL;	Ergebnis oder Text ungeprüft	user_env: einzelne Zeilen ungeprüft
-65	1028	3039	SBR	user_env	append_row('PLATFORM_SLASH');	NULL;	Ergebnis oder Text ungeprüft	user_env: einzelne Zeilen ungeprüft
-66	1030	3041	SBR	user_env	append_row('PROXY_ENTERPRISE_IDENTITY');	NULL;	Ergebnis oder Text ungeprüft	user_env: einzelne Zeilen ungeprüft
-67	1033	3044	SBR	user_env	append_row('SCHEDULER_JOB');	NULL;	Ergebnis oder Text ungeprüft	user_env: einzelne Zeilen ungeprüft
-68	1039	3050	SBR	user_env	append_row('SESSION_USER');	NULL;	Ergebnis oder Text ungeprüft	user_env: einzelne Zeilen ungeprüft
-69	1046	3058	SBR	user_env	l_return := l_return || c_lf || 'We tried to show [documented attributes from Or	NULL;	Ergebnis oder Text ungeprüft	user_env: Fußtext ungeprüft
-70	1051	3058	AOR	user_env	l_return || c_lf || 'We tried to show [documented attributes from Oracle 19c](ht	l_return || c_lf || 'We tried to show [documented attributes from Oracle 19c](ht	Ergebnis oder Text ungeprüft	user_env: Fußtext ungeprüft
-71	1079	3132	ROR	status	g_conf_check_sysdate < sysdate	g_conf_check_sysdate <> sysdate	nur Laufzeit	nur häufigeres Neuladen der Konfiguration: Laufzeit, kein Verhalten
-72	1083	3136	SBR	status	l_row.value := to_char( c_version );	NULL;	Ergebnis oder Text ungeprüft	status: einzelne Attribute ungeprüft
-73	1088	3139	SBR	status	l_row.attribute := 'g_conf_check_sysdate' ;	NULL;	Ergebnis oder Text ungeprüft	status: einzelne Attribute ungeprüft
-74	1101	3145	SBR	status	l_row.value := to_string( g_conf_enable_ascii_art );	NULL;	Ergebnis oder Text ungeprüft	status: einzelne Attribute ungeprüft
-75	1116	3153	SBR	status	l_row.attribute := 'g_saved_stack.count' ;	NULL;	Ergebnis oder Text ungeprüft	status: einzelne Attribute ungeprüft
-76	1123	3166	SBR	conf	l_row.attribute := 'conf_sysdate' ;	NULL;	Ergebnis oder Text ungeprüft	conf: einzelne Attribute ungeprüft
-77	1126	3167	SBR	conf	l_row.value := l_conf.conf_user ;	NULL;	Ergebnis oder Text ungeprüft	conf: einzelne Attribute ungeprüft
-78	1130	3169	SBR	conf	l_row.value := l_conf.level_name ;	NULL;	Ergebnis oder Text ungeprüft	conf: einzelne Attribute ungeprüft
-79	1190	3365	LCR	utl_last_error	l_error_depth > 0 and l_backtrace_depth > 0	l_error_depth > 0	praktisch äquivalent	nur bei unrealistischen Werten verschieden (negatives Limit, Aufruf direkt aus SQL, Fehler ohne Backtrace, gleiche Sekunde)
-80	1192	3365	LCR	utl_last_error	l_error_depth > 0 and l_backtrace_depth > 0	(l_error_depth > 0) = (l_backtrace_depth > 0)	Fall oder Grenzwert fehlt	utl_last_error ohne aktiven Fehler nicht getestet
-81	1195	3365	ROR	utl_last_error	l_error_depth > 0	l_error_depth <> 0	äquivalent	Tiefe nie negativ (über Variable, Heuristik sieht es nicht): äquivalent
-82	1200	3366	LCR	utl_last_error	l_error_number != 6512 and l_error_msg != coalesce(g_prev_error_msg, 'null')	l_error_number != 6512	Fall oder Grenzwert fehlt	Unterdrückung doppelter Fehlermeldungen nicht getestet
-83	1205	3366	ROR	utl_last_error	l_error_number != 6512	l_error_number > 6512	Fall oder Grenzwert fehlt	nur Fehler mit Nummer über 6512 getestet (keine ORA-01403 o. ä.)
-84	1211	3366	NUL	utl_last_error	coalesce(g_prev_error_msg, 'null')	'null'	Fall oder Grenzwert fehlt	Unterdrückung doppelter Fehlermeldungen nicht getestet
-85	1213	3368	AOR	utl_last_error	' (line ' || to_char(l_backtrace_line)	' (line '	Ergebnis oder Text ungeprüft	Format der Fehlermeldung (Zeile, ORA-Nummer) ungeprüft
-86	1218	3368	AOR	utl_last_error	' (line ' || to_char(l_backtrace_line) || ', ORA-' || trim(to_char(l_error_numbe	' (line ' || to_char(l_backtrace_line) || ', ORA-' || trim(to_char(l_error_numbe	Ergebnis oder Text ungeprüft	Format der Fehlermeldung (Zeile, ORA-Nummer) ungeprüft
-87	1226	3390	ROR	utl_logging_is_enabled	g_conf_check_sysdate < sysdate	g_conf_check_sysdate <> sysdate	nur Laufzeit	nur häufigeres Neuladen der Konfiguration: Laufzeit, kein Verhalten
-88	1229	3394	LCR	utl_logging_is_enabled	g_conf_level >= p_level or sqlcode != 0	g_conf_level >= p_level	Fall oder Grenzwert fehlt	Logging im Exception-Handler bei niedrigem Level nicht getestet
-89	1237	3394	ROR	utl_logging_is_enabled	sqlcode != 0	sqlcode > 0	Fall oder Grenzwert fehlt	Logging im Exception-Handler bei niedrigem Level nicht getestet
-90	1273	3481	ROR	utl_set_client_prefs.update_client_prefs	conf_id = c_conf_id	conf_id >= c_conf_id	äquivalent	Tabelle mit genau einer Zeile (Check-Constraint): äquivalent
-91	1278	3486	ROR	utl_set_client_prefs	coalesce(lengthb(p_prefs), 0) <= 4000	coalesce(lengthb(p_prefs), 0) < 4000	Fall oder Grenzwert fehlt	Grenze genau 4000 Byte nicht getestet
-92	1282	3486	NUL	utl_set_client_prefs	coalesce(lengthb(p_prefs), 0)	0	Fall oder Grenzwert fehlt	zu große Client-Einstellungen nicht getestet
-93	1300	3526	ROR	utl_get_client_prefs	l_prefs.exit_sysdate >= sysdate	l_prefs.exit_sysdate > sysdate	praktisch äquivalent	nur bei unrealistischen Werten verschieden (negatives Limit, Aufruf direkt aus SQL, Fehler ohne Backtrace, gleiche Sekunde)
-94	1321	3533	ROR	utl_get_client_prefs	bitand ( l_boolean_options, c_cgi_env ) = c_cgi_env	FALSE	Fall oder Grenzwert fehlt	Optionen cgi_env/console_env in den Client-Einstellungen nicht variiert
-95	1498	3788	ROR	utl_client_prefs_to_csv	p_client_prefs.console_env = 'true'	TRUE	Fall oder Grenzwert fehlt	Optionen cgi_env/console_env in den Client-Einstellungen nicht variiert
-96	1504	3803	LCR	utl_set_client_identifier	g_conf_client_identifier is null or g_conf_client_identifier = ':'	g_conf_client_identifier = ':'	Fall oder Grenzwert fehlt	Session ohne Client-Identifier nicht getestet
-97	1602	3926	SBR	utl_create_log_entry	clob_append(l_row.message, l_cache, cgi_env);	NULL;	Ergebnis oder Text ungeprüft	Umgebungsabschnitte im Logeintrag ungeprüft
-98	1607	3930	SBR	utl_create_log_entry	clob_append(l_row.message, l_cache, console_env);	NULL;	Ergebnis oder Text ungeprüft	Umgebungsabschnitte im Logeintrag ungeprüft
-99	1612	3934	SBR	utl_create_log_entry	clob_append(l_row.message, l_cache, user_env);	NULL;	Ergebnis oder Text ungeprüft	Umgebungsabschnitte im Logeintrag ungeprüft
-100	1623	3948	SBR	utl_create_log_entry	l_row.ip_address := substrb ( sys_context ( 'USERENV', 'IP_ADDRESS' ), 1, 48 );	NULL;	Ergebnis oder Text ungeprüft	ip_address des Logeintrags ungeprüft
+No	ID	Line	Operator	Subprogram	Original	Mutant	Class	Reason
+1	1	7	AOR		chr(13) || chr(10)	chr(13)	Result or text unchecked	CRLF constant: line breaks of the output unchecked
+2	32	384	SBR	info	g_params.delete;	NULL;	State or resource unchecked	parameter list is not cleared when logging is disabled: unchecked
+3	56	609	SBR	trace	g_params.delete;	NULL;	State or resource unchecked	parameter list is not cleared when logging is disabled: unchecked
+4	78	699	AOR	count_current	l_label || ': ' || to_char(g_counters(l_label)) || case when p_message is not nu	l_label || ': ' || to_char(g_counters(l_label))	Result or text unchecked	text of the counter and timer message unchecked
+5	79	701	NUL	count_current	p_message is not null	p_message is null	Result or text unchecked	text of the counter and timer message unchecked
+6	118	804	AOR	time_current	l_label || ': ' || runtime (g_timers(l_label)) || case when p_message is not nul	l_label || ': ' || runtime (g_timers(l_label))	Result or text unchecked	text of the counter and timer message unchecked
+7	129	830	AOR	time_end	l_label || ': ' || runtime (g_timers(l_label))	l_label || ': '	Result or text unchecked	text of the counter and timer message unchecked
+8	307	1775	ROR	conf	c_console_owner = sys_context('USERENV','SESSION_USER')	c_console_owner <= sys_context('USERENV','SESSION_USER')	Case or boundary value missing	privilege check only tested with the owner
+9	314	1780	NUL	conf	coalesce(sys_context('USERENV','OS_USER'), sys_context('USERENV','SESSION_USER')	sys_context('USERENV','SESSION_USER')	Result or text unchecked	conf_user is not checked
+10	327	1792	AOR	conf	'Check interval needs to be between %s and %s (seconds). ' || 'Values between %s	'Check interval needs to be between %s and %s (seconds). '	Result or text unchecked	text of the error message unchecked
+11	350	1844	SBR	init	l_prefs.level_name := level_name(p_level);	NULL;	Result or text unchecked	level_name in the client preferences unchecked
+12	363	1863	ROR	init	p_client_identifier = g_conf_client_identifier	p_client_identifier <= g_conf_client_identifier	Case or boundary value missing	init/exit only tested with the same client identifier
+13	364	1863	ROR	init	p_client_identifier = g_conf_client_identifier	p_client_identifier >= g_conf_client_identifier	Case or boundary value missing	init/exit only tested with the same client identifier
+14	376	1914	ROR	exit_	p_client_identifier = g_conf_client_identifier	p_client_identifier >= g_conf_client_identifier	Case or boundary value missing	init/exit only tested with the same client identifier
+15	543	2246	RET	to_html_table.close_cursor		RETURN;	State or resource unchecked	cursor is not closed: no test notices the leak
+16	545	2248	SBR	to_html_table.close_cursor	sys.dbms_sql.close_cursor(p_cursor_id);	NULL;	State or resource unchecked	cursor is not closed: no test notices the leak
+17	563	2279	ROR	to_html_table.describe_columns	l_desc_tab(i).col_type = c_long	FALSE	Case or boundary value missing	no LONG column in the to_html_table tests
+18	569	2296	AOR	to_html_table.create_header	c_lf || '<tr><!--- header -->'	c_lf	Result or text unchecked	HTML output of to_html_table only roughly checked
+19	572	2299	AOR	to_html_table.create_header	'<th id="row_num">Row#</th>' || c_lf	'<th id="row_num">Row#</th>'	Result or text unchecked	HTML output of to_html_table only roughly checked
+20	582	2312	AOR	to_html_table.create_header	'</tr><!-- header -->' || c_lf	'</tr><!-- header -->'	Result or text unchecked	HTML output of to_html_table only roughly checked
+21	594	2319	ROR	to_html_table.create_data	l_data_count = p_max_rows	l_data_count >= p_max_rows	Practically equivalent	differs only for unrealistic values (negative limit, call directly from SQL, error without backtrace, same second)
+22	601	2325	AOR	to_html_table.create_data	c_lf || '<tr><!--- row ' || to_char(l_data_count) || ' -->'	c_lf || '<tr><!--- row ' || to_char(l_data_count)	Result or text unchecked	HTML output of to_html_table only roughly checked
+23	620	2348	ROR	to_html_table.create_data	length(l_buffer_clob) > p_max_column_length	FALSE	Case or boundary value missing	truncation of long CLOB/XML values ("...") not tested
+24	631	2362	ROR	to_html_table.create_data	length(l_buffer_clob) > p_max_column_length	FALSE	Case or boundary value missing	truncation of long CLOB/XML values ("...") not tested
+25	658	2414	AOR	to_html_table	'<table>' || c_lf	'<table>'	Result or text unchecked	HTML output of to_html_table only roughly checked
+26	691	2466	ROR	to_md_tab_header	nvl(length(l_value), 0) < 43	FALSE	Result or text unchecked	Markdown padding (rpad, NULL key) unchecked
+27	710	2495	ROR	to_md_tab_data	nvl(length(l_key), 0) < 30	nvl(length(l_key), 0) <= 30	Equivalent	rpad to exactly 30 characters changes nothing: equivalent
+28	712	2495	ROR	to_md_tab_data	nvl(length(l_key), 0) < 30	FALSE	Result or text unchecked	Markdown padding (rpad, NULL key) unchecked
+29	713	2495	NUL	to_md_tab_data	nvl(length(l_key), 0)	length(l_key)	Result or text unchecked	Markdown padding (rpad, NULL key) unchecked
+30	715	2496	NUL	to_md_tab_data	nvl(l_key ,' ')	l_key	Result or text unchecked	Markdown padding (rpad, NULL key) unchecked
+31	720	2501	NUL	to_md_tab_data	nvl(length(l_value), 0)	length(l_value)	Result or text unchecked	Markdown padding (rpad, NULL key) unchecked
+32	722	2502	NUL	to_md_tab_data	nvl(l_value,' ')	l_value	Result or text unchecked	Markdown padding (rpad, NULL key) unchecked
+33	749	2540	AOR	to_unibar	l_return || unistr('\258E')	l_return	Result or text unchecked	partial blocks of to_unibar unchecked
+34	753	2544	AOR	to_unibar	l_return || unistr('\258C')	l_return	Result or text unchecked	partial blocks of to_unibar unchecked
+35	803	2678	CUR	scope	sys.utl_call_stack.dynamic_depth	(sys.utl_call_stack.dynamic_depth) - 1	Result or text unchecked	content of the call stack text unchecked
+36	827	2716	AOR	call_stack	l_return || '- '	l_return	Result or text unchecked	content of the call stack text unchecked
+37	832	2722	ROR	call_stack	sys.utl_call_stack.dynamic_depth > 1	sys.utl_call_stack.dynamic_depth >= 1	Practically equivalent	differs only for unrealistic values (negative limit, call directly from SQL, error without backtrace, same second)
+38	838	2726	CUR	call_stack	2	(2) + 1	Result or text unchecked	content of the call stack text unchecked
+39	845	2732	AOR	call_stack	l_return || '- ' || case when sys.utl_call_stack.owner(i) is not null then sys.u	l_return || '- '	Result or text unchecked	content of the call stack text unchecked
+40	857	2748	ROR	call_stack	sys.utl_call_stack.error_depth > 0	FALSE	Result or text unchecked	content of the call stack text unchecked
+41	889	2774	AOR	call_stack	l_return || chr(10)	l_return	Result or text unchecked	content of the call stack text unchecked
+42	898	2869	CUR	cgi_env	nvl(sys.owa.num_cgi_vars, 0)	(nvl(sys.owa.num_cgi_vars, 0)) - 1	Environment missing	OWA environment (web) missing in the tests
+43	899	2869	NUL	cgi_env	nvl(sys.owa.num_cgi_vars, 0)	sys.owa.num_cgi_vars	Environment missing	OWA environment (web) missing in the tests
+44	903	2877	SBR	cgi_env	l_return := l_return || c_lf;	NULL;	Result or text unchecked	cgi_env: line ending unchecked
+45	917	2903	SBR	console_env	append_row('sysdate', to_char( sysdate, c_date_format ));	NULL;	Result or text unchecked	console_env: individual rows unchecked
+46	921	2907	SBR	console_env	append_row('g_conf_level', to_char( g_conf_level ));	NULL;	Result or text unchecked	console_env: individual rows unchecked
+47	924	2910	SBR	console_env	append_row('g_conf_enable_ascii_art', to_string( g_conf_enable_ascii_art ));	NULL;	Result or text unchecked	console_env: individual rows unchecked
+48	932	2918	SBR	console_env	append_row('g_saved_stack.count', to_char( g_saved_stack.count ));	NULL;	Result or text unchecked	console_env: individual rows unchecked
+49	935	2921	AOR	console_env	l_return || c_lf	l_return	Result or text unchecked	console_env: individual rows unchecked
+50	940	2924	AOR	console_env	l_return || '##### Running Timers' || c_lflf	l_return || '##### Running Timers'	Result or text unchecked	console_env: individual rows unchecked
+51	982	2993	SBR	user_env	append_row('CLIENT_PROGRAM_NAME');	NULL;	Result or text unchecked	user_env: individual rows unchecked
+52	987	2998	SBR	user_env	append_row('CURRENT_EDITION_NAME');	NULL;	Result or text unchecked	user_env: individual rows unchecked
+53	992	3003	SBR	user_env	append_row('CURRENT_USER');	NULL;	Result or text unchecked	user_env: individual rows unchecked
+54	993	3004	SBR	user_env	append_row('CURRENT_USERID');	NULL;	Result or text unchecked	user_env: individual rows unchecked
+55	995	3006	SBR	user_env	append_row('DB_DOMAIN');	NULL;	Result or text unchecked	user_env: individual rows unchecked
+56	998	3009	SBR	user_env	append_row('DB_UNIQUE_NAME');	NULL;	Result or text unchecked	user_env: individual rows unchecked
+57	999	3010	SBR	user_env	append_row('DBLINK_INFO');	NULL;	Result or text unchecked	user_env: individual rows unchecked
+58	1004	3015	SBR	user_env	append_row('GLOBAL_UID');	NULL;	Result or text unchecked	user_env: individual rows unchecked
+59	1015	3026	SBR	user_env	append_row('LANG');	NULL;	Result or text unchecked	user_env: individual rows unchecked
+60	1018	3029	SBR	user_env	append_row('MODULE');	NULL;	Result or text unchecked	user_env: individual rows unchecked
+61	1019	3030	SBR	user_env	append_row('NETWORK_PROTOCOL');	NULL;	Result or text unchecked	user_env: individual rows unchecked
+62	1021	3032	SBR	user_env	append_row('NLS_CURRENCY');	NULL;	Result or text unchecked	user_env: individual rows unchecked
+63	1024	3035	SBR	user_env	append_row('NLS_SORT');	NULL;	Result or text unchecked	user_env: individual rows unchecked
+64	1027	3038	SBR	user_env	append_row('OS_USER');	NULL;	Result or text unchecked	user_env: individual rows unchecked
+65	1028	3039	SBR	user_env	append_row('PLATFORM_SLASH');	NULL;	Result or text unchecked	user_env: individual rows unchecked
+66	1030	3041	SBR	user_env	append_row('PROXY_ENTERPRISE_IDENTITY');	NULL;	Result or text unchecked	user_env: individual rows unchecked
+67	1033	3044	SBR	user_env	append_row('SCHEDULER_JOB');	NULL;	Result or text unchecked	user_env: individual rows unchecked
+68	1039	3050	SBR	user_env	append_row('SESSION_USER');	NULL;	Result or text unchecked	user_env: individual rows unchecked
+69	1046	3058	SBR	user_env	l_return := l_return || c_lf || 'We tried to show [documented attributes from Or	NULL;	Result or text unchecked	user_env: footer text unchecked
+70	1051	3058	AOR	user_env	l_return || c_lf || 'We tried to show [documented attributes from Oracle 19c](ht	l_return || c_lf || 'We tried to show [documented attributes from Oracle 19c](ht	Result or text unchecked	user_env: footer text unchecked
+71	1079	3132	ROR	status	g_conf_check_sysdate < sysdate	g_conf_check_sysdate <> sysdate	Run time only	only more frequent reloading of the configuration: run time, not behavior
+72	1083	3136	SBR	status	l_row.value := to_char( c_version );	NULL;	Result or text unchecked	status: individual attributes unchecked
+73	1088	3139	SBR	status	l_row.attribute := 'g_conf_check_sysdate' ;	NULL;	Result or text unchecked	status: individual attributes unchecked
+74	1101	3145	SBR	status	l_row.value := to_string( g_conf_enable_ascii_art );	NULL;	Result or text unchecked	status: individual attributes unchecked
+75	1116	3153	SBR	status	l_row.attribute := 'g_saved_stack.count' ;	NULL;	Result or text unchecked	status: individual attributes unchecked
+76	1123	3166	SBR	conf	l_row.attribute := 'conf_sysdate' ;	NULL;	Result or text unchecked	conf: individual attributes unchecked
+77	1126	3167	SBR	conf	l_row.value := l_conf.conf_user ;	NULL;	Result or text unchecked	conf: individual attributes unchecked
+78	1130	3169	SBR	conf	l_row.value := l_conf.level_name ;	NULL;	Result or text unchecked	conf: individual attributes unchecked
+79	1190	3365	LCR	utl_last_error	l_error_depth > 0 and l_backtrace_depth > 0	l_error_depth > 0	Practically equivalent	differs only for unrealistic values (negative limit, call directly from SQL, error without backtrace, same second)
+80	1192	3365	LCR	utl_last_error	l_error_depth > 0 and l_backtrace_depth > 0	(l_error_depth > 0) = (l_backtrace_depth > 0)	Case or boundary value missing	utl_last_error without an active error not tested
+81	1195	3365	ROR	utl_last_error	l_error_depth > 0	l_error_depth <> 0	Equivalent	depth never negative (via a variable, the heuristic does not see it): equivalent
+82	1200	3366	LCR	utl_last_error	l_error_number != 6512 and l_error_msg != coalesce(g_prev_error_msg, 'null')	l_error_number != 6512	Case or boundary value missing	suppression of duplicate error messages not tested
+83	1205	3366	ROR	utl_last_error	l_error_number != 6512	l_error_number > 6512	Case or boundary value missing	only errors with a number above 6512 tested (no ORA-01403 or similar)
+84	1211	3366	NUL	utl_last_error	coalesce(g_prev_error_msg, 'null')	'null'	Case or boundary value missing	suppression of duplicate error messages not tested
+85	1213	3368	AOR	utl_last_error	' (line ' || to_char(l_backtrace_line)	' (line '	Result or text unchecked	format of the error message (line, ORA number) unchecked
+86	1218	3368	AOR	utl_last_error	' (line ' || to_char(l_backtrace_line) || ', ORA-' || trim(to_char(l_error_numbe	' (line ' || to_char(l_backtrace_line) || ', ORA-' || trim(to_char(l_error_numbe	Result or text unchecked	format of the error message (line, ORA number) unchecked
+87	1226	3390	ROR	utl_logging_is_enabled	g_conf_check_sysdate < sysdate	g_conf_check_sysdate <> sysdate	Run time only	only more frequent reloading of the configuration: run time, not behavior
+88	1229	3394	LCR	utl_logging_is_enabled	g_conf_level >= p_level or sqlcode != 0	g_conf_level >= p_level	Case or boundary value missing	logging in the exception handler at a low level not tested
+89	1237	3394	ROR	utl_logging_is_enabled	sqlcode != 0	sqlcode > 0	Case or boundary value missing	logging in the exception handler at a low level not tested
+90	1273	3481	ROR	utl_set_client_prefs.update_client_prefs	conf_id = c_conf_id	conf_id >= c_conf_id	Equivalent	table with exactly one row (check constraint): equivalent
+91	1278	3486	ROR	utl_set_client_prefs	coalesce(lengthb(p_prefs), 0) <= 4000	coalesce(lengthb(p_prefs), 0) < 4000	Case or boundary value missing	boundary of exactly 4000 bytes not tested
+92	1282	3486	NUL	utl_set_client_prefs	coalesce(lengthb(p_prefs), 0)	0	Case or boundary value missing	client preferences that are too large not tested
+93	1300	3526	ROR	utl_get_client_prefs	l_prefs.exit_sysdate >= sysdate	l_prefs.exit_sysdate > sysdate	Practically equivalent	differs only for unrealistic values (negative limit, call directly from SQL, error without backtrace, same second)
+94	1321	3533	ROR	utl_get_client_prefs	bitand ( l_boolean_options, c_cgi_env ) = c_cgi_env	FALSE	Case or boundary value missing	options cgi_env/console_env not varied in the client preferences
+95	1498	3788	ROR	utl_client_prefs_to_csv	p_client_prefs.console_env = 'true'	TRUE	Case or boundary value missing	options cgi_env/console_env not varied in the client preferences
+96	1504	3803	LCR	utl_set_client_identifier	g_conf_client_identifier is null or g_conf_client_identifier = ':'	g_conf_client_identifier = ':'	Case or boundary value missing	session without a client identifier not tested
+97	1602	3926	SBR	utl_create_log_entry	clob_append(l_row.message, l_cache, cgi_env);	NULL;	Result or text unchecked	environment sections in the log entry unchecked
+98	1607	3930	SBR	utl_create_log_entry	clob_append(l_row.message, l_cache, console_env);	NULL;	Result or text unchecked	environment sections in the log entry unchecked
+99	1612	3934	SBR	utl_create_log_entry	clob_append(l_row.message, l_cache, user_env);	NULL;	Result or text unchecked	environment sections in the log entry unchecked
+100	1623	3948	SBR	utl_create_log_entry	l_row.ip_address := substrb ( sys_context ( 'USERENV', 'IP_ADDRESS' ), 1, 48 );	NULL;	Result or text unchecked	ip_address of the log entry unchecked

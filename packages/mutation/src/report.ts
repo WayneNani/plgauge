@@ -23,10 +23,10 @@ export function score(rep: Report): number {
 }
 
 const catTitle: Record<string, string> = {
-  fehlerpfad: 'Fehlerpfad, den kein Test auslöst',
-  pruefung: 'Prüfung, die sich abschwächen lässt',
-  funktion: 'Unterprogramm ohne wirksamen Test',
-  '': 'Weitere',
+  'error-path': 'Error path no test triggers',
+  check: 'Check that can be weakened',
+  subprogram: 'Subprogram without an effective test',
+  '': 'Other',
 };
 
 function oneLine(s: string): string {
@@ -44,22 +44,22 @@ export function textReport(rep: Report): string {
   const section = (title: string, rs: Result[], f = line) => {
     if (rs.length) out.push('', title, ...rs.map(f));
   };
-  const order = ['pruefung', 'fehlerpfad', 'funktion', ''];
+  const order = ['check', 'error-path', 'subprogram', ''];
   const surv = rep.results.filter((r) => r.status === 'SURVIVED' || r.status === 'NOT_COVERED');
   for (const cat of order) section(`${catTitle[cat]}:`, surv.filter((r) => (order.includes(r.category) ? r.category : '') === cat));
-  section('Nebenwirkung, ein Test hat committet:', rep.results.filter((r) => r.sideEffect));
+  section('Side effect, a test committed:', rep.results.filter((r) => r.sideEffect));
   const shaky = rep.results.filter((r) => r.unstable);
-  section('Urteil hängt von Umständen ab (Gegenprobe):', shaky, (r) => `${line(r)}\n      ${r.unstable}`);
-  section('Fehler des Werkzeugs:', rep.results.filter((r) => r.status === 'ERROR'), (r) => `  ${basename(r.file)}:${r.line} ${r.op}: ${r.detail}`);
+  section('Verdict depends on circumstances (second look):', shaky, (r) => `${line(r)}\n      ${r.unstable}`);
+  section('Tool errors:', rep.results.filter((r) => r.status === 'ERROR'), (r) => `  ${basename(r.file)}:${r.line} ${r.op}: ${r.detail}`);
   const c = counts(rep);
   const parts = (['KILLED', 'SURVIVED', 'NOT_COVERED', 'TIMEOUT', 'MEMORY', 'COMPILE_ERROR', 'ERROR'] as Status[])
     .filter((s) => c.get(s)).map((s) => `${s} ${c.get(s)}`);
-  out.push('', `${rep.results.length} Mutanten: ${parts.join(', ')}${shaky.length ? ` (${shaky.length} mit unsicherem Urteil)` : ''}`);
-  if (rep.aborted) out.push(`ABGEBROCHEN: ${rep.aborted}; die Ergebnisse sind unvollständig`);
-  if (rep.unrestored?.length) out.push(`FEHLER: Originale nicht wiederhergestellt (${rep.unrestored.join('; ')}): plgauge restore`);
-  out.push(`Mutation Score ${score(rep).toFixed(1)} % · ${rep.tests} Tests · Baseline ${fmt(rep.baselineMs)} · Laufzeit ${fmt(rep.elapsedMs)}`);
-  for (const t of rep.flakyTests) out.push(`unzuverlässiger Test, nachträglich ausgeschlossen: ${t}`);
-  if (rep.excludedTests > 0) out.push(`${rep.excludedTests} Tests ausgeschlossen, weil sie schon ohne Mutanten scheitern`);
+  out.push('', `${rep.results.length} mutants: ${parts.join(', ')}${shaky.length ? ` (${shaky.length} with an uncertain verdict)` : ''}`);
+  if (rep.aborted) out.push(`ABORTED: ${rep.aborted}; the results are incomplete`);
+  if (rep.unrestored?.length) out.push(`ERROR: originals not restored (${rep.unrestored.join('; ')}): plgauge restore`);
+  out.push(`Mutation Score ${score(rep).toFixed(1)} % · ${rep.tests} Tests · Baseline ${fmt(rep.baselineMs)} · run time ${fmt(rep.elapsedMs)}`);
+  for (const t of rep.flakyTests) out.push(`flaky test, excluded afterwards: ${t}`);
+  if (rep.excludedTests > 0) out.push(`${rep.excludedTests} tests excluded because they fail even without mutants`);
   return out.join('\n') + '\n';
 }
 
@@ -102,12 +102,12 @@ export function mutationTestingReport(rep: Report, root: string): string {
 /** A self-contained page that renders the report with the mutation-testing-elements web component. */
 export function htmlReport(rep: Report, root: string): string {
   return `<!DOCTYPE html>
-<html lang="de"><head><meta charset="utf-8"><title>plgauge – Mutationsbericht</title>
+<html lang="en"><head><meta charset="utf-8"><title>plgauge – mutation report</title>
 <script src="https://cdn.jsdelivr.net/npm/mutation-testing-elements@3.5.1/dist/mutation-test-elements.js"></script>
 </head><body>
-${rep.aborted ? `<p style="color:#b00;font:bold 1rem sans-serif">ABGEBROCHEN: ${rep.aborted.replace(/[<&]/g, (c) => (c === '<' ? '&lt;' : '&amp;'))}; die Ergebnisse sind unvollständig</p>\n` : ''}<mutation-test-report-app titlePostfix="plgauge"></mutation-test-report-app>
+${rep.aborted ? `<p style="color:#b00;font:bold 1rem sans-serif">ABORTED: ${rep.aborted.replace(/[<&]/g, (c) => (c === '<' ? '&lt;' : '&amp;'))}; the results are incomplete</p>\n` : ''}<mutation-test-report-app titlePostfix="plgauge"></mutation-test-report-app>
 <script>document.querySelector('mutation-test-report-app').report = ${mutationTestingReport(rep, root).replace(/</g, '\\u003c')};</script>
-<noscript>Der Bericht braucht JavaScript.</noscript>
+<noscript>The report needs JavaScript.</noscript>
 </body></html>
 `;
 }
@@ -145,7 +145,7 @@ export function compare(a: string, b: string): { text: string; same: number; dif
   let same = 0, diff = 0, detected = 0;
   const only = (p: string, x: CompareRow) => {
     diff++;
-    lines.push(`  nur in ${basename(p)}: ${basename(x.file)}:${x.line} ${x.op} ${x.original} → ${x.mutated}`);
+    lines.push(`  only in ${basename(p)}: ${basename(x.file)}:${x.line} ${x.op} ${x.original} → ${x.mutated}`);
   };
   for (const [k, x] of ra) {
     const y = rb.get(k);
@@ -162,6 +162,6 @@ export function compare(a: string, b: string): { text: string; same: number; dif
     lines.push(`  ${basename(x.file)}:${x.line} ${x.op} ${JSON.stringify(x.original)} → ${JSON.stringify(x.mutated)}: ${x.status} / ${y.status}  (${x.detail ?? ''} | ${y.detail ?? ''})`);
   }
   for (const [k, y] of rb) if (!ra.has(k)) only(b, y);
-  lines.push(`${same} gleich, ${diff} verschieden, davon ${detected} in beiden erkannt (getötet, Timeout oder Speicher)`);
+  lines.push(`${same} same, ${diff} different, ${detected} of them detected in both (killed, timeout or memory)`);
   return { text: lines.join('\n'), same, diff, detected };
 }

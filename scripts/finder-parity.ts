@@ -34,6 +34,9 @@ const ms = Date.now() - t0;
 /** Java left methods of type bodies and standalone subprograms unnamed, and restarted names below them. */
 const subImproved = (j: string, t: string) => j === '' || t.endsWith('.' + j);
 // the frozen output still carries the old tool name in the RET message
+// the frozen output uses the earlier German category names
+const CAT: Record<string, string> = { fehlerpfad: 'error-path', pruefung: 'check', funktion: 'subprogram' };
+for (const f of java) for (const p of f.points) p.cat = CAT[p.cat] ?? p.cat;
 const key = (p: P) => `${p.start}|${p.end}|${p.op}|${p.mutants.join('§').replaceAll("'plmut: RET'", "'plgauge: RET'")}`;
 const stats = { same: 0, subNamed: 0, attr: 0, javaOnly: 0, tsOnly: 0, unitsDiff: 0, loopsDiff: 0, errJ: 0, errT: 0, skippedJ: 0, skippedT: 0 };
 const byCat = new Map<string, { n: number; ex: string[] }>();
@@ -52,7 +55,7 @@ for (let i = 0; i < java.length; i++) {
   if (j.errors.length) stats.errJ++;
   if (t.errors.length) {
     stats.errT++;
-    note('TS-Fehler', `${j.path}: ${t.errors[0]}`);
+    note('TS errors', `${j.path}: ${t.errors[0]}`);
   }
   const uj = j.units.map((u) => `${u.type}|${u.name}|${u.start}|${u.end}|${u.decl}`).join('\n');
   const ut = t.units.map((u) => `${u.type}|${u.name}|${u.start}|${u.end}|${u.decl}`).join('\n');
@@ -74,7 +77,7 @@ for (let i = 0; i < java.length; i++) {
       stats.javaOnly++;
       const u = j.units[p.unit];
       const outside = p.start < u.start || p.start >= u.end;
-      note(outside ? 'nur Java, außerhalb der Unit (Skript)' : `nur Java ${p.op}`, `${j.path}:${line(p.start)} ${short(p.orig)} → ${short(p.mutants.join(' | '))}`);
+      note(outside ? 'Java only, outside the unit (script)' : `Java only ${p.op}`, `${j.path}:${line(p.start)} ${short(p.orig)} → ${short(p.mutants.join(' | '))}`);
     } else if (p.ctx !== q.ctx || p.cat !== q.cat || p.kind !== q.kind || (p.sub !== q.sub && !subImproved(p.sub, q.sub))) {
       stats.attr++;
       note(`Attribute ${p.op}`, `${j.path}:${line(p.start)} ${short(p.orig)} J ${p.sub}/${p.ctx}/${p.cat} T ${q.sub}/${q.ctx}/${q.cat}`);
@@ -87,7 +90,7 @@ for (let i = 0; i < java.length; i++) {
       stats.tsOnly++;
       const typeMethod = p.op === 'RET' && (t.units[p.unit].type === 'TYPE BODY' || ['PROCEDURE', 'FUNCTION'].includes(t.units[p.unit].type));
       const selectInto = p.op === 'SBR' && /^select\b/i.test(p.orig);
-      note(typeMethod ? 'nur TS RET (Methode/eigenständig)' : selectInto ? 'nur TS SBR (SELECT INTO)' : `nur TS ${p.op}`, `${j.path}:${line(p.start)} ${short(p.orig)} → ${short(p.mutants.join(' | '))}`);
+      note(typeMethod ? 'TS only RET (method/standalone)' : selectInto ? 'TS only SBR (SELECT INTO)' : `TS only ${p.op}`, `${j.path}:${line(p.start)} ${short(p.orig)} → ${short(p.mutants.join(' | '))}`);
     }
   }
 }

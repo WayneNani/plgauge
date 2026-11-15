@@ -1,9 +1,9 @@
-# Alle überlebenden Mutanten der Stufe 2 in plscope-utils (Lauf vom 14.11.2026), von Hand eingeordnet
-# Datei:Zeile	Unterprogramm	Operator	Original → Mutiert	Klasse	Begründung
-etl.pkb:17	load_from_tab	WHR	hiredate > date '1980-01-01' → TRUE	Fall fehlt	Alle Demo-Mitarbeiter sind nach 1980 eingestellt; kein Testdatensatz liegt vor der Grenze
-dd_util.pkb:18	resolve_synonym	JOI	join → LEFT JOIN	Fall fehlt	Synonym auf ein nicht existierendes Objekt wird nicht getestet; mit LEFT JOIN käme ein leeres Objekt statt des Synonyms zurück
-dd_util.pkb:50	get_object	ORD	Sortierung nach Eigentümer und Typ → absteigend	Fall fehlt	Kein Test mit einem Namen, der zu mehreren Objekttypen gehört; dann bestimmt die Reihenfolge, welches Objekt gilt
-dd_util.pkb:144	get_view_source	WHR	owner = … and mview_name = … → TRUE	Fall fehlt	In der Testdatenbank gibt es nur eine Materialized View; die erste beliebige ist zufällig die richtige
-type_util.pkb:17	dedup	ORD	owner, object_type, object_name → … DESC	Reihenfolge ungeprüft	Tests vergleichen die Liste nur mit einem Element oder ohne Reihenfolge
-type_util.pkb:46	dedup	ORD	owner, object_type, object_name, column_name → … DESC	Reihenfolge ungeprüft	wie oben
-type_util.pkb:80	dedup	ORD	from_owner, … to_column_name → … DESC	Reihenfolge ungeprüft	wie oben
+# All surviving level 2 mutants in plscope-utils (run of 14 Nov 2026), classified by hand
+# File:Line	Subprogram	Operator	Original → Mutated	Class	Reason
+etl.pkb:17	load_from_tab	WHR	hiredate > date '1980-01-01' → TRUE	Case missing	All demo employees were hired after 1980; no test record lies before the boundary
+dd_util.pkb:18	resolve_synonym	JOI	join → LEFT JOIN	Case missing	A synonym for a non-existent object is not tested; with LEFT JOIN an empty object would be returned instead of the synonym
+dd_util.pkb:50	get_object	ORD	sort by owner and type → descending	Case missing	No test with a name that belongs to several object types; then the order decides which object applies
+dd_util.pkb:144	get_view_source	WHR	owner = … and mview_name = … → TRUE	Case missing	The test database has only one materialized view; the first arbitrary one happens to be the right one
+type_util.pkb:17	dedup	ORD	owner, object_type, object_name → … DESC	Order unchecked	Tests compare the list only with one element or without order
+type_util.pkb:46	dedup	ORD	owner, object_type, object_name, column_name → … DESC	Order unchecked	as above
+type_util.pkb:80	dedup	ORD	from_owner, … to_column_name → … DESC	Order unchecked	as above

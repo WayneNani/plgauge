@@ -1,6 +1,6 @@
 {
   "install": [
-    "src/bestellungen.sql",
+    "src/shop_orders.sql",
     "src/shop_pricing.pks",
     "src/shop_pricing.pkb",
     "test/test_shop_pricing.pks",

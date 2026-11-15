@@ -16,7 +16,7 @@ export interface ConnectConfig {
 /** Parses oracle://user:password@host:port/service (the PLGAUGE_DB form). */
 export function parseDbUrl(url: string): ConnectConfig {
   const u = new URL(url);
-  if (u.protocol !== 'oracle:') throw new Error(`keine oracle://-URL: ${url}`);
+  if (u.protocol !== 'oracle:') throw new Error(`not an oracle:// URL: ${url}`);
   return {
     user: decodeURIComponent(u.username),
     password: decodeURIComponent(u.password),
@@ -71,7 +71,7 @@ export async function installControl(conn: oracledb.Connection): Promise<void> {
   try {
     await conn.execute(CTX.replace(/plgauge_ctx/i, ctx));
   } catch (e) {
-    throw new Error(`CREATE CONTEXT (Recht CREATE ANY CONTEXT nötig): ${(e as Error).message}`);
+    throw new Error(`CREATE CONTEXT (needs the CREATE ANY CONTEXT privilege): ${(e as Error).message}`);
   }
   await compileDdl(conn, CTL_SPEC.replace(/PLGAUGE_CTX/g, ctx), 'PACKAGE', 'PLGAUGE_CTL');
   await compileDdl(conn, CTL_BODY.replace(/PLGAUGE_CTX/g, ctx).replace(/UT3_INFO/g, await utInfoContext(conn)), 'PACKAGE BODY', 'PLGAUGE_CTL');
@@ -145,7 +145,7 @@ export async function runTests(s: Session, monitor: oracledb.Connection, paths: 
     // (a commit after a test that rolled back the whole transaction, marker included, is not seen)
     res.committed = out.includes('##plgauge[committed]');
     res.tests = parseTeamCity(out);
-    if (!res.tests.length) res.err = new Error('keine Tests im Report (Pfade prüfen)');
+    if (!res.tests.length) res.err = new Error('no tests in the report (check the paths)');
   } catch (e) {
     res.err = e as Error;
   } finally {

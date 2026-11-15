@@ -115,7 +115,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
   // the lock's session still there (an idle one may be ended: IDLE_TIME, a firewall), else taken
   // again; before every change and every minute
   const keepLock = () => (checking ??= (async () => {
-    if (foreign) throw new Error('Laufsperre an einen anderen Lauf verloren');
+    if (foreign) throw new Error('Run lock lost to another run');
     if (await lock.execute('select 1 from dual').then(() => true, () => false)) return;
     await lock.close().catch(() => {});
     if (down) return;
@@ -124,14 +124,14 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       if (down) await c.close().catch(() => {});
       else lock = c;
     } catch (e) {
-      if ((e as Error).message.includes('anderer plgauge-Lauf')) foreign = true;
-      throw new Error(`Laufsperre verloren: ${firstLine(e)}${foreign ? ' – schon instrumentierter Code bleibt im Journal: plgauge restore, sobald die Sperre frei ist' : ''}`);
+      if ((e as Error).message.includes('Another plgauge run')) foreign = true;
+      throw new Error(`Run lock lost: ${firstLine(e)}${foreign ? ' – code already instrumented stays in the journal: plgauge restore once the lock is free' : ''}`);
     }
   })().finally(() => { checking = undefined; }));
   // the lock confirmed before a change at the end (restore, trigger drop): without it another run
   // may own the schema, and this one leaves its changes to the journal
   const confirmed = () => keepLock().then(() => true, (e: Error) => {
-    say(`WARNUNG: ${e.message}`);
+    say(`WARNING: ${e.message}`);
     return false;
   });
   // this run's objects back through the journal check: what someone compiled or dropped while the
@@ -139,7 +139,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
   const restoreOwn = async (objs: SourceObject[], c: oracledb.Connection = conn) => {
     const mine = new Set(objs.map((o) => `${o.owner}|${o.name}|${o.type}`));
     const n = await restoreJournal(c, (await journalEntries(c)).filter((e) => mine.has(`${e.owner}|${e.name}|${e.type}`)), say);
-    if (n) say(`FEHLER: ${n} Objekte nicht wiederhergestellt, ihr instrumentierter Code steht im Journal: plgauge restore`);
+    if (n) say(`ERROR: ${n} objects not restored, their instrumented code is in the journal: plgauge restore`);
     return n;
   };
   // the logoff trigger this run created, dropped under a confirmed lock (a run that took the lock
@@ -151,7 +151,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       () => { logoff = false; },
       (e: Error) => { if (e.message.includes('ORA-04080')) logoff = false; });
   };
-  const ping = setInterval(() => keepLock().catch((e: Error) => say(`WARNUNG: ${e.message}`)), 60_000);
+  const ping = setInterval(() => keepLock().catch((e: Error) => say(`WARNING: ${e.message}`)), 60_000);
   ping.unref();
   const conn = await connect(cfg).catch(async (e) => {
     clearInterval(ping);
@@ -164,15 +164,15 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
   let testing = false;
   const onSig = () => {
     if (interrupted) {
-      say('Die Originale werden gerade wiederhergestellt, bitte warten (sonst: plgauge restore)');
+      say('Restoring the originals, please wait (otherwise: plgauge restore)');
       return;
     }
     interrupted = true;
-    say('Abbruch angefordert, stelle Originale wieder her …');
+    say('Cancel requested, restoring the originals …');
     if (testing) conn.break().catch(() => {});
   };
   const checkpoint = () => {
-    if (interrupted) throw new Error('Abbruch angefordert, Originale wiederhergestellt');
+    if (interrupted) throw new Error('Cancel requested, originals restored');
   };
   const testRun = async (paths: string[], cov: string[] | null) => {
     checkpoint();
@@ -194,40 +194,40 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     await conn.execute(`alter session set current_schema = ${dbIdent(rtOwner)}`);
     const { banner, major } = await databaseInfo(conn);
     const sqlProbes = cfg.sqlProbes === 'auto' || cfg.sqlProbes === undefined ? major >= 23 : cfg.sqlProbes;
-    say(`Datenbank: ${banner} · SQL-Sonden ${sqlProbes ? 'aktiv' : 'aus'}`);
+    say(`Database: ${banner} · SQL probes ${sqlProbes ? 'on' : 'off'}`);
 
     await ensureJournal(conn);
     // what a run that died left changed (either tool): back to the originals first, or this run
     // would instrument the changed code and forget the entry with the true original
     const left = await journalEntries(conn);
     if (left.length) {
-      say(`${left.length} Objekte eines abgebrochenen Laufs werden aus dem Journal wiederhergestellt`);
+      say(`Restoring ${left.length} objects of an aborted run from the journal`);
       // on a connection of its own: compiling sets session parameters the install must not inherit
       const r = await connectHome();
       try {
         await restoreJournal(r, left, say);
         const still = await journalEntries(r);
-        if (still.length) throw new Error(`${still.length} Objekte eines abgebrochenen Laufs ließen sich nicht wiederherstellen (${still.map((e) => e.name).join(', ')}); erst plgauge restore`);
+        if (still.length) throw new Error(`${still.length} objects of an aborted run could not be restored (${still.map((e) => e.name).join(', ')}); run plgauge restore first`);
       } finally {
         await r.close().catch(() => {});
       }
     }
     // then the project's install scripts: the new code is the original
     for (const path of cfg.installScripts ?? []) await runScript(conn, splitScript(readFileSync(path, 'utf8')), path);
-    if (cfg.installScripts?.length) say(`${cfg.installScripts.length} Skripte installiert`);
+    if (cfg.installScripts?.length) say(`${cfg.installScripts.length} scripts installed`);
     await installRuntime(conn);
     // left by a run that died during its instrumented test run
     await conn.execute(`drop trigger cov$_logoff`).catch(() => {});
     const objects: SourceObject[] = [];
     for (const s of schemas) objects.push(...(await loadObjects(conn, s, { include: cfg.include, exclude: cfg.exclude, skip: ['COV$', 'COV$_LOGOFF'] })));
-    say(`${objects.length} Objekte gefunden: ${objects.map((o) => (multi ? `${o.owner}.${o.name}` : o.name)).join(', ')}`);
+    say(`${objects.length} objects found: ${objects.map((o) => (multi ? `${o.owner}.${o.name}` : o.name)).join(', ')}`);
     for (const owner of new Set(objects.map((o) => o.owner).filter((o) => o !== rtOwner))) {
       // instrumented code of other schemas calls the runtime qualified
       await conn.execute(`grant execute on ${dbIdent(rtOwner)}.cov$ to ${dbIdent(owner)}`);
     }
 
     await testRun(cfg.tests, null); // warm-up: utPLSQL builds its annotation cache on the first run
-    say('1/4 Testlauf ohne Coverage …');
+    say('1/4 Test run without coverage …');
     const repeat = Math.max(1, cfg.baselineRuns ?? 2);
     // Every run starts with fresh package state, like the instrumented run after compiling:
     // tests that depend on state left by earlier tests then behave the same in all runs.
@@ -239,11 +239,11 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       baseline = await testRun(cfg.tests, null);
       observed.push(baseline.run.tests);
     }
-    say('2/4 Testlauf mit utPLSQL-Coverage (DBMS_PROFILER) …');
+    say('2/4 Test run with utPLSQL coverage (DBMS_PROFILER) …');
     await fresh();
     const utCov = await testRun(cfg.tests, schemas);
 
-    say('3/4 Instrumentieren und kompilieren …');
+    say('3/4 Instrumenting and compiling …');
     const ids = newIds();
     // package and type specs with PRAGMA RESTRICT_REFERENCES: their bodies' SQL takes the probes
     // with full purity (see instrument)
@@ -274,27 +274,27 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       const out = await replaceSourceDetailed(conn, obj, res.instrumented, 'coverage');
       compileMs += performance.now() - t1;
       if (out.error) {
-        say(`  ✗ ${obj.name}: instrumentierter Code kompiliert nicht (${out.error})`);
+        say(`  ✗ ${obj.name}: instrumented code does not compile (${out.error})`);
         // rejected at once, never changed: the original is in place, nothing to restore
         if (out.untouched) restore.pop();
         // back at once; if that fails, the end of the run tries again (it stays in restore)
         else if (!(await restoreAll(conn, [obj], (m) => (m.includes('✗') ? say(m) : undefined)))) {
           restore.pop();
-          say(`    Original wieder aktiv`);
+          say(`    original back in place`);
         }
-        maps.push({ error: `Kompilierung: ${out.error}`, obj });
+        maps.push({ error: `Compilation: ${out.error}`, obj });
         continue;
       }
       maps.push(res.map);
       say(`  ✓ ${obj.type.toLowerCase()} ${obj.name}`);
     }
 
-    say('4/4 Testlauf auf instrumentiertem Code …');
+    say('4/4 Test run on instrumented code …');
     const runId = randomUUID();
     const perTest = cfg.perTest !== false;
     await fresh();
     await conn.execute(`begin cov$.reset; cov$.per_test(:p = 1); cov$.start_run(:r); end;`, { p: perTest ? 1 : 0, r: runId });
-    await conn.execute(LOGOFF_TRIGGER).then(() => { logoff = true; }, (e) => say(`  Hinweis: ohne Logoff-Trigger (${firstLine(e)}), andere Sessions schreiben nur alle 1000 Anweisungen`));
+    await conn.execute(LOGOFF_TRIGGER).then(() => { logoff = true; }, (e) => say(`  Note: no logoff trigger (${firstLine(e)}), other sessions write only every 1000 statements`));
     let instrumentedRun;
     // compiling left the last object's length semantics in the session; the tests (DDL in them)
     // run with the session's own, as in the baseline
@@ -303,7 +303,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       instrumentedRun = await testRun(cfg.tests, null);
       // a test that reset all package state took the counters with it
       const intact = (await conn.execute<[number]>(`select cov$.intact from dual`)).rows?.[0]?.[0];
-      if (intact !== 1) say('WARNUNG: Der Zustand von cov$ wurde während der Tests zurückgesetzt (DBMS_SESSION.RESET_PACKAGE in einem Test?): die Coverage dieses Laufs ist unvollständig');
+      if (intact !== 1) say('WARNING: the state of cov$ was reset during the tests (DBMS_SESSION.RESET_PACKAGE in a test?): the coverage of this run is incomplete');
       await conn.execute(`begin cov$.flush(:r); end;`, { r: runId });
       await waitForJobs(conn, say);
     } finally {
@@ -319,7 +319,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     if (!(await confirmed())) {
       // another run may have restored this one's code at its start, maybe while the tests ran
       restore.length = 0;
-      throw new Error('Laufsperre während des Laufs verloren (ein anderer Lauf oder die alte Sitzung hält sie): die Messung ist ungültig, instrumentierter Code bleibt im Journal; plgauge restore, sobald die Sperre frei ist');
+      throw new Error('Run lock lost during the run (another run or the old session holds it): the measurement is invalid, instrumented code stays in the journal; plgauge restore once the lock is free');
     }
     const unrestored = await restoreOwn(restore);
     restore.length = 0;
@@ -334,14 +334,14 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     const before = new Map(baseline.run.tests.map((t) => [key(t), t.status]));
     const differing = instrumentedRun.run.tests
       .filter((t) => !flaky.has(key(t)) && before.get(key(t)) !== t.status)
-      .map((t) => `${key(t)}: ${before.get(key(t)) ?? 'fehlt'} → ${t.status}`);
+      .map((t) => `${key(t)}: ${before.get(key(t)) ?? 'missing'} → ${t.status}`);
     const equivalent = differing.length === 0 && baseline.run.tests.filter((t) => !flaky.has(key(t))).every((t) => instrumentedRun.run.tests.some((u) => key(u) === key(t)));
-    for (const f of flaky) say(`  unzuverlässig (Ergebnis wechselt ohne Instrumentierung): ${f}`);
-    for (const d of differing) say(`  abweichend mit Instrumentierung: ${d}`);
+    for (const f of flaky) say(`  flaky (result changes without instrumentation): ${f}`);
+    for (const d of differing) say(`  differs with instrumentation: ${d}`);
     const tests = await loadTestCatalog(conn, rtOwner, cfg.tests, baseline.run.tests, instrumentedRun.run.tests, hits);
     const testIndex = new Map(tests.map((t, k) => [t.path, k]));
     for (const t of tests) if (!t.setup && flaky.has(`${t.suite}::${t.description}`)) t.status = 'flaky';
-    say(equivalent ? `Testergebnisse mit und ohne Instrumentierung identisch ✓${flaky.size ? ` (${flaky.size} unzuverlässige Tests ausgenommen)` : ''}` : 'ACHTUNG: Testergebnisse weichen ab!');
+    say(equivalent ? `Test results identical with and without instrumentation ✓${flaky.size ? ` (${flaky.size} flaky tests excluded)` : ''}` : 'WARNING: test results differ!');
 
     const objectsOut: ObjectResult[] = maps.map((m) => {
       if ('error' in m) {
@@ -380,12 +380,12 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       fin = await connectHome().catch(() => conn);
     }
     await dropLogoff(fin).catch(() => {});
-    if (logoff) say('FEHLER: Trigger cov$_logoff nicht entfernt: plgauge restore');
+    if (logoff) say('ERROR: trigger cov$_logoff not dropped: plgauge restore');
     try {
       if (restore.length && !(await confirmed())) {
-        say(`FEHLER: ${restore.length} Objekte nicht wiederhergestellt (Laufsperre nicht bestätigt), ihr instrumentierter Code steht im Journal: plgauge restore`);
+        say(`ERROR: ${restore.length} objects not restored (run lock not confirmed), their instrumented code is in the journal: plgauge restore`);
       } else if (restore.length) {
-        await restoreOwn(restore, fin).catch((e: Error) => say(`FEHLER: Originale nicht wiederhergestellt (${firstLine(e)}), der instrumentierte Code steht im Journal: plgauge restore`));
+        await restoreOwn(restore, fin).catch((e: Error) => say(`ERROR: originals not restored (${firstLine(e)}), the instrumented code is in the journal: plgauge restore`));
       }
     } finally {
       if (fin !== conn) await fin.close().catch(() => {});
@@ -405,7 +405,7 @@ async function waitForJobs(conn: oracledb.Connection, say: (m: string) => void) 
   const running = async () => (await conn.execute<[number]>(`select count(*) from user_scheduler_running_jobs`)).rows![0][0];
   let n = await running().catch(() => 0);
   if (!n) return;
-  say(`  warte auf ${n} laufende Scheduler-Jobs …`);
+  say(`  waiting for ${n} running scheduler jobs …`);
   for (let i = 0; i < 120 && n > 0; i++) {
     await new Promise((r) => setTimeout(r, 500));
     n = await running().catch(() => 0);
@@ -423,7 +423,7 @@ export async function installRuntime(conn: oracledb.Connection) {
   const nativeErr = await conn.execute(`select 1 from user_errors where name = 'COV$'`);
   if (nativeErr.rows?.length) await conn.execute(`alter package cov$ compile body plsql_code_type = interpreted plsql_optimize_level = 3`);
   const err = await conn.execute<[number, string]>(`select line, text from user_errors where name = 'COV$' order by sequence`);
-  if (err.rows?.length) throw new Error(`Runtime cov$ kompiliert nicht: ${err.rows.map((r) => `${r[0]}: ${r[1]}`).join('; ')}`);
+  if (err.rows?.length) throw new Error(`Runtime cov$ does not compile: ${err.rows.map((r) => `${r[0]}: ${r[1]}`).join('; ')}`);
 }
 
 async function loadHits(conn: oracledb.Connection, runId: string): Promise<Hits> {
@@ -496,7 +496,7 @@ async function loadTestCatalog(
   }
   for (const name of hits.perTest.keys()) {
     if (name.startsWith('#') && !tests.some((t) => t.path === name)) {
-      const description = name === '#background' ? 'Andere Sessions (Scheduler-Jobs, parallele Abfragen)' : `Setup außerhalb eines Tests (${name.slice(1) || 'ohne utPLSQL'})`;
+      const description = name === '#background' ? 'Other sessions (scheduler jobs, parallel queries)' : `Setup outside a test (${name.slice(1) || 'without utPLSQL'})`;
       tests.push({ path: name, suite: name.slice(1), description, setup: true, status: 'unknown', baselineStatus: 'unknown', ms: 0 });
     }
   }

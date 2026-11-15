@@ -125,7 +125,7 @@ export function mutateFiles(cfg: Config, dir: string): string[] {
   const files = new Set<string>();
   for (const g of cfg.mutate) for (const f of globSync(g, { cwd: dir })) files.add(join(dir, f));
   const out = [...files].sort();
-  if (!out.length) throw new Error(`keine Dateien zu ${cfg.mutate.join(', ')}`);
+  if (!out.length) throw new Error(`no files match ${cfg.mutate.join(', ')}`);
   return out;
 }
 
@@ -165,6 +165,8 @@ const isCompanion = (text: string) => text.includes('Statement ignored') || text
 const lostConnection = (e?: Error) => !!e && /NJS-500|NJS-003|NJS-521|DPI-1010|DPI-1080|ORA-00028|ORA-03113|ORA-03135|ORA-07445/.test(e.message);
 /** A quoted identifier, exactly as written. */
 const quoted = (x: string) => `"${x.replace(/"/g, '""')}"`;
+/** detail of a TIMEOUT from the loop guard (not a time limit; never re-checked). */
+const LOOP_GUARD = 'loop guard';
 
 class Worker {
   deploy!: oracledb.Connection;
@@ -222,10 +224,10 @@ class Worker {
       await c.close().catch(() => {});
       // held before: someone else has it now (a session of ours the server has not cleaned up
       // cannot be told apart; stopping is the safe side)
-      if (this.held && (e as Error).message.includes('anderer plgauge-Lauf')) {
+      if (this.held && (e as Error).message.includes('Another plgauge run')) {
         this.foreign = true;
-        this.run.abort ??= `Laufsperre${this.name} an einen anderen Lauf verloren (oder die alte Sitzung hält sie noch); geänderter Code bleibt im Journal: plgauge restore, sobald die Sperre frei ist`;
-        this.logf(`FEHLER${this.name}: ${this.run.abort}, Lauf wird abgebrochen`);
+        this.run.abort ??= `Run lock${this.name} lost to another run (or the old session still holds it); changed code stays in the journal: plgauge restore once the lock is free`;
+        this.logf(`ERROR${this.name}: ${this.run.abort}, aborting the run`);
       }
       throw e;
     }
@@ -240,7 +242,7 @@ class Worker {
       if (this.retired || this.foreign) return clearInterval(this.ping);
       // a network hiccup: try again next minute (takeLock marks a lock that went to another run)
       this.ensureLock().catch((e: Error) => {
-        if (!this.foreign) this.logf(`WARNUNG${this.name}: Laufsperre nicht erneuert: ${firstLine(e)}`);
+        if (!this.foreign) this.logf(`WARNING${this.name}: run lock not renewed: ${firstLine(e)}`);
       });
     }, 60_000);
     this.ping.unref();
@@ -257,7 +259,7 @@ class Worker {
   held = false;
 
   private guard(): void {
-    if (this.foreign) throw new Error(`Laufsperre${this.name} an einen anderen Lauf verloren`);
+    if (this.foreign) throw new Error(`Run lock${this.name} lost to another run`);
   }
   /** Set by shutdown: no lock is taken any more. */
   private down = false;
@@ -274,7 +276,7 @@ class Worker {
     // put the journaled originals back first, or this run would take the changed code for the
     // original, restore that at the end and forget the entry with the true one
     await ensureJournal(this.deploy);
-    await this.restoreLeftovers('eines abgebrochenen Laufs werden aus dem Journal wiederhergestellt');
+    await this.restoreLeftovers('of an aborted run are being restored from the journal');
   }
 
   /** Closes the connections; a new database: objects, grants and the schema name are to be found again. */
@@ -308,7 +310,7 @@ class Worker {
       // checked after all scripts: a unit may use what a later one creates
       for (const [path, stmts] of scripts) {
         const invalid = await this.invalidUnits(stmts);
-        if (invalid.length) throw new Error(`Installation${this.name}: ${path}: ungültig: ${invalid.join(', ')}`);
+        if (invalid.length) throw new Error(`Installation${this.name}: ${path}: invalid: ${invalid.join(', ')}`);
       }
     }
     await ensureJournal(this.deploy);
@@ -325,12 +327,12 @@ class Worker {
     try {
       const entries = await journalEntries(c);
       if (!entries.length) return;
-      this.logf(`Worker${this.name}: ${entries.length} Objekte ${what}`);
-      await restoreJournal(c, entries, (m) => (m.includes('✗') ? this.logf(`WARNUNG${this.name}: ${m.trim()}`) : undefined));
+      this.logf(`Worker${this.name}: ${entries.length} objects ${what}`);
+      await restoreJournal(c, entries, (m) => (m.includes('✗') ? this.logf(`WARNING${this.name}: ${m.trim()}`) : undefined));
       // an original that did not go back (a session of the dead run still holds the unit, say):
       // this run would take the changed code for the original and lose the true one at its end
       const still = await journalEntries(c);
-      if (still.length) throw new Error(`${still.length} Objekte eines abgebrochenen Laufs ließen sich nicht wiederherstellen (${still.map((e) => e.name).join(', ')}); erst plgauge restore`);
+      if (still.length) throw new Error(`${still.length} objects of an aborted run could not be restored (${still.map((e) => e.name).join(', ')}); run plgauge restore first`);
     } finally {
       await c.close().catch(() => {});
     }
@@ -344,7 +346,7 @@ class Worker {
     try {
       // only while the schema is still this run's (a lost lock: another run restored and owns it)
       await this.ensureLock();
-      if (!this.foreign) await this.restoreLeftovers('aus dem Journal wiederhergestellt');
+      if (!this.foreign) await this.restoreLeftovers('restored from the journal');
       return [];
     } catch (e) {
       // the lock went to another run: it restored this run's journal, the schema is its own now
@@ -448,7 +450,7 @@ class Worker {
     }
     // not compiled at all (a lock: ORA-04021, a privilege): no error of this text; the caller's
     // verdict is ERROR, not COMPILE_ERROR. Never changed before: nothing to restore either
-    if (!/^Zeile \d+:/.test(out.error)) {
+    if (!/^line \d+:/.test(out.error)) {
       if (out.untouched) this.changed.delete(key);
       throw new Error(out.error);
     }
@@ -465,21 +467,21 @@ class Worker {
     let failure = '';
     await restoreAll(this.deploy, [obj], (m) => {
       // a warning (a trigger left enabled) is no failure: the original is in place
-      if (m.includes('✗') && m.includes('fehlgeschlagen')) failure = m.trim();
-      else if (m.includes('✗')) this.logf(`WARNUNG${this.name}: ${m.trim()}`);
+      if (m.includes('✗') && /Restore of .+ failed: /.test(m)) failure = m.trim();
+      else if (m.includes('✗')) this.logf(`WARNING${this.name}: ${m.trim()}`);
     }, recompile);
-    // compile errors ("Zeile n: …"): the original is in place, only invalid (as it may have been
+    // compile errors ("line n: …"): the original is in place, only invalid (as it may have been
     // before the run); any other failure left the changed code there: the key stays, the caller
     // must not take the unit for the original
-    if (failure && !/fehlgeschlagen: Zeile \d+:/.test(failure)) throw new Error(failure);
-    if (failure) this.logf(`WARNUNG${this.name}: ${failure}`);
+    if (failure && !/failed: line \d+:/.test(failure)) throw new Error(failure);
+    if (failure) this.logf(`WARNING${this.name}: ${failure}`);
     this.changed.delete(key);
   }
 
   async restoreAll(): Promise<void> {
     // the other run restored this one's journal itself
     if (this.foreign) return;
-    for (const key of [...this.changed.keys()]) await this.restore(key).catch((e) => this.logf(`WARNUNG${this.name}: ${firstLine(e)}`));
+    for (const key of [...this.changed.keys()]) await this.restore(key).catch((e) => this.logf(`WARNING${this.name}: ${firstLine(e)}`));
     this.lastUnit = '';
     // the originals are back: a reconnect must not install the schema again
     this.schema = undefined;
@@ -509,10 +511,10 @@ class Worker {
       await this.connect();
       await installRuntime(this.deploy);
       await this.reinstall();
-      this.logf(`Worker${this.name} neu verbunden`);
+      this.logf(`Worker${this.name} reconnected`);
       return true;
     } catch (e) {
-      this.logf(`Neuaufbau${this.name} gescheitert: ${firstLine(e as Error)}`);
+      this.logf(`Rebuild${this.name} failed: ${firstLine(e as Error)}`);
       return false;
     }
   }
@@ -561,7 +563,7 @@ class Worker {
     const own = !this.run.testsCommit || (!!tests && tests.every((t) => single.has(t)) && !tests.some((t) => this.run.committers.has(t)));
     if (run.committed && own && !res.sideEffect) {
       res.sideEffect = true;
-      this.logf(`WARNUNG${this.name}: Mutant ${res.id} hat einen Commit ausgelöst; Daten dieser Datenbank können verändert sein`);
+      this.logf(`WARNING${this.name}: mutant ${res.id} caused a commit; this database's data may have changed`);
     }
   }
 
@@ -575,7 +577,7 @@ class Worker {
     // after Ctrl-C no test run starts (a repair, a second look), and one broken off counts for
     // nothing: callers take the error as "no result" (a CI kill follows within seconds)
     const stopped = () => {
-      if (this.run.interrupted) throw new Error('Abbruch angefordert');
+      if (this.run.interrupted) throw new Error('Abort requested');
     };
     stopped();
     this.testsRan = true;
@@ -603,7 +605,7 @@ class Worker {
     else if (isMemory(run.err)) Object.assign(res, { status: 'MEMORY', detail: firstLine(run.err!) });
     // a lost connection says nothing about the mutant (dispatch rebuilds the worker and tries again)
     else if (lostConnection(run.err)) Object.assign(res, { status: 'ERROR', detail: firstLine(run.err!) });
-    else if (run.err && run.err.message.includes('ORA-')) Object.assign(res, { status: 'KILLED', killedBy: '(Abbruch von ut.run)', detail: firstLine(run.err) });
+    else if (run.err && run.err.message.includes('ORA-')) Object.assign(res, { status: 'KILLED', killedBy: '(ut.run aborted)', detail: firstLine(run.err) });
     else if (run.err) Object.assign(res, { status: 'ERROR', detail: firstLine(run.err) });
     else if (failed(run)) Object.assign(res, { status: 'KILLED', killedBy: firstFailure(run) });
     else res.status = 'SURVIVED';
@@ -623,7 +625,7 @@ class Worker {
         // configured paths may be suites: select from the single tests of the baseline
         tests = this.run.passing.filter((t) => sel.includes(t));
         res.coveredBy = tests;
-        if (!tests.length) return Object.assign(res, { status: 'NOT_COVERED' as const, detail: 'laut Coverage von keinem Test ausgeführt' });
+        if (!tests.length) return Object.assign(res, { status: 'NOT_COVERED' as const, detail: 'not executed by any test according to coverage' });
       }
       await resetPackages(this.test);
       const run = await this.runTests(tests);
@@ -641,7 +643,7 @@ class Worker {
           // the second look must start from the data as without mutants: repaired, now the mutant again
           const again = rp.restored && ready ? await compile().catch((e: Error) => [{ line: 0, position: 0, text: firstLine(e) }]) : [];
           if (again.length) {
-            this.logf(`Gegenprobe${this.name}, Mutant ${m.id}: kompiliert nicht mehr (${again[0].text}), Urteil ungeprüft`);
+            this.logf(`Second look${this.name}, mutant ${m.id}: no longer compiles (${again[0].text}), verdict unchecked`);
             ready = false;
           }
         }
@@ -680,7 +682,7 @@ class Worker {
         this.classify(res, run, b);
         if (run.killed) return;
         if (await aborted(this.test).catch(() => false)) {
-          Object.assign(res, { status: 'TIMEOUT', killedBy: undefined, detail: 'Schleifenwächter' });
+          Object.assign(res, { status: 'TIMEOUT', killedBy: undefined, detail: LOOP_GUARD });
           return;
         }
         if (res.status !== 'SURVIVED') return;
@@ -714,9 +716,9 @@ class Worker {
       const run = await this.runTests(tests);
       this.run.repairs++;
       out.repaired = !run.timedOut && !run.killed && !run.err;
-      if (!out.repaired) this.logf(`WARNUNG${this.name}: Daten nach Mutant nicht sicher wiederhergestellt: ${run.timedOut ? 'Zeitüberschreitung' : firstLine(run.err ?? new Error('abgebrochen'))}`);
+      if (!out.repaired) this.logf(`WARNING${this.name}: data after mutant not reliably restored: ${run.timedOut ? 'timeout' : firstLine(run.err ?? new Error('aborted'))}`);
     } catch (e) {
-      this.logf(`WARNUNG${this.name}: Daten nach Mutant nicht wiederhergestellt: ${firstLine(e as Error)}`);
+      this.logf(`WARNING${this.name}: data after mutant not restored: ${firstLine(e as Error)}`);
     }
     return out;
   }
@@ -739,7 +741,7 @@ class Worker {
       if (!lostConnection(run.err)) this.judgeAgain(res, run, ran);
       return run;
     } catch (e) {
-      this.logf(`Gegenprobe${this.name}, Mutant ${res.id}: ${firstLine(e as Error)}`);
+      this.logf(`Second look${this.name}, mutant ${res.id}: ${firstLine(e as Error)}`);
       return undefined;
     }
   }
@@ -757,23 +759,23 @@ class Worker {
       // (confirmVerdicts sends no result with a side effect: one now is this run's)
       this.sideEffect(r, run, tests);
       if (r.sideEffect) await this.resetAfterSideEffect();
-      if (!lostConnection(run.err)) this.judgeAgain(r, run, tests, this.name ? ` auf${this.name}` : '', guard);
+      if (!lostConnection(run.err)) this.judgeAgain(r, run, tests, this.name ? ` on${this.name}` : '', guard);
     } catch (e) {
-      this.logf(`Gegenprobe${this.name}, Mutant ${r.id}: ${firstLine(e as Error)}`);
+      this.logf(`Second look${this.name}, mutant ${r.id}: ${firstLine(e as Error)}`);
     }
   }
 
   /** The second look's verdict on a kill or a timeout (confirm, confirmHere); where: the worker, if another one looked. */
   private judgeAgain(r: Result, run: RunResult, tests: string[], where = '', guard = false): void {
     if (r.status === 'KILLED') {
-      if (!run.timedOut && !run.err && !failed(run)) r.unstable = `nicht wiederholbar: ${r.killedBy!.split('.').pop()} besteht allein${where}`;
+      if (!run.timedOut && !run.err && !failed(run)) r.unstable = `not repeatable: ${r.killedBy!.split('.').pop()} passes on its own${where}`;
       return;
     }
     if (run.timedOut || run.killed || guard) return;
     const again = newResult(r.mutant);
     again.sideEffect = r.sideEffect; // already noted
     this.classify(again, run, tests);
-    r.unstable = `Zeitgrenze knapp: zweiter Versuch${where} ${again.status} nach ${Math.round(run.elapsedMs)} ms (Grenze ${Math.round(this.run.limitMs)} ms)`;
+    r.unstable = `close to the time limit: second attempt${where} ${again.status} after ${Math.round(run.elapsedMs)} ms (limit ${Math.round(this.run.limitMs)} ms)`;
     Object.assign(r, { status: again.status, killedBy: again.killedBy, detail: again.detail });
   }
 
@@ -785,7 +787,7 @@ class Worker {
     await installControl(this.deploy);
     for (const su of units) {
       const errs = await this.compileSchemaUnit(su);
-      if (errs.length) throw new Error(`${su.key} ungültig${this.name}: ${errs.slice(0, 3).map((e) => e.text).join('; ')}`);
+      if (errs.length) throw new Error(`${su.key} invalid${this.name}: ${errs.slice(0, 3).map((e) => e.text).join('; ')}`);
     }
   }
 
@@ -796,23 +798,23 @@ class Worker {
     if (!cmd0 || this.foreign) return;
     // (the URL may leave the port out: Oracle's default, as parseDbUrl takes it)
     const cmd = cmd0.replaceAll('{port}', new URL(this.url).port || '1521');
-    this.logf(`Worker${this.name} wird zurückgesetzt: ${cmd}`);
+    this.logf(`Resetting worker${this.name}: ${cmd}`);
     const t0 = Date.now();
     try {
       await promisify(execFile)('sh', ['-c', cmd]);
     } catch (e) {
-      this.logf(`Zurücksetzen${this.name} gescheitert: ${firstLine(e as Error)}`);
+      this.logf(`Reset${this.name} failed: ${firstLine(e as Error)}`);
       return;
     }
     await this.forget();
     try {
       await this.open();
       await this.reinstall();
-      this.logf(`Worker${this.name} zurückgesetzt in ${Math.round((Date.now() - t0) / 1000)}s`);
+      this.logf(`Worker${this.name} reset in ${Math.round((Date.now() - t0) / 1000)}s`);
     } catch (e) {
       // half set up, its verdicts would be wrong: it takes no more mutants
       this.retired = true;
-      this.logf(`Neuaufbau${this.name} gescheitert, Worker scheidet aus: ${firstLine(e as Error)}`);
+      this.logf(`Rebuild${this.name} failed, worker retires: ${firstLine(e as Error)}`);
     }
   }
 }
@@ -866,7 +868,7 @@ class Run {
   /** Ctrl-C: the dispatch loops stop, the phases before them end at the next checkpoint. */
   interrupted = false;
   checkpoint(): void {
-    if (this.interrupted) throw new Error('Abbruch angefordert (Strg-C), Originale wiederhergestellt');
+    if (this.interrupted) throw new Error('Abort requested (Ctrl-C), originals restored');
     if (this.abort) throw new Error(this.abort);
   }
   /** Tests that commit on their own (found by the baseline when the tests commit at all). */
@@ -890,7 +892,7 @@ class Run {
     if (ok === undefined) {
       const o = await w.object(key, m.unitRef.type, m.unitRef.name);
       ok = !obj.rawSha256 || obj.rawSha256 === sha256(o.original);
-      if (!ok) this.logf(`WARNUNG: Coverage von ${m.unit} passt nicht zum Code in der Datenbank, alle Tests laufen`);
+      if (!ok) this.logf(`WARNING: coverage of ${m.unit} does not match the code in the database, running all tests`);
       this.covUsable.set(key, ok);
     }
     if (!ok) return null;
@@ -926,7 +928,7 @@ class Run {
         w.testsRan = false;
         let r = await fn(w, ms[i]);
         if (broken(r) || !(await w.alive())) {
-          this.logf(`Worker${w.name}: Verbindung verloren (${r.detail ?? 'Verwaltungsverbindung'}), baue neu auf …`);
+          this.logf(`Worker${w.name}: connection lost (${r.detail ?? 'management connection'}), rebuilding …`);
           let up = await w.reopen();
           if (up) {
             w.testsRan = false;
@@ -937,14 +939,14 @@ class Run {
             if (broken(r)) {
               up = await w.reopen();
               // under the tests: they would fail; before them (compiling the mutant): no test saw it
-              if (up && ranTests) Object.assign(r, { status: 'KILLED', killedBy: '(Serverprozess abgestürzt)' });
-              else if (up) r.detail = `Serverprozess beim Kompilieren abgestürzt: ${r.detail ?? ''}`;
+              if (up && ranTests) Object.assign(r, { status: 'KILLED', killedBy: '(server process crashed)' });
+              else if (up) r.detail = `server process crashed while compiling: ${r.detail ?? ''}`;
             }
           }
           if (!up) {
             w.retired = true;
             again.push(i);
-            this.logf(`Worker${w.name} scheidet aus, die anderen übernehmen seine Mutanten`);
+            this.logf(`Worker${w.name} retires, the others take over its mutants`);
             return;
           }
         }
@@ -964,12 +966,12 @@ class Run {
     if (!stop() && this.workers.every((w) => w.retired)) {
       const left = ms.filter((_, i) => !results[i]).length;
       if (left) {
-        this.logf(`alle Worker-Datenbanken ausgefallen: ${left} Mutanten ohne Urteil`);
+        this.logf(`all worker databases failed: ${left} mutants without a verdict`);
         // a partial report: marked, and the CLI ends with an error code
-        this.abort ??= 'alle Worker-Datenbanken ausgefallen';
+        this.abort ??= 'all worker databases failed';
       }
       ms.forEach((m, i) => {
-        results[i] ??= Object.assign(newResult(m), { detail: 'alle Worker-Datenbanken ausgefallen' });
+        results[i] ??= Object.assign(newResult(m), { detail: 'all worker databases failed' });
       });
     }
     return results.filter((r): r is Result => !!r);
@@ -1020,15 +1022,15 @@ class Run {
       if (r.err) throw new Error(`Baseline: ${firstLine(r.err)}`);
       if (r.committed && !this.testsCommit) {
         this.testsCommit = true;
-        this.logf('Hinweis: Die Tests committen schon ohne Mutanten; Commits unter Mutanten gelten nicht als Nebenwirkung, kein Zurücksetzen');
+        this.logf('Note: the tests commit even without mutants; commits under mutants do not count as side effects, no reset');
       }
       for (const t of r.tests) if (t.failed) failedNames.set(t.name, t.message);
       slowest = Math.max(slowest, r.elapsedMs);
       last = r.tests;
     }
     const ok = last.filter((t) => !failedNames.has(t.name) && !t.ignored);
-    for (const [n, msg] of failedNames) this.logf(`ausgeschlossen, scheitert ohne Mutanten: ${n}: ${msg.split(/\s+/).join(' ').slice(0, 60)}`);
-    if (!ok.length) throw new Error('Baseline: kein Test besteht ohne Mutanten');
+    for (const [n, msg] of failedNames) this.logf(`excluded, fails without mutants: ${n}: ${msg.split(/\s+/).join(' ').slice(0, 60)}`);
+    if (!ok.length) throw new Error('Baseline: no test passes without mutants');
     this.excluded = failedNames.size;
     this.passing = ok.map((t) => t.name);
     if (this.testsCommit && !this.committers.size) {
@@ -1038,7 +1040,7 @@ class Run {
         await resetPackages(w.test);
         if ((await w.runTests([t.name], 10 * 60_000)).committed) this.committers.add(t.name);
       }
-      this.logf(`${this.committers.size} Tests committen: ${[...this.committers].map((t) => t.split('.').pop()).join(', ')}`);
+      this.logf(`${this.committers.size} tests commit: ${[...this.committers].map((t) => t.split('.').pop()).join(', ')}`);
     }
     this.limitMs = slowest * (this.opt.timeoutFactor ?? 5) + 2000;
     return { ms: slowest, tests: ok };
@@ -1064,22 +1066,22 @@ class Run {
           // a test that fails without a mutant is unreliable; a timeout or a lost connection says nothing
           if (!run.err && !run.timedOut && failed(run)) {
             flaky.add(name);
-            this.logf(`unzuverlässig, scheitert auch ohne Mutant: ${name}: ${firstFailure(run, 'message').slice(0, 60)}`);
+            this.logf(`flaky, fails without a mutant too: ${name}: ${firstFailure(run, 'message').slice(0, 60)}`);
           } else if (run.err || run.timedOut) {
-            this.logf(`Nachprüfung von ${name} ohne Ergebnis: ${run.timedOut ? 'Zeitüberschreitung' : firstLine(run.err!)}`);
+            this.logf(`recheck of ${name} without a result: ${run.timedOut ? 'timeout' : firstLine(run.err!)}`);
           }
         }
       }
     } catch (e) {
       // the worker's session is gone: the verdicts stand as they are
-      this.logf(`Nachprüfung der erkennenden Tests abgebrochen: ${firstLine(e as Error)}`);
+      this.logf(`recheck of the killing tests aborted: ${firstLine(e as Error)}`);
     }
     if (!flaky.size) return;
     rep.flakyTests = [...rep.flakyTests, ...flaky].sort();
     this.exclude(flaky);
     // every kill of a test found unreliable, also one checked earlier (another recheck call)
     const again = rep.results.filter((r) => r.status === 'KILLED' && flaky.has(r.killedBy ?? ''));
-    this.logf(`${again.length} Mutanten werden ohne die unzuverlässigen Tests wiederholt`);
+    this.logf(`${again.length} mutants run again without the flaky tests`);
     const byId = new Map(rep.results.map((r, i) => [r.id, i]));
     for (const r of await rerun(again.map((x) => x.mutant))) rep.results[byId.get(r.id)!] = r;
   }
@@ -1111,8 +1113,8 @@ async function withoutTriggeredViews(run: Run, ms: Mutant[]): Promise<Mutant[]> 
     else if (!left.has(unitKey(m))) left.set(unitKey(m), m);
   }
   for (const [k, m] of left) run.logf(hasTrigger(m)
-    ? `${k}: View mit INSTEAD-OF-Trigger, wird nicht mutiert (CREATE OR REPLACE VIEW würde den Trigger löschen)`
-    : `${k}: View eines anderen Schemas, deren INSTEAD-OF-Trigger sich ohne CREATE ANY TRIGGER nicht prüfen lassen: wird nicht mutiert`);
+    ? `${k}: view with an INSTEAD OF trigger, not mutated (CREATE OR REPLACE VIEW would drop the trigger)`
+    : `${k}: view of another schema whose INSTEAD OF triggers cannot be checked without CREATE ANY TRIGGER: not mutated`);
   return out;
 }
 
@@ -1126,9 +1128,9 @@ function wantsConfirm(res: Result, tests: string[]): boolean {
 
 /** What second looks found among results. */
 function unstableSummary(rs: Result[]): string {
-  const kills = rs.filter((r) => r.unstable?.startsWith('nicht')).length;
-  const slow = rs.filter((r) => r.unstable?.startsWith('Zeit')).length;
-  return `${kills} Erkennungen nicht wiederholbar, ${slow} Zeitüberschreitungen knapp`;
+  const kills = rs.filter((r) => r.unstable?.startsWith('not repeatable')).length;
+  const slow = rs.filter((r) => r.unstable?.startsWith('close to the time limit')).length;
+  return `${kills} kills not repeatable, ${slow} timeouts close to the time limit`;
 }
 
 /**
@@ -1142,7 +1144,7 @@ function unstableSummary(rs: Result[]): string {
 async function confirmVerdicts(run: Run, results: Result[], stop: () => boolean): Promise<void> {
   if (run.opt.confirm === false) return;
   // a mutant with a side effect changes the data of the worker that checks it: no second look
-  const todo = results.filter((r) => !r.sideEffect).filter((r) => killedByTest(r) || (r.status === 'TIMEOUT' && r.detail !== 'Schleifenwächter'));
+  const todo = results.filter((r) => !r.sideEffect).filter((r) => killedByTest(r) || (r.status === 'TIMEOUT' && r.detail !== LOOP_GUARD));
   if (!todo.length) return;
   const live = run.workers.filter((w) => !w.retired);
   if (!live.length) return;
@@ -1156,9 +1158,9 @@ async function confirmVerdicts(run: Run, results: Result[], stop: () => boolean)
   // each worker takes the verdicts of one other: no two share a database
   await Promise.all([...byWorker].map(async ([w, rs]) => {
     for (const r of rs) if (!stop() && !w.retired) await w.confirm(r);
-    await activate(w.test, 0).catch((e) => run.logf(`Gegenprobe${w.name}: ${firstLine(e as Error)}`));
+    await activate(w.test, 0).catch((e) => run.logf(`Second look${w.name}: ${firstLine(e as Error)}`));
   }));
-  run.logf(`Gegenprobe: ${todo.length} Urteile in ${Math.round(performance.now() - t0)}ms, ${unstableSummary(todo)}`);
+  run.logf(`Second look: ${todo.length} verdicts in ${Math.round(performance.now() - t0)}ms, ${unstableSummary(todo)}`);
 }
 
 /** Type and [schema.]name of the unit a script statement creates (leading comments skipped). */
@@ -1190,7 +1192,7 @@ export async function runMutation(opt: Options): Promise<Report> {
   let skipped = 0;
   for (const f of files) {
     skipped += f.skipped;
-    if (f.errors.length) run.logf(`übersprungen, nicht parsbar: ${f.path}: ${f.errors.join('; ')}`);
+    if (f.errors.length) run.logf(`skipped, not parsable: ${f.path}: ${f.errors.join('; ')}`);
   }
   // a unit of an installed file whose CREATE the install never runs (no "/" at the end, after EXIT,
   // held back by "."): the database keeps another version, mutants of the file text are wrong
@@ -1203,23 +1205,23 @@ export async function runMutation(opt: Options): Promise<Report> {
       for (const u of f.units) {
         if (created.has(`${u.type.replace(/\s+/g, ' ').toUpperCase()}|${objectName(u.name)}`)) continue;
         missing.add(u);
-        run.logf(`übersprungen, vom Installationsskript nicht angelegt (kein "/" danach?): ${f.path}#${u.type} ${u.name}`);
+        run.logf(`skipped, not created by the install script (no "/" after it?): ${f.path}#${u.type} ${u.name}`);
       }
     }
     ms = ms.filter((m) => !missing.has(m.unitRef));
   }
-  run.logf(`${ms.length} Mutanten in ${files.length} Dateien${opt.diff ? ' (nur geänderte Zeilen)' : ''}, ${skipped} gleichwertige oder sinnlose Varianten ausgelassen`);
+  run.logf(`${ms.length} mutants in ${files.length} files${opt.diff ? ' (changed lines only)' : ''}, ${skipped} equivalent or pointless variants left out`);
   if (!ms.length) {
-    run.logf('keine Mutanten: nichts zu tun');
+    run.logf('no mutants: nothing to do');
     return { ...emptyReport(0), mode, skippedVariants: skipped, elapsedMs: performance.now() - t0 };
   }
-  if (!opt.dbUrls.length) throw new Error('keine Datenbank: --db oder PLGAUGE_DB setzen');
+  if (!opt.dbUrls.length) throw new Error('no database: set --db or PLGAUGE_DB');
   opt.dbUrls.forEach((u, i) => run.workers.push(new Worker(u, opt.dbUrls.length > 1 ? ` w${i + 1}` : '', run)));
   let report: Report | undefined;
   const onSig = () => {
-    if (run.interrupted) return run.logf('Die Originale werden gerade wiederhergestellt, bitte warten (sonst: plgauge restore)');
+    if (run.interrupted) return run.logf('The originals are being restored, please wait (otherwise: plgauge restore)');
     run.interrupted = true;
-    run.logf('Abbruch angefordert, stelle Originale wieder her …');
+    run.logf('Abort requested, restoring the originals …');
     // test calls in flight end now (a CI cancel kills the process a few seconds later)
     for (const w of run.workers) if (w.inTests) w.test.conn.break().catch(() => {});
   };
@@ -1229,10 +1231,10 @@ export async function runMutation(opt: Options): Promise<Report> {
   try {
     // (a worker still opening would otherwise keep its lock and connections)
     await settled(run.workers.map((w) => w.open()));
-    if (run.workers.length > 1) run.logf(`${run.workers.length} Worker-Datenbanken`);
+    if (run.workers.length > 1) run.logf(`${run.workers.length} worker databases`);
     // the switched code names the run's schema (its context, its plgauge_ctl): one for all workers
     const homes = new Set(await Promise.all(run.workers.map((w) => w.currentSchema())));
-    if (homes.size > 1) throw new Error(`Worker-Datenbanken mit verschiedenen Schemas (${[...homes].join(', ')}) werden nicht unterstützt: alle Worker brauchen denselben Benutzer bzw. dasselbe CURRENT_SCHEMA`);
+    if (homes.size > 1) throw new Error(`Worker databases with different schemas (${[...homes].join(', ')}) are not supported: all workers need the same user or CURRENT_SCHEMA`);
     run.checkpoint();
     // one database object defined in two files (a unit file and an install-all script, say, or
     // once with its schema and once without): both would compile into the same object, the
@@ -1246,14 +1248,14 @@ export async function runMutation(opt: Options): Promise<Report> {
       if (first === undefined) objectOf.set(id, unitKey(m));
       else if (first !== unitKey(m)) twice.add(unitKey(m));
     }
-    for (const k of twice) run.logf(`übersprungen, Objekt schon in einer anderen Datei definiert: ${k}`);
+    for (const k of twice) run.logf(`skipped, object already defined in another file: ${k}`);
     ms = await withoutTriggeredViews(run, ms.filter((m) => !twice.has(unitKey(m))));
     run.total = ms.length;
     const stop = () => run.interrupted || !!run.abort;
     const rep = mode === 'naive' ? await runNaive(run, ms, stop) : await runSchema(run, ms, stop);
     if (run.abort) rep.aborted = run.abort;
-    else if (run.interrupted) rep.aborted = 'Abbruch angefordert (Strg-C)';
-    if (run.repairs) run.logf(`${run.repairs} Testläufe haben Daten nach einem Mutanten wiederhergestellt`);
+    else if (run.interrupted) rep.aborted = 'Abort requested (Ctrl-C)';
+    if (run.repairs) run.logf(`${run.repairs} test runs restored data after a mutant`);
     Object.assign(rep, { mode, skippedVariants: skipped, limitMs: run.limitMs, tests: run.passing.length, excludedTests: run.excluded });
     rep.elapsedMs = performance.now() - t0;
     rep.results.sort((a, b) => a.id - b.id);
@@ -1269,7 +1271,7 @@ export async function runMutation(opt: Options): Promise<Report> {
     // (the lock lost while restoring: the report must not look complete)
     if (report && run.abort && !report.aborted) report.aborted = run.abort;
     if (left.length) {
-      const msg = `FEHLER: Originale nicht wiederhergestellt (${left.join('; ')}); geänderter Code steht im Journal: plgauge restore`;
+      const msg = `ERROR: originals not restored (${left.join('; ')}); the changed code is in the journal: plgauge restore`;
       (opt.log ?? console.error)(msg);
       if (report) report.unrestored = left;
     }
@@ -1306,14 +1308,14 @@ async function naivePhase(run: Run, rep: Report, ms: Mutant[], stop: () => boole
   rep.results.push(...one);
   const ids = new Set(one.map((r) => r.id));
   await run.recheckKillers(rep, (again) => naiveList(run, again, stop), stop, ids);
-  if (run.opt.confirm !== false) run.logf(`Gegenprobe (einzeln kompiliert): ${unstableSummary(rep.results.filter((r) => ids.has(r.id)))}`);
+  if (run.opt.confirm !== false) run.logf(`Second look (compiled one by one): ${unstableSummary(rep.results.filter((r) => ids.has(r.id)))}`);
 }
 
 async function runNaive(run: Run, ms: Mutant[], stop: () => boolean): Promise<Report> {
   const base = await run.baseline();
   run.checkpoint();
   const rep = emptyReport(base.ms);
-  run.logf(`Baseline: ${base.tests.length} Tests in ${Math.round(base.ms)}ms, Zeitgrenze ${Math.round(run.limitMs)}ms`);
+  run.logf(`Baseline: ${base.tests.length} tests in ${Math.round(base.ms)}ms, time limit ${Math.round(run.limitMs)}ms`);
   await naivePhase(run, rep, ms, stop);
   return rep;
 }
@@ -1321,7 +1323,7 @@ async function runNaive(run: Run, ms: Mutant[], stop: () => boolean): Promise<Re
 async function runSchema(run: Run, ms: Mutant[], stop: () => boolean): Promise<Report> {
   const w = run.primary;
   if (ms.some((m) => m.point.naiveOnly === 'cache') || [...new Set(ms.map((m) => m.sourceFile))].some((f) => /\bRESULT_CACHE\b/i.test(f.src.toString('utf8')))) {
-    run.logf('Hinweis: RESULT_CACHE-Funktionen laufen einzeln; ihre gecachten Ergebnisse können Mutanten in Code verdecken, den sie aufrufen (dafür --mode naive)');
+    run.logf('Note: RESULT_CACHE functions run one by one; their cached results can hide mutants in code they call (use --mode naive for those)');
   }
   run.ms = ms;
   const { naive, dropped } = run;
@@ -1345,7 +1347,7 @@ async function runSchema(run: Run, ms: Mutant[], stop: () => boolean): Promise<R
     h.schema = units;
     await h.installSchema(units);
   }));
-  run.logf(`Schema kompiliert in ${Math.round(performance.now() - t0)}ms (${rounds} Runden), ${dropped.size} Mutanten verworfen, ${naive.size} Stellen ohne Schema`);
+  run.logf(`Schema compiled in ${Math.round(performance.now() - t0)}ms (${rounds} rounds), ${dropped.size} mutants dropped, ${naive.size} points without the schema`);
 
   // the first execution parses the branches (cursors and views with many: seconds); the time limit must not include it
   run.checkpoint();
@@ -1355,7 +1357,7 @@ async function runSchema(run: Run, ms: Mutant[], stop: () => boolean): Promise<R
   const base = await run.baseline();
   run.checkpoint();
   const rep = emptyReport(base.ms);
-  run.logf(`Baseline mit Schema: ${base.tests.length} Tests in ${Math.round(base.ms)}ms, Zeitgrenze ${Math.round(run.limitMs)}ms`);
+  run.logf(`Baseline with the schema: ${base.tests.length} tests in ${Math.round(base.ms)}ms, time limit ${Math.round(run.limitMs)}ms`);
 
   // (with the recorded view points, which run one by one on the recording's reach)
   const covering = await record(run, base.tests, units.flatMap((u) => [...u.mutants.map((m) => m.id), ...u.recorded]), loopCount);
@@ -1389,7 +1391,7 @@ async function runSchema(run: Run, ms: Mutant[], stop: () => boolean): Promise<R
   await confirmVerdicts(run, rep.results, stop);
   if (fallback.length && !stop()) {
     await run.restoreEverywhere();
-    run.logf(`${fallback.length} Mutanten ohne Schema, einzeln kompiliert`);
+    run.logf(`${fallback.length} mutants without the schema, compiled one by one`);
     await naivePhase(run, rep, fallback, stop);
   }
   return rep;
@@ -1428,7 +1430,7 @@ async function capBranches(run: Run): Promise<Map<string, ViewPlans>> {
         points++;
       }
     }
-    if (points) run.logf(`${what}: ${kept} von ${bms.length} Varianten als Kopien, ${points} Stellen einzeln`);
+    if (points) run.logf(`${what}: ${kept} of ${bms.length} variants as copies, ${points} points one by one`);
   };
   const groups = new Map<string, Mutant[]>();
   // every view gets its original plan, also one whose points all run one by one: it may still
@@ -1460,18 +1462,18 @@ async function capBranches(run: Run): Promise<Map<string, ViewPlans>> {
       } catch (e) {
         // without a plan neither the cap nor the plan check can work: the view stays as written
         run.oneByOne(key, true);
-        run.logf(`${key}: EXPLAIN PLAN gescheitert (${firstLine(e as Error)}), View im Original, Mutanten einzeln`);
+        run.logf(`${key}: EXPLAIN PLAN failed (${firstLine(e as Error)}), view kept original, mutants one by one`);
         continue;
       }
       if (!branches.length) continue;
-      cap(branches, Math.min(VIEW_BRANCHES, Math.floor(VIEW_PLAN_BUDGET_MS / Math.max(probe, 1))), `${key}: Parsen ${Math.round(probe)}ms`);
+      cap(branches, Math.min(VIEW_BRANCHES, Math.floor(VIEW_PLAN_BUDGET_MS / Math.max(probe, 1))), `${key}: parsing ${Math.round(probe)}ms`);
     } else if (gms[0].point.union && !gms[0].point.dyn) {
-      cap(branches, CURSOR_BRANCHES, `${unitKey(gms[0])}:${gms[0].line} Cursor`);
+      cap(branches, CURSOR_BRANCHES, `${unitKey(gms[0])}:${gms[0].line} cursor`);
     } else {
       // every variant is the whole literal (dynamic SQL) or the whole statement again
       const { dyn, scope } = gms[0].point;
       const [a, b] = dyn ?? scope!;
-      cap(gms, Math.floor(DUP_BYTES / Math.max(b - a, 1)), `${unitKey(gms[0])}:${gms[0].line} ${dyn ? 'dynamisches SQL' : 'Anweisung'} (${b - a} Bytes)`);
+      cap(gms, Math.floor(DUP_BYTES / Math.max(b - a, 1)), `${unitKey(gms[0])}:${gms[0].line} ${dyn ? 'dynamic SQL' : 'statement'} (${b - a} bytes)`);
     }
   }
   return plans;
@@ -1573,23 +1575,23 @@ async function checkPlans(run: Run, plans: Map<string, ViewPlans>): Promise<numb
           if (x) d = `in ${dep.name}: ${x}`;
         }
       } catch (e) {
-        d = `nicht prüfbar: ${firstLine(e as Error)}`;
+        d = `not checkable: ${firstLine(e as Error)}`;
       }
       if (!d) continue;
       if (pass < 2 && ms.some((m) => unitKey(m) === v.key && !naive.has(m.point) && !dropped.has(m.id))) {
         run.oneByOne(v.key);
-        run.logf(`${v.key}: Plan mit Zweigen weicht ab (${d}), Mutanten einzeln, Block nur zur Aufzeichnung`);
+        run.logf(`${v.key}: plan with branches differs (${d}), mutants one by one, block for the recording only`);
       } else {
         // its mutants run one by one (some may still be switched when this comes from pass 2 on)
         run.oneByOne(v.key, true);
-        run.logf(`${v.key}: Plan schon mit dem Aufzeichnungs-Wrapper anders (${d}), View im Original`);
+        run.logf(`${v.key}: plan differs even with just the recording wrapper (${d}), view kept original`);
       }
       differs = true;
     }
     if (!differs) break;
     rounds += await compileSchema(run, (su) => su.type === 'VIEW');
   }
-  if (checked) run.logf(`Planvergleich: ${checked} Views geprüft`);
+  if (checked) run.logf(`Plan comparison: ${checked} views checked`);
   return rounds;
 }
 
@@ -1635,7 +1637,7 @@ async function isolateViews(run: Run): Promise<number> {
     if (!culprits.size) for (const v of views) culprits.set(v, extra);
     for (const [v, tests] of culprits) {
       run.oneByOne(v.key, true);
-      run.logf(`${v.key}: ohne Schema (scheitern damit: ${tests.map((t) => t.split('.').pop()).join(', ')}), Mutanten einzeln`);
+      run.logf(`${v.key}: without the schema (failing with it: ${tests.map((t) => t.split('.').pop()).join(', ')}), mutants one by one`);
     }
   }
   // the views back into the schema (those to blame as originals); the other units are unchanged
@@ -1665,7 +1667,7 @@ async function compileSchema(run: Run, only: (su: SchemaUnit) => boolean = () =>
         if (run.placed.has(su.key)) await w.restore(su.key, false);
         run.unplaced.add(su.key);
         run.oneByOne(su.key);
-        run.logf(`${su.key}: nicht kompilierbar (${failure}), ohne Schema, Mutanten einzeln`);
+        run.logf(`${su.key}: not compilable (${failure}), without the schema, mutants one by one`);
         continue;
       }
       run.placed.add(su.key);
@@ -1679,13 +1681,13 @@ async function compileSchema(run: Run, only: (su: SchemaUnit) => boolean = () =>
           for (const q of rg.points ?? [rg.point]) naive.add(q);
           if (rg.block) broken.add(rg.block);
         } else {
-          run.logf(`Fehler ohne Zuordnung in ${su.key}: ${e.line}:${e.position} ${e.text}`);
+          run.logf(`unassigned error in ${su.key}: ${e.line}:${e.position} ${e.text}`);
           for (const m of su.mutants) naive.add(m.point);
         }
       }
     }
     if (!bad) return round;
-    if (state() === before) throw new Error(`Schema nach ${round} Runden nicht kompilierbar (Fehler, die keinem Mutanten zuzuordnen sind)`);
+    if (state() === before) throw new Error(`Schema not compilable after ${round} rounds (errors that belong to no mutant)`);
   }
 }
 
@@ -1695,12 +1697,12 @@ async function record(run: Run, tests: TestResult[], ids: number[], loopCount: n
   await activate(w.test, -1);
   await w.test.conn.execute(`begin plgauge_ctl.arm; end;`);
   const r = await w.runTests(w.testPaths(), 10 * 60_000);
-  if (r.err) throw new Error(`Aufzeichnungslauf: ${firstLine(r.err)}`);
+  if (r.err) throw new Error(`Recording run: ${firstLine(r.err)}`);
   // a test reset all package state (DBMS_SESSION.RESET_PACKAGE): the hits are gone with it
   const intact = (await w.test.conn.execute<[number]>(`select plgauge_ctl.intact from dual`)).rows?.[0]?.[0] === 1;
   // A test that passed the baseline but fails now depends on state or order.
   const flakyNow = r.tests.filter((t) => t.failed);
-  for (const t of flakyNow) run.logf(`unzuverlässig, scheitert im Aufzeichnungslauf: ${t.name}: ${t.message.split(/\s+/).join(' ').slice(0, 60)}`);
+  for (const t of flakyNow) run.logf(`flaky, fails in the recording run: ${t.name}: ${t.message.split(/\s+/).join(' ').slice(0, 60)}`);
   if (flakyNow.length) {
     // (run.passing are the names of tests: both come from the baseline)
     run.exclude(new Set(flakyNow.map((t) => t.name)));
@@ -1713,7 +1715,7 @@ async function record(run: Run, tests: TestResult[], ids: number[], loopCount: n
   const covering = new Map<number, string[]>([...byId].map(([id, set]) => [id, [...set].sort((a, b) => (dur.get(a) ?? 0) - (dur.get(b) ?? 0) || (a < b ? -1 : a > b ? 1 : 0))]));
   if (!intact) {
     // no mutant may come out NOT_COVERED on lost hits: all tests for every switched mutant
-    run.logf('WARNUNG: Ein Test hat den Paketzustand zurückgesetzt (DBMS_SESSION.RESET_PACKAGE?): die Aufzeichnung ist unvollständig, jeder Mutant läuft mit allen Tests');
+    run.logf('WARNING: a test reset the package state (DBMS_SESSION.RESET_PACKAGE?): the recording is incomplete, every mutant runs with all tests');
     const sorted = [...all].sort((a, b) => (dur.get(a) ?? 0) - (dur.get(b) ?? 0));
     for (const id of ids) covering.set(id, sorted);
   }
@@ -1725,7 +1727,7 @@ async function record(run: Run, tests: TestResult[], ids: number[], loopCount: n
     ? new Map([...counts].map(([id, n]) => [id, Math.max(1000, 10 * n)]))
     : new Map(Array.from({ length: loopCount }, (_, k) => [k + 1, 1_000_000_000] as [number, number]));
   await setLoopLimits(w.test, w.loopLimits);
-  run.logf(`Aufzeichnung: ${covering.size} von ${run.total} Mutanten erreicht, ${counts.size} Schleifen gezählt`);
+  run.logf(`Recording: ${covering.size} of ${run.total} mutants reached, ${counts.size} loops counted`);
   return covering;
 }
 

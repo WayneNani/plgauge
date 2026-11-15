@@ -189,6 +189,6 @@ export async function lockRun(conn: oracledb.Connection, tool: string): Promise<
     await conn.execute(`select tool from plgauge_lock where tool = :t for update nowait`, { t: tool });
   } catch (e) {
     if (!(e as Error).message.includes('ORA-00054')) throw e;
-    throw new Error('Auf diesem Schema läuft gerade ein anderer plgauge-Lauf; zwei Läufe würden sich gegenseitig den Code zurücksetzen');
+    throw new Error('Another plgauge run is in progress on this schema; two runs would reset each other\'s code');
   }
 }

@@ -61,7 +61,7 @@ export interface ParsedSource {
 
 export class ParseFailure extends Error {
   constructor(message: string, public line: number, public col: number) {
-    super(`${message} (Zeile ${line})`);
+    super(`${message} (line ${line})`);
   }
 }
 
@@ -132,7 +132,7 @@ export function parseUnit(src: string): { tokens: Token[]; unit: Node } {
   const unit = p.unitAt();
   // tokens left after the unit (but a "/"): it ended early, measuring only its beginning would mislead
   const rest = p.t.slice(unit.b).filter((t) => t.text !== '/' && t.text !== ';');
-  if (rest.length) throw new ParseFailure(`Einheit endet vor dem Text (${rest[0].text})`, rest[0].line, rest[0].col);
+  if (rest.length) throw new ParseFailure(`Unit ends before the end of the text (${rest[0].text})`, rest[0].line, rest[0].col);
   return { tokens: p.t, unit };
 }
 
@@ -215,12 +215,12 @@ class Parser {
     throw new ParseFailure(msg, x?.line ?? 1, x?.col ?? 1);
   }
   private expect(w: string): number {
-    if (!this.at(w)) this.fail(`Erwartet "${w}", gefunden "${this.eof() ? 'Ende' : this.t[this.i].text}"`);
+    if (!this.at(w)) this.fail(`Expected "${w}", found "${this.eof() ? 'end of text' : this.t[this.i].text}"`);
     return this.i++;
   }
   private close(open: number): number {
     const m = this.match[open];
-    if (m < 0) this.fail('Schließende Klammer fehlt', open);
+    if (m < 0) this.fail('Missing closing parenthesis', open);
     return m;
   }
 
@@ -247,7 +247,7 @@ class Parser {
   }
   private need(from: number, stops: Set<string>, end = this.t.length): number {
     const k = this.find(from, stops, end);
-    if (k < 0) this.fail(`"${[...stops].join('/')}" nicht gefunden`, from);
+    if (k < 0) this.fail(`"${[...stops].join('/')}" not found`, from);
     return k;
   }
 
@@ -335,7 +335,7 @@ class Parser {
       this.i++;
       return this.trigger(a, this.unitName());
     }
-    if (kw !== 'PACKAGE' && kw !== 'TYPE') this.fail(`Nicht unterstützter Objekttyp "${this.t[this.i]?.text}"`);
+    if (kw !== 'PACKAGE' && kw !== 'TYPE') this.fail(`Unsupported object type "${this.t[this.i]?.text}"`);
     this.i++;
     this.expect('BODY');
     const name = this.unitName();
@@ -350,10 +350,10 @@ class Parser {
       const da = this.i;
       const ds: Node[] = [];
       while (!this.at('END')) {
-        if (this.eof()) this.fail('END des Type Body fehlt');
+        if (this.eof()) this.fail('Missing END of type body');
         while (this.at('MEMBER', 'STATIC', 'CONSTRUCTOR', 'MAP', 'ORDER', 'OVERRIDING', 'FINAL', 'INSTANTIABLE', 'NOT', ',')) this.i++;
         if (this.at('PROCEDURE', 'FUNCTION')) ds.push(this.subprog(false));
-        else this.fail(`Unerwartetes "${this.t[this.i].text}" im Type Body`);
+        else this.fail(`Unexpected "${this.t[this.i].text}" in type body`);
       }
       kids.push(node('decls', da, this.i, ds));
       this.end();
@@ -402,9 +402,9 @@ class Parser {
         break;
       }
     }
-    if (as < 0) this.fail('AS der View nicht gefunden', a);
+    if (as < 0) this.fail('AS of the view not found', a);
     // PL/SQL in WITH: its semicolons do not end the view, and the query scan cannot read it
-    if (this.upAt(as + 1) === 'WITH' && ['FUNCTION', 'PROCEDURE'].includes(this.upAt(as + 2))) this.fail('View mit WITH FUNCTION wird nicht unterstützt', as + 1);
+    if (this.upAt(as + 1) === 'WITH' && ['FUNCTION', 'PROCEDURE'].includes(this.upAt(as + 2))) this.fail('View with WITH FUNCTION is not supported', as + 1);
     let end = as + 1;
     while (end < this.t.length && !this.isOp(end, ';') && !this.isSlash(end) && !(this.t[end].up === 'CREATE' && this.t[end].kind === 'ident' && this.firstOnLine(end))) {
       end = this.isOp(end, '(') ? this.close(end) + 1 : end + 1;
@@ -414,7 +414,7 @@ class Parser {
     const w = (k: number, ...ws: string[]) => k > as && this.isWord(k, ...ws);
     if (w(qb - 3, 'WITH') && ((w(qb - 2, 'READ') && w(qb - 1, 'ONLY')) || (w(qb - 2, 'CHECK') && w(qb - 1, 'OPTION')))) qb -= 3;
     else if (w(qb - 5, 'WITH') && w(qb - 4, 'CHECK') && w(qb - 3, 'OPTION') && w(qb - 2, 'CONSTRAINT')) qb -= 5;
-    if (qb <= as + 1) this.fail('Abfrage der View fehlt', as);
+    if (qb <= as + 1) this.fail('Missing query of the view', as);
     const q = this.query(as + 1, qb);
     this.i = this.isOp(end, ';') ? end + 1 : end;
     return node('unit', a, end, [q], { op: 'VIEW', name, at: as });
@@ -424,7 +424,7 @@ class Parser {
     // header up to DECLARE / BEGIN / COMPOUND TRIGGER / CALL
     const kids: Node[] = [];
     while (!this.at('DECLARE', 'BEGIN', 'COMPOUND', 'CALL')) {
-      if (this.eof()) this.fail('Trigger-Rumpf nicht gefunden', a);
+      if (this.eof()) this.fail('Trigger body not found', a);
       if (this.at('WHEN') && this.isOp(this.i + 1, '(')) {
         const o = this.i + 1;
         const c = this.close(o);
@@ -472,7 +472,7 @@ class Parser {
     const name = this.t[nameTok].text;
     const kids: Node[] = [];
     for (;;) {
-      if (this.eof()) this.fail(`Kopf von ${name} nicht abgeschlossen`, a);
+      if (this.eof()) this.fail(`Header of ${name} not terminated`, a);
       if (this.at('(')) {
         const c = this.close(this.i);
         kids.push(...this.paramDefaults(this.i + 1, c));
@@ -582,7 +582,7 @@ class Parser {
     // END [label] ; — or END BEFORE STATEMENT; in compound triggers
     let n = 0;
     while (!this.at(';')) {
-      if (this.eof() || ++n > 3) this.fail('";" nach END erwartet');
+      if (this.eof() || ++n > 3) this.fail('Expected ";" after END');
       this.i++;
     }
     this.i++;

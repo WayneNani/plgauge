@@ -48,7 +48,7 @@ test('schema: switches for every kind, nested and left-associative', () => {
     'IF plgauge$a = -1 THEN plgauge_ctl.reach(4, 1); END IF; IF plgauge$a = 4 THEN SELECT COUNT(*) INTO n FROM t WHERE x >= a; ELSE IF plgauge$a = -1 THEN plgauge_ctl.reach(3, 1); END IF; IF plgauge$a <> 3 THEN SELECT COUNT(*) INTO n FROM t WHERE x > a; END IF; END IF;',
     'LOOP IF plgauge$a <> 0 THEN plgauge_ctl.tick(1); END IF; EXIT;',
     'RETURN (CASE CASE plgauge$a WHEN -1 THEN plgauge_ctl.hit(6, 1) ELSE plgauge$a END WHEN 6 THEN (a - b - c) ELSE ((CASE CASE plgauge$a WHEN -1 THEN plgauge_ctl.hit(5, 1) ELSE plgauge$a END WHEN 5 THEN (a + b) ELSE (a - b) END) + c) END);',
-  ]) assert.ok(got.includes(want), `fehlt: ${want}\nin:\n${got}`);
+  ]) assert.ok(got.includes(want), `missing: ${want}\nin:\n${got}`);
   assert.equal(sus[0].loops, 1);
 });
 

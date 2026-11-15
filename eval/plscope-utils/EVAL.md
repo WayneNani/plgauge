@@ -1,323 +1,324 @@
-# SQL-Operatoren (A10): Auswertung an plscope-utils
+# SQL operators: evaluation on plscope-utils
 
-Stand 14.11.2026. Stufe 2 der Mutationsoperatoren wirkt auf statisches SQL. Geprüft wurde sie an
-[plscope-utils](https://github.com/PhilippSalvisberg/plscope-utils) (`dc22daf`), einem gepflegten Projekt mit viel SQL auf
-dem Data Dictionary und echten utPLSQL-Tests, dazu mit einem Kompiliertest auf dem SQL von utPLSQL.
+As of 14 Nov 2026. Level 2 of the mutation operators acts on static SQL. It was tested on
+[plscope-utils](https://github.com/PhilippSalvisberg/plscope-utils) (`dc22daf`), a maintained project with a lot of SQL on
+the data dictionary and real utPLSQL tests, plus a compile test on the SQL of utPLSQL.
 
-Ergebnis: **Die 30 SQL-Mutanten in plscope-utils zeigen 7 echte Testlücken, und keiner ist äquivalent.** Im Korpus
-kompilieren 1 190 von 1 193 SQL-Mutanten beider Stufen. Der Lauf hat vor allem das Werkzeug verbessert: Schalter in SQL
-zerstörten Ausführungspläne, PL/Scope-Daten gingen verloren, und Tests mit DDL scheiterten an fehlenden Rollen. Alle drei
-Fehler sind behoben (siehe unten).
+Result: **the 30 SQL mutants in plscope-utils show 7 real test gaps, and none is equivalent.** In the corpus,
+1 190 of 1 193 SQL mutants of both levels compile. Above all, the run improved the tool: switches in SQL destroyed
+execution plans, PL/Scope data got lost, and tests with DDL failed because of missing roles. All three bugs are fixed
+(see below).
 
-## Operatoren
+## Operators
 
 | Operator | Mutation |
 | --- | --- |
-| SEL | `DISTINCT`/`UNIQUE` entfernt; `FETCH FIRST …` entfernt |
-| JOI | `LEFT`/`RIGHT`/`FULL JOIN` → `JOIN`; `[INNER] JOIN` → `LEFT JOIN`; `(+)` entfernt |
-| ORD | `ORDER BY`: alle Elemente `ASC` ↔ `DESC`, ein Mutant pro Liste |
+| SEL | `DISTINCT`/`UNIQUE` removed; `FETCH FIRST …` removed |
+| JOI | `LEFT`/`RIGHT`/`FULL JOIN` → `JOIN`; `[INNER] JOIN` → `LEFT JOIN`; `(+)` removed |
+| ORD | `ORDER BY`: all elements `ASC` ↔ `DESC`, one mutant per list |
 | UNI | `UNION` ↔ `UNION ALL`; `INTERSECT` ↔ `MINUS` |
 | AGR | `MIN` ↔ `MAX`; `SUM` ↔ `AVG`; `COUNT(DISTINCT x)` → `COUNT(x)`; `COUNT(x)` → `COUNT(*)` |
-| SUB | `EXISTS` ↔ `NOT EXISTS`; `IN (Unterabfrage)` ↔ `NOT IN` |
-| WHR | Bedingung von `WHERE`/`HAVING` → `TRUE` |
-| COL | `UPDATE … SET`: eine Zuweisung weg; `INSERT (Spalten) VALUES (…)`: eine Spalte samt Wert weg |
+| SUB | `EXISTS` ↔ `NOT EXISTS`; `IN (subquery)` ↔ `NOT IN` |
+| WHR | condition of `WHERE`/`HAVING` → `TRUE` |
+| COL | `UPDATE … SET`: one assignment removed; `INSERT (columns) VALUES (…)`: one column and its value removed |
 
-Grundlage sind die SQL-Operatoren von Tuya, Suárez-Cabal und de la Riva (2007). Ausgewählt wurden nur Varianten, die
-selten äquivalent sind; die Regeln zum Auslassen stehen in `packages/mutation/README.md`.
+The basis is the SQL operators of Tuya, Suárez-Cabal and de la Riva (2007). Only variants that are rarely equivalent
+were selected; the rules for skipping are in `packages/mutation/README.md`.
 
-## Lauf
+## Run
 
 | | |
 | --- | --- |
-| Code | 7 Package Bodies (5 Werkzeuge, 2 Demo-Pakete), rund 1 100 Zeilen |
-| Tests | 36 utPLSQL-Tests; 1 ausgeschlossen (prüft die PL/Scope-Daten des Codes selbst, also auch die des mutierten Schemas) |
-| Datenbank | Oracle 23.26.1 Free, utPLSQL 3.2.2, drei Worker |
-| Laufzeit | 208 s für 504 Mutanten (Baseline 3,9 s); 194 Mutanten in Cursor-Deklarationen einzeln kompiliert |
-| Mutation Score | **62,1 %**: 313 erkannt, 169 überlebt, 22 von keinem Test erreicht |
+| Code | 7 package bodies (5 tools, 2 demo packages), about 1 100 lines |
+| Tests | 36 utPLSQL tests; 1 excluded (it checks the PL/Scope data of the code itself, and so also that of the mutated schema) |
+| Database | Oracle 23.26.1 Free, utPLSQL 3.2.2, three workers |
+| Run time | 208 s for 504 mutants (baseline 3.9 s); 194 mutants in cursor declarations compiled one at a time |
+| Mutation score | **62.1 %**: 313 killed, 169 survived, 22 not reached by any test |
 
-| Teil | Mutanten | erkannt | überlebt | nicht erreicht | Score |
+| Part | Mutants | killed | survived | not reached | Score |
 | --- | --- | --- | --- | --- | --- |
-| Stufe 2 (SQL-Operatoren) | 30 | 23 | 7 | 0 | 76,7 % |
-| Stufe 1 in SQL | 200 | 103 | 97 | 0 | 51,5 % |
-| Stufe 1 in PL/SQL | 274 | 187 | 65 | 22 | 68,2 % |
+| Level 2 (SQL operators) | 30 | 23 | 7 | 0 | 76.7 % |
+| Level 1 in SQL | 200 | 103 | 97 | 0 | 51.5 % |
+| Level 1 in PL/SQL | 274 | 187 | 65 | 22 | 68.2 % |
 
-| Operator | Mutanten | erkannt | überlebt |
+| Operator | Mutants | killed | survived |
 | --- | --- | --- | --- |
 | AGR | 2 | 2 | 0 |
 | COL | 6 | 6 | 0 |
-| JOI | 3 | 2 (1 durch Zeitgrenze) | 1 |
+| JOI | 3 | 2 (1 by time limit) | 1 |
 | ORD | 5 | 1 | 4 |
 | SEL | 3 | 3 | 0 |
-| WHR | 11 | 9 (1 durch Zeitgrenze) | 2 |
+| WHR | 11 | 9 (1 by time limit) | 2 |
 
-UNI und SUB kommen in plscope-utils nicht vor; sie sind durch die Kompiliertests unten und die Unit-Tests abgedeckt.
+UNI and SUB do not occur in plscope-utils; they are covered by the compile tests below and by the unit tests.
 
-## Alle 7 Überlebenden eingeordnet
+## All 7 survivors classified
 
-Jede Zeile mit Begründung in [`survivors-sql.tsv`](survivors-sql.tsv).
+Each row with its reason in [`survivors-sql.tsv`](survivors-sql.tsv).
 
-| Klasse | Anzahl | Beispiel |
+| Class | Count | Example |
 | --- | --- | --- |
-| Fall fehlt | 4 | Synonym auf ein fehlendes Objekt; Name, der zu mehreren Objekttypen gehört (dann entscheidet die Reihenfolge); nur eine Materialized View in der Datenbank; kein Testdatensatz vor der Datumsgrenze |
-| Reihenfolge ungeprüft | 3 | `dedup` sortiert, die Tests prüfen die Reihenfolge nicht |
-| äquivalent | 0 | |
+| Case missing | 4 | synonym for a missing object; name that belongs to several object types (then the order decides); only one materialized view in the database; no test record before the date boundary |
+| Order unchecked | 3 | `dedup` sorts, the tests do not check the order |
+| Equivalent | 0 | |
 
-Die 4 fehlenden Fälle sind dieselbe Art Fund wie die wertvollsten 18 % bei console: Grenzen und Sonderfälle der Daten,
-die Stufe 1 nicht sichtbar macht. Bei Stufe 1 liegt der Score in SQL mit 51,5 % deutlich unter dem in PL/SQL. Viele
-Bedingungen auf dem Dictionary (Eigentümer, Typ, Name) prüfen die Tests nur mit eindeutigen Namen.
+The 4 missing cases are the same kind of finding as the most valuable 18 % in console: boundaries and special cases of
+the data that level 1 does not reveal. For level 1, the score in SQL, at 51.5 %, is clearly below the one in PL/SQL.
+The tests check many conditions on the dictionary (owner, type, name) only with unique names.
 
-## Was der Lauf am Werkzeug verbessert hat
+## What the run improved in the tool
 
-- **Schalter in SQL zerstören Ausführungspläne.** Stufe 1 schaltete Mutanten in SQL per `CASE` im Ausdruck. Um eine
-  Join-Bedingung herum nimmt das dem Optimizer den Join: Eine Abfrage über zwei `DBA_IDENTIFIERS` lief minutenlang statt
-  in Millisekunden, und der Lauf blieb in der Baseline hängen. Jetzt steht die PL/SQL-Anweisung einmal pro Variante im
-  Schema (`IF aktiv = id THEN <Variante> ELSIF … ELSE <Original> END IF;`). Das Original bleibt unverändert und behält
-  seinen Plan. Das gilt für beide Stufen; SQL in Cursor-Deklarationen wird einzeln kompiliert.
-- **PL/Scope-Einstellung beim Neukompilieren.** Mutierte und wiederhergestellte Einheiten wurden ohne ihre
-  `PLSCOPE_SETTINGS` übersetzt, ihre PL/Scope-Daten verschwanden, und 3 Tests scheiterten. Jetzt übernimmt der Kern die
-  Einstellung wie schon Optimierungsstufe und `PLSQL_CCFLAGS`.
-- **Rollen im Testlauf.** Der Testläufer `plgauge_rt` hatte Definer-Rechte, darin sind Rollen abgeschaltet. 7 Tests, deren
-  Setup per DDL eine Prozedur anlegt (`CREATE PROCEDURE` über die Rolle RESOURCE), scheiterten mit ORA-01031, direkt mit
-  `ut.run` dagegen nicht. `plgauge_rt` hat jetzt Invoker-Rechte.
-- **Zwei Regeln gegen Äquivalente**, beide aus diesem Lauf. Ein innerer Join wird nicht zu `LEFT JOIN`, wenn `WHERE` eine
-  Spalte der verbundenen Tabelle vergleicht (die Nullzeilen fallen sowieso weg). `ORDER BY` wird als Ganzes umgedreht
-  statt pro Element. Pro Element war ein konstanter erster Schlüssel äquivalent, und von 22 Überlebenden kamen 15 aus
-  einem einzigen Muster.
+- **Switches in SQL destroy execution plans.** Level 1 switched mutants in SQL by a `CASE` in the expression. Around a
+  join condition, this takes the join away from the optimizer: a query over two `DBA_IDENTIFIERS` ran for minutes
+  instead of milliseconds, and the run hung in the baseline. Now the PL/SQL statement appears once per variant in the
+  schema (`IF active = id THEN <variant> ELSIF … ELSE <original> END IF;`). The original stays unchanged and keeps its
+  plan. This applies to both levels; SQL in cursor declarations is compiled one mutant at a time.
+- **PL/Scope setting on recompilation.** Mutated and restored units were compiled without their `PLSCOPE_SETTINGS`,
+  their PL/Scope data disappeared, and 3 tests failed. Now the core carries the setting over, as it already did for the
+  optimization level and `PLSQL_CCFLAGS`.
+- **Roles in the test run.** The test runner `plgauge_rt` had definer rights, under which roles are disabled. 7 tests
+  whose setup creates a procedure via DDL (`CREATE PROCEDURE` through the RESOURCE role) failed with ORA-01031, but not
+  when run directly with `ut.run`. `plgauge_rt` now has invoker rights.
+- **Two rules against equivalents**, both from this run. An inner join does not become a `LEFT JOIN` if `WHERE`
+  compares a column of the joined table (the null rows drop out anyway). `ORDER BY` is reversed as a whole instead of
+  per element. Per element, a constant first key was equivalent, and 15 of 22 survivors came from a single pattern.
 
-## Gegenprobe an console
+## Cross-check on console
 
-Die neue Schaltung von SQL betrifft auch Stufe 1. console wurde deshalb vor und nach der Änderung gelaufen (1 630
-gemeinsame Mutanten), dazu ein zweites Mal auf identischem Code, um das Rauschen zu messen:
+The new switching of SQL also affects level 1. So console was run before and after the change (1 630 mutants in
+common), plus a second time on identical code to measure the noise:
 
-| Vergleich | abweichende Urteile in PL/SQL | in SQL |
+| Comparison | differing verdicts in PL/SQL | in SQL |
 | --- | --- | --- |
-| vorher gegen nachher | 46 | 25 |
-| nachher gegen nachher (gleicher Code) | 37 | 4 |
+| before vs. after | 46 | 25 |
+| after vs. after (same code) | 37 | 4 |
 
-Die Abweichungen in PL/SQL sind Rauschen in derselben Größe wie zwischen zwei gleichen Läufen. console schreibt
-Konfiguration fest, und welche Tests einen Mutanten zuerst prüfen, ändert das Ergebnis der Konfigurationstests. In SQL
-sind 20 der 25 Abweichungen die erwartete Folge der Einzelkompilierung: Mutanten einer nie geöffneten
-Cursor-Deklaration erscheinen als überlebt statt als nicht erreicht. Score vorher 63,0 %, nachher 63,8 % und 63,9 %;
-die 6 neuen Mutanten der Stufe 2: 4 erkannt, 2 überlebt.
+The differences in PL/SQL are noise of the same size as between two identical runs. console commits configuration,
+and which tests check a mutant first changes the result of the configuration tests. In SQL, 20 of the 25 differences
+are the expected consequence of compiling one mutant at a time: mutants of a cursor declaration that is never opened
+appear as survived instead of not reached. Score before 63.0 %, after 63.8 % and 63.9 %; the 6 new level 2 mutants:
+4 killed, 2 survived.
 
-## Kompiliertest
+## Compile test
 
-`scripts/sql-compile-check.ts` kompiliert jede Einheit mit SQL-Mutanten erst im Original. Kompiliert sie, werden
-danach jeder Mutant einzeln und alle zusammen als Schema übersetzt, mit Zuordnung der Fehler wie in einem echten Lauf.
+`scripts/sql-compile-check.ts` first compiles each unit with SQL mutants in its original form. If it compiles, each
+mutant is then compiled on its own and all of them together as a schema, with errors mapped as in a real run.
 
-| Korpus | Einheiten | SQL-Mutanten | einzeln kompiliert | Schema: geschaltet / verworfen / ohne Zuordnung |
+| Corpus | Units | SQL mutants | compiled on their own | Schema: switched / discarded / unmapped |
 | --- | --- | --- | --- | --- |
-| utPLSQL 3.2.2 (`source`, in eigenem Schema installiert), beide Stufen | 19 | 1 193 | 1 190 | 1 142 / 3 / 0, mit Cursorn und Schleifen (Nachtrag 2) 1 175 / 3 / 0 |
-| übriger Korpus (nur Stufe 2, nur Einheiten ohne fehlende Objekte) | 18 | 111 | 111 | 72 / 0 / 0 |
-| Views von plscope-utils ohne `plscope_col_usage`, beide Stufen | 6 | 1 007 | 1 007 | 748 / 0 / 0 |
+| utPLSQL 3.2.2 (`source`, installed in its own schema), both levels | 19 | 1 193 | 1 190 | 1 142 / 3 / 0; with cursors and loops (Addendum 2) 1 175 / 3 / 0 |
+| rest of the corpus (level 2 only, only units without missing objects) | 18 | 111 | 111 | 72 / 0 / 0 |
+| views of plscope-utils without `plscope_col_usage`, both levels | 6 | 1 007 | 1 007 | 748 / 0 / 0 |
 
-Die 3 Fehler gehören zu Stufe 1 und gab es schon vorher; im Lauf werden sie als nicht kompilierbar verworfen. Es sind
-`FALSE` für die Bedingung mit dem Bulk-Bind eines `FORALL` (PLS-00435) und zwei LCR-Vergleiche `(a) = (b)` auf
-Bedingungen, die Oracle in SQL nicht vergleicht (ORA-00932). Der erste Kompiliertest hatte 2 Fehler in Stufe 2 gezeigt,
-`WHR` in `FORALL` und `UNION ALL` → `UNION` in rekursivem `WITH` (ORA-32040). Beide werden jetzt ausgelassen.
+The 3 errors belong to level 1 and existed before; in a run they are discarded as not compilable. They are `FALSE`
+for the condition with the bulk bind of a `FORALL` (PLS-00435) and two LCR comparisons `(a) = (b)` on conditions that
+Oracle does not compare in SQL (ORA-00932). The first compile test had shown 2 errors in level 2: `WHR` in `FORALL`
+and `UNION ALL` → `UNION` in a recursive `WITH` (ORA-32040). Both are now skipped.
 
-## Wie viel SQL gibt es zu mutieren?
+## How much SQL is there to mutate?
 
-Anteil der Mutanten der Stufe 2 an allen Mutanten, pro Projekt im Korpus:
+Share of level 2 mutants among all mutants, per project in the corpus:
 
-| Projekt | Mutanten | Stufe 1 in SQL | Stufe 2 | Anteil |
+| Project | Mutants | Level 1 in SQL | Level 2 | Share |
 | --- | --- | --- | --- | --- |
-| plscope-utils | 860 | 250 | 77 | 9,0 % |
-| oracle-db-examples | 17 311 | 2 338 | 434 | 2,5 % |
-| utPLSQL 3.2.2 | 21 283 | 2 081 | 478 | 2,2 % |
-| logger | 1 139 | 172 | 21 | 1,8 % |
-| console | 4 052 | 207 | 49 | 1,2 % |
-| plex | 3 084 | 80 | 26 | 0,8 % |
-| oos-utils | 5 605 | 261 | 27 | 0,5 % |
-| alexandria | 13 895 | 248 | 33 | 0,2 % |
-| pljson | 6 376 | 7 | 9 | 0,1 % |
+| plscope-utils | 860 | 250 | 77 | 9.0 % |
+| oracle-db-examples | 17 311 | 2 338 | 434 | 2.5 % |
+| utPLSQL 3.2.2 | 21 283 | 2 081 | 478 | 2.2 % |
+| logger | 1 139 | 172 | 21 | 1.8 % |
+| console | 4 052 | 207 | 49 | 1.2 % |
+| plex | 3 084 | 80 | 26 | 0.8 % |
+| oos-utils | 5 605 | 261 | 27 | 0.5 % |
+| alexandria | 13 895 | 248 | 33 | 0.2 % |
+| pljson | 6 376 | 7 | 9 | 0.1 % |
 
-(Ganze Repositories einschließlich Tests und Beispielen; der Lauf oben mutiert nur die 7 Pakete.) In öffentlichem Code
-liegt viel SQL in Views und in dynamischem SQL (Zeichenketten), beides erreicht der Finder nicht. Code, der
-Geschäftslogik in statischem SQL hält, hat einen höheren Anteil. Dort lohnt Stufe 2 am meisten.
+(Whole repositories including tests and examples; the run above mutates only the 7 packages.) In public code, a lot of
+SQL is in views and in dynamic SQL (strings); the finder reaches neither. Code that keeps business logic in static SQL
+has a higher share. That is where level 2 pays off most.
 
-## Grenzen
+## Limitations
 
-- **Cursor-Deklarationen** lassen sich im Schema nicht verdoppeln; ihre Mutanten werden einzeln kompiliert (hier 194 von
-  504). Das kostet Laufzeit und die Angabe „nicht erreicht“: Ohne Aufzeichnung erscheint ein Mutant, den kein Test
-  erreicht, als überlebt (in console 20 Mutanten einer Cursor-Deklaration).
-- **Zeitgrenze als Urteil:** Fällt ein Filter auf einer Dictionary-Abfrage weg, explodiert das Ergebnis. 2 SQL-Mutanten
-  enden so; sie zählen wie in Stufe 1 als erkannt.
-- **Views** mutiert das Werkzeug seit dem Nachtrag unten; dort stehen auch ihre eigenen Grenzen.
+- **Cursor declarations** cannot be duplicated in the schema; their mutants are compiled one at a time (here 194 of
+  504). This costs run time and the "not reached" verdict: without recording, a mutant that no test reaches appears as
+  survived (in console, 20 mutants of one cursor declaration).
+- **Time limit as verdict:** if a filter on a dictionary query is dropped, the result explodes. 2 SQL mutants end this
+  way; as in level 1, they count as killed.
+- **Views** are mutated by the tool since the addendum below; their own limitations are listed there.
 
-## Nachtrag: Views
+## Addendum: views
 
-In plscope-utils stehen mehr SQL-Zeilen in den 7 Views (1 411) als in den 7 Package Bodies (908). Seit dem Nachtrag
-mutiert das Werkzeug auch `CREATE VIEW`, mit beiden Stufen (Umschaltung: `packages/mutation/README.md`). Die Views
-kommen per Glob in `plgauge.json` dazu.
+In plscope-utils, the 7 views contain more SQL lines (1 411) than the 7 package bodies (908). Since this addendum, the
+tool also mutates `CREATE VIEW`, with both levels (switching: `packages/mutation/README.md`). The views are added by a
+glob in `plgauge.json`.
 
 | | |
 | --- | --- |
-| Mutanten | 1 634 (504 in den Packages wie oben, 1 130 in den Views; 677 davon in Select-Listen, an Ort und Stelle geschaltet) |
-| Laufzeit | 611 s mit drei Workern, Baseline 1,4 s mit 35 Tests (wie oben: nur der PL/Scope-Modelltest fehlt) |
-| Schema | 2 Runden, 0 Mutanten verworfen; 382 Stellen einzeln kompiliert (Cursor-Deklarationen, Views über der Zweig-Grenze und die zwei Views unten) |
+| Mutants | 1 634 (504 in the packages as above, 1 130 in the views; 677 of those in select lists, switched in place) |
+| Run time | 611 s with three workers, baseline 1.4 s with 35 tests (as above: only the PL/Scope model test is missing) |
+| Schema | 2 rounds, 0 mutants discarded; 382 points compiled one at a time (cursor declarations, views above the branch limit, and the two views below) |
 
-| Teil | Mutanten | erkannt | überlebt | nicht erreicht | Score |
+| Part | Mutants | killed | survived | not reached | Score |
 | --- | --- | --- | --- | --- | --- |
-| Packages, PL/SQL | 274 | 187 | 65 | 22 | 68,2 % |
-| Packages, SQL | 230 | 127 | 103 | 0 | 55,2 % |
-| `plscope_identifiers` | 408 | 72 | 336 | 0 | 17,6 % |
-| `source_view` (Demo) | 12 | 9 | 3 | 0 | 75,0 % |
-| 5 Views ohne Test (`plscope_naming`, `_col_usage`, `_tab_usage`, `_statements`, `_ins_lineage`) | 710 | 0 | 0 | 710 | – |
+| Packages, PL/SQL | 274 | 187 | 65 | 22 | 68.2 % |
+| Packages, SQL | 230 | 127 | 103 | 0 | 55.2 % |
+| `plscope_identifiers` | 408 | 72 | 336 | 0 | 17.6 % |
+| `source_view` (demo) | 12 | 9 | 3 | 0 | 75.0 % |
+| 5 views without a test (`plscope_naming`, `_col_usage`, `_tab_usage`, `_statements`, `_ins_lineage`) | 710 | 0 | 0 | 710 | – |
 
-Die Packages haben dieselben Urteile wie ohne Views (68,2 % und 54,8 % oben, ein Mutant Unterschied). Kein Test fragt
-5 der 7 Views ab. Das zeigt der Aufzeichnungslauf, der auch in Views notiert, welcher Test welchen Block erreicht.
-`plscope_identifiers` prüfen 2 Tests direkt (der dritte ist ausgeschlossen, s. o.), dazu Tests von `dd_util`. Sie vergleichen nur wenige Spalten. Deshalb überleben dort 336
-Mutanten, die meisten in den Ausdrücken, aus denen die View Pfade, Namen und Ebenen berechnet.
+The packages have the same verdicts as without views (68.2 % and 54.8 % above, a difference of one mutant). No test
+queries 5 of the 7 views. This is shown by the recording run, which also notes in views which test reaches which
+block. `plscope_identifiers` is checked directly by 2 tests (the third is excluded, see above), plus tests of
+`dd_util`. They compare only a few columns. That is why 336 mutants survive there, most of them in the expressions from
+which the view computes paths, names and levels.
 
-Die 13 überlebenden SQL-Mutanten (Stufe 2) in getesteten Views, vorläufig eingeordnet:
+The 13 surviving SQL mutants (level 2) in tested views, provisionally classified:
 
-| Klasse | Anzahl | Beispiel |
+| Class | Count | Example |
 | --- | --- | --- |
-| Fall fehlt | 12 | Filter `owner like coalesce(sys_context('PLSCOPE', 'OWNER'), user)` entfällt (kein zweites Schema im Test); Outer Join ohne Partnerzeile (3); `ORDER BY` in analytischen Funktionen, die nur kaputte Hierarchien reparieren (4); berechnete Spalten `count(…) over`, `max(line) over`, die kein Test vergleicht (2); kein Datensatz vor der Datumsgrenze in `source_view` |
-| äquivalent | 1 | `UNION ALL` → `UNION` zwischen PL/SQL- und SQL-Bezeichnern: die Zweige sind über `is_sql_stmt` disjunkt, die Zeilen über `usage_id` eindeutig |
+| Case missing | 12 | filter `owner like coalesce(sys_context('PLSCOPE', 'OWNER'), user)` dropped (no second schema in the test); outer join without a matching row (3); `ORDER BY` in analytic functions that only repair broken hierarchies (4); computed columns `count(…) over`, `max(line) over` that no test compares (2); no record before the date boundary in `source_view` |
+| Equivalent | 1 | `UNION ALL` → `UNION` between PL/SQL and SQL identifiers: the branches are disjoint via `is_sql_stmt`, the rows are unique via `usage_id` |
 
-**Gegenprobe der Umschaltung:** In einem Lauf ohne die Zuordnung unten lief `plscope_identifiers` im Schema (259
-Mutanten geschaltet, 149 einzeln), in einem zweiten vollständig einzeln. Alle 408 Urteile stimmen überein (71 erkannt,
-337 überlebt).
+**Cross-check of the switching:** in a run without the mapping described below, `plscope_identifiers` ran in the schema
+(259 mutants switched, 149 one at a time), and in a second run entirely one at a time. All 408 verdicts agree (71
+killed, 337 survived).
 
-Was die Views am Werkzeug gezeigt haben:
+What the views revealed about the tool:
 
-- **Zweige sind teuer, aber anders als gedacht.** Mit 116 `UNION ALL`-Zweigen brauchte `CREATE VIEW` für
-  `plscope_col_usage` Minuten. `EXPLAIN PLAN` zeigte: Das Planen selbst ist billig (0,4 s ohne, 0,8 s mit 10
-  Zweigen), teuer ist die Ausführung. Oracle materialisiert `WITH`-Klauseln, die die Kopien mehrfach referenzieren,
-  und zieht sie vor alle Zweige. Sie laufen also bei jeder Abfrage, auch für abgeschaltete Zweige (120 statt 13
-  `LOAD AS SELECT`). Abhilfe: `/*+ INLINE */` für `WITH`-Elemente, die das Original einmal referenziert (damit gleicht
-  der Plan ohne Zweige dem Original), und höchstens 20 Zweige pro View. Die übrigen Stellen laufen einzeln, aber nur
-  gegen die Tests, die ihren Block erreichen.
-- **Rekursive `WITH`-Elemente** lassen sich nicht einpacken (ORA-32040). Ihre Stellen laufen einzeln, ihre Testauswahl
-  kommt vom Hauptblock der View.
-- **Tests, die den Text einer View lesen,** sahen die Kopien. `test_get_view_source` liest `PLSCOPE_IDENTIFIERS` in eine
-  Variable (zu lang: ORA-06502), drei Lineage-Tests zählen die Spalten von `SOURCE_VIEW` doppelt. Ohne Gegenmaßnahme
-  fehlten diese 4 Tests allen Mutanten (Packages 49 % statt 68 %). Jetzt sucht der Lauf die View, an der es liegt, und
-  lässt sie im Original.
+- **Branches are expensive, but not in the way expected.** With 116 `UNION ALL` branches, `CREATE VIEW` for
+  `plscope_col_usage` took minutes. `EXPLAIN PLAN` showed that planning itself is cheap (0.4 s without, 0.8 s with 10
+  branches); execution is what is expensive. Oracle materializes `WITH` clauses that the copies reference several
+  times, and pulls them in front of all branches. So they run on every query, even for switched-off branches (120
+  instead of 13 `LOAD AS SELECT`). Remedy: `/*+ INLINE */` for `WITH` elements that the original references once (so
+  the plan without branches matches the original), and at most 20 branches per view. The remaining points run one at a
+  time, but only against the tests that reach their block.
+- **Recursive `WITH` elements** cannot be wrapped (ORA-32040). Their points run one at a time; their test selection
+  comes from the main block of the view.
+- **Tests that read the text of a view** saw the copies. `test_get_view_source` reads `PLSCOPE_IDENTIFIERS` into a
+  variable (too long: ORA-06502), three lineage tests count the columns of `SOURCE_VIEW` twice. Without a
+  countermeasure, these 4 tests were missing for all mutants (packages 49 % instead of 68 %). Now the run finds the
+  view responsible and leaves it in its original form.
 
-Grenzen bei Views:
+Limitations for views:
 
-- **Zweig-Grenze:** Views mit vielen Bedingungen über Dictionary-Views laufen großteils einzeln, die Laufzeit steigt.
-- **Views, die ihr eigener Code liest,** laufen ganz einzeln und mit allen Tests (hier 420 Mutanten).
-- **Planvergleich** (seit Nachtrag 2): Ändern die Kopien den Plan einer View, laufen ihre Mutanten einzeln. Bei
-  plscope-utils trifft das alle Views mit Zweigen; der Gewinn der Zweige bleibt dort aus.
+- **Branch limit:** views with many conditions over dictionary views mostly run one mutant at a time, and run time
+  goes up.
+- **Views that their own code reads** run entirely one at a time and with all tests (here 420 mutants).
+- **Plan comparison** (since Addendum 2): if the copies change the plan of a view, its mutants run one at a time. In
+  plscope-utils this applies to all views with branches; the gain from branches does not materialize there.
 
-## Nachtrag 2: Cursor, dynamisches SQL, Gegenprobe, Planvergleich
+## Addendum 2: cursors, dynamic SQL, second look, plan comparison
 
-Vier Erweiterungen, geprüft an plscope-utils (Packages und Views wie oben):
+Four extensions, tested on plscope-utils (packages and views as above):
 
-1. **Cursor schaltbar.** Die Abfrage einer Cursor-Deklaration ohne `ORDER BY`, `FOR UPDATE` und `WITH` wird wie ein
-   View-Block mit `UNION ALL`-Zweigen geschaltet. Eine Cursor-FOR-Schleife über eine Abfrage wird samt Rumpf pro
-   Variante verdoppelt. Im Korpus fallen die SQL-Mutanten in Packages, die nicht geschaltet werden konnten, von 1 610
-   auf 298, vor allem sortierte Cursor. In plscope-utils sind es 76 statt 194.
-2. **Dynamisches SQL.** Literale, die `EXECUTE IMMEDIATE`, `OPEN … FOR` oder `DBMS_SQL.PARSE` erreichen, werden als
-   SQL mutiert. In plscope-utils ist das ein Literal in `etl.load_from_dyn_sql` mit 12 Mutanten. 9 werden erkannt; die 3 überlebenden betreffen die Datumsgrenze `hiredate > date '1980-01-01'`, vor der kein Testdatensatz liegt (dieselbe Lücke wie bei den statischen Varianten).
-   Im Korpus sind es 56 Literale mit 1 493 Mutanten, fast alle in Testpaketen.
-3. **Gegenprobe.** Erkannte Mutanten laufen mit dem erkennenden Test allein noch einmal. Nach Mutanten, unter denen
-   committende Tests liefen, schreiben diese Tests ihre Daten auf dem Original neu.
-4. **Planvergleich** für Views mit `EXPLAIN PLAN` vor und nach dem Schalten.
+1. **Switchable cursors.** The query of a cursor declaration without `ORDER BY`, `FOR UPDATE` and `WITH` is switched
+   like a view block with `UNION ALL` branches. A cursor FOR loop over a query is duplicated, body included, per
+   variant. In the corpus, the SQL mutants in packages that could not be switched drop from 1 610 to 298, mostly
+   sorted cursors. In plscope-utils it is 76 instead of 194.
+2. **Dynamic SQL.** Literals that reach `EXECUTE IMMEDIATE`, `OPEN … FOR` or `DBMS_SQL.PARSE` are mutated as SQL. In
+   plscope-utils this is one literal in `etl.load_from_dyn_sql` with 12 mutants. 9 are killed; the 3 survivors concern
+   the date boundary `hiredate > date '1980-01-01'`, before which there is no test record (the same gap as with the
+   static variants). In the corpus there are 56 literals with 1 493 mutants, almost all in test packages.
+3. **Second look.** Killed mutants run once more with the killing test alone. After mutants under which committing
+   tests ran, these tests rewrite their data on the original.
+4. **Plan comparison** for views with `EXPLAIN PLAN` before and after switching.
 
-| | Lauf 11 (vorher) | Lauf 16 (nachher) |
+| | Run 11 (before) | Run 16 (after) |
 | --- | --- | --- |
-| Mutanten | 1 634 | 1 646 (12 aus dynamischem SQL) |
-| Baseline mit Schema | 1,5 s | 1,8 s |
-| Laufzeit, drei Worker | 611 s | 1 035 s (Views laufen einzeln, siehe Planvergleich) |
-| Packages, PL/SQL: erkannt / überlebt / nicht erreicht / Zeit | 187 / 64 / 22 / 1 | 179 / 72 / 22 / 1 |
-| Packages, SQL: erkannt / überlebt / Zeit | 116 / 104 / 10 | 126 / 107 / 9 |
-| Urteile mit Vermerk der Gegenprobe | – | 7 |
+| Mutants | 1 634 | 1 646 (12 from dynamic SQL) |
+| Baseline with schema | 1.5 s | 1.8 s |
+| Run time, three workers | 611 s | 1 035 s (views run one at a time, see plan comparison) |
+| Packages, PL/SQL: killed / survived / not reached / timeout | 187 / 64 / 22 / 1 | 179 / 72 / 22 / 1 |
+| Packages, SQL: killed / survived / timeout | 116 / 104 / 10 | 126 / 107 / 9 |
+| Verdicts with a second-look note | – | 7 |
 
-**Gegencheck der Cursor-Schaltung:** Die Packages liefen zusätzlich vollständig einzeln (Orakel-Modus). 509 von 516
-Urteilen stimmen überein. Die 7 Abweichungen: 2 Mutanten in `example`, die nur der PL/Scope-Modelltest erreicht (im
-Orakel-Lauf bestand er die Baseline, im Schema-Lauf nicht); 3 Zeitüberschreitungen, die im anderen Lauf als
-Fehlschlag endeten; 1 Verbindungsabbruch; 1 ROR in `lineage_util` (Zeile 283), dessen Ergebnis schwankt.
+**Cross-check of the cursor switching:** the packages were also run entirely one mutant at a time (oracle mode). 509 of
+516 verdicts agree. The 7 differences: 2 mutants in `example` that only the PL/Scope model test reaches (it passed the
+baseline in the oracle run but not in the schema run); 3 timeouts that ended as failures in the other run; 1 lost
+connection; 1 ROR in `lineage_util` (line 283) whose result varies.
 
-**Was die Gegenprobe fand:**
+**What the second look found:**
 
-- Die drei Urteile, die zwischen Lauf 10 und 11 kippten, haben verschiedene Ursachen. `etl` Zeile 140 (`RETURN;` vor
-  dem Laden) überlebt nur, wenn `deptsal` noch korrekte Daten eines früheren Tests enthält. Die Tests committen, also
-  hing das Urteil vom vorigen Mutanten ab. Mit dem Zurückschreiben der Daten überlebt der Mutant jetzt immer. Das ist
-  eine echte Lücke: Der Test prüft Daten, die er nicht selbst erzeugt haben muss. `dd_util` Zeile 19
-  (`o.owner <= s.table_owner`) holt die erste Zeile eines Cursors ohne `ORDER BY`. Welche das ist, hängt von Plan und
-  Datenbank ab. Dasselbe gilt für die anderen Mutanten, die die Join-Bedingung dieses Cursors abschwächen: Sie kippen
-von Lauf zu Lauf, je nach Worker. Im Schema-Modus markiert die Gegenprobe ihre Erkennungen jedes Mal als nicht
-wiederholbar, weil sie auf einem anderen Worker prüft; im Orakel-Modus prüft sie auf demselben und kann das nicht. Der dritte Fall (`LCR` in
-  `plscope_identifiers`) ist eine knappe Zeitüberschreitung; mit doppelter Zeit endet sie als Fehlschlag.
-- `plscope_context.set_attr` (2 Mutanten): `test_set_attr` erkennt sie im Verbund, allein nicht. Der Test liest einen
-  Kontextwert, den ein vorheriger Test gesetzt hat.
-- **Eine verdorbene Worker-Datenbank.** In einem Lauf waren 489 Erkennungen nicht wiederholbar, alle auf Worker 3
-  entstanden. Dort hatte ein Messskript (nicht das Werkzeug) Packages ohne ihre PL/Scope-Einstellungen neu
-  kompiliert. Damit fehlte die Anweisung in `USER_STATEMENTS`, die `test_get_dep_cols_from_insert` liest. Ohne
-  Gegenprobe wären das 489 falsche Erkennungen gewesen (Score 52 % statt 24 %).
+- The three verdicts that flipped between run 10 and run 11 have different causes.
+  - `etl` line 140 (`RETURN;` before loading) survives only if `deptsal` still contains correct data from an earlier
+    test. The tests commit, so the verdict depended on the previous mutant. With the data rewritten, the mutant now
+    always survives. This is a real gap: the test checks data that it need not have produced itself.
+  - `dd_util` line 19 (`o.owner <= s.table_owner`) fetches the first row of a cursor without `ORDER BY`. Which row that
+    is depends on the plan and the database. The same applies to the other mutants that weaken the join condition of
+    this cursor: they flip from run to run, depending on the worker. In schema mode the second look marks their kills
+    as not reproducible every time, because it checks on a different worker; in oracle mode it checks on the same one
+    and cannot do so.
+  - The third case (`LCR` in `plscope_identifiers`) is a narrow timeout; with double the time it ends as a failure.
+- `plscope_context.set_attr` (2 mutants): `test_set_attr` kills them in combination with other tests, but not alone.
+  The test reads a context value that a previous test set.
+- **A corrupted worker database.** In one run, 489 kills were not reproducible, all of them produced on worker 3.
+  There, a measurement script (not the tool) had recompiled packages without their PL/Scope settings. As a result, the
+  statement in `USER_STATEMENTS` that `test_get_dep_cols_from_insert` reads was missing. Without the second look these
+  would have been 489 false kills (score 52 % instead of 24 %).
 
-Das Zurückschreiben kostet zunächst viel: Alle Tests erneut nach jedem Mutanten, unter dem committet wurde, waren
-1 468 zusätzliche Testläufe. Die Baseline ermittelt deshalb, welche Tests selbst committen (hier 17, die meisten über
-DDL). Nur diese laufen erneut, im Orakel-Modus nur bei ausgewählten Tests. Das sind noch 271 Läufe. Die Gegenprobe
-über einen anderen Worker kostete im Orakel-Modus mehr als der Lauf selbst, weil jeder Mutant dort neu kompiliert
-werden muss. Sie geschieht dort jetzt gleich nach dem Urteil auf demselben Worker.
+Rewriting the data is expensive at first: rerunning all tests after every mutant under which a commit happened came to
+1 468 extra test runs. The baseline therefore determines which tests commit themselves (here 17, most of them via
+DDL). Only these run again, and in oracle mode only for selected tests. That leaves 271 runs. In oracle mode, the
+second look on a different worker cost more than the run itself, because every mutant has to be recompiled there. It
+now happens right after the verdict on the same worker.
 
-**Was der Planvergleich fand:** Alle fünf Views, die das Schema mit Zweigen versah, hatten danach einen anderen Plan
-als das Original:
+**What the plan comparison found:** all five views to which the schema added branches had a different plan from the
+original afterwards:
 
-| View | Abweichung mit Zweigen | nur mit Aufzeichnungs-Wrapper |
+| View | Difference with branches | with recording wrapper only |
 | --- | --- | --- |
-| `plscope_tab_usage` | 104 Lesezugriffe auf materialisierte Temp-Tabellen | anderer Join (Merge statt Hash) |
-| `plscope_col_usage` | 125 zusätzliche `WINDOW SORT` | anderer Join |
-| `plscope_statements` | 16 zusätzliche `WINDOW SORT` | ein `WINDOW SORT` mehr |
-| `plscope_naming` | andere Joins, 7 weitere Scans | gleich |
-| `plscope_ins_lineage` | `WITH` materialisiert | gleich |
+| `plscope_tab_usage` | 104 reads of materialized temp tables | different join (merge instead of hash) |
+| `plscope_col_usage` | 125 extra `WINDOW SORT` | different join |
+| `plscope_statements` | 16 extra `WINDOW SORT` | one more `WINDOW SORT` |
+| `plscope_naming` | different joins, 7 more scans | same |
+| `plscope_ins_lineage` | `WITH` materialized | same |
 
-Der Grund ist meist, dass Oracle den Filter eines Zweigs nicht als Startfilter vor den Zweig setzt, sondern auf die
-Zeilen einer View über analytischen Funktionen. Dann rechnet die Abfrage jeden toten Zweig mit. Das erklärt die
-frühere Messung, nach der eine View mit 20 Zweigen 131 s statt 9 s brauchte. Die Annahme „ein Filter auf eine
-Konstante schneidet tote Zweige ab“ gilt also nicht allgemein. Der Planvergleich fängt das ab. Die Mutanten dieser
-Views laufen einzeln, `plscope_naming` und `plscope_ins_lineage` behalten den Aufzeichnungs-Wrapper (ihre 497
-Mutanten bleiben „nicht erreicht“), die anderen drei laufen im Original. Ihre 213 Mutanten fragt kein Test ab, sie
-erscheinen aber als überlebt, weil ohne Aufzeichnung alle Tests laufen.
+The reason is mostly that Oracle does not place the filter of a branch as a start filter in front of the branch, but
+on the rows of a view over analytic functions. The query then computes every dead branch as well. This explains the
+earlier measurement in which a view with 20 branches took 131 s instead of 9 s. So the assumption "a filter on a
+constant cuts off dead branches" does not hold in general. The plan comparison catches this. The mutants of these views
+run one at a time; `plscope_naming` and `plscope_ins_lineage` keep the recording wrapper (their 497 mutants stay "not
+reached"), the other three run in their original form. No test queries their 213 mutants, but they appear as survived
+because all tests run when there is no recording.
 
-Zwei weitere Fehler zeigten sich erst in den Läufen. Erstens: Mit 20 Zweigen sprengte schon das `EXPLAIN PLAN` von
-`plscope_col_usage` den Cursor-Heap des Servers (ORA-00600 `KGL-heap-size-exceeded`). Der Prozess starb und mit ihm
-die Verbindung, über die der Lauf seinen Code verwaltet. `EXPLAIN PLAN` hat jetzt eine eigene Verbindung. Zweitens
-blieben nach diesem Absturz geschaltete Packages zurück. Der nächste Lauf las sie als Original und spielte am Ende
-genau diesen Code zurück; die richtigen Originale im Journal löschte er dabei. Jetzt stellt jeder Lauf beim Start
-zuerst wieder her, was ein abgebrochener Lauf im Journal hinterlassen hat.
+Two more bugs only showed up in the runs. First: with 20 branches, the `EXPLAIN PLAN` of `plscope_col_usage` alone
+blew the server's cursor heap (ORA-00600 `KGL-heap-size-exceeded`). The process died, and with it the connection
+through which the run manages its code. `EXPLAIN PLAN` now has its own connection. Second: after this crash, switched
+packages were left behind. The next run read them as the original and at the end restored exactly this code; in doing
+so, it deleted the correct originals in the journal. Now every run first restores, at startup, whatever an aborted run
+left in the journal.
 
-Die Cursor-Zweige in Packages prüft kein Planvergleich: Ihre Abfragen enthalten PL/SQL-Variablen, `EXPLAIN PLAN`
-kann sie so nicht erklären. Gemessen wurde die Laufzeit. Das erste Ausführen parst alle Kopien (`dd_util`: 3,6 s
-statt 0,3 s), danach laufen die Tests so schnell wie im Original. Ohne Aufwärmlauf ging das in die Baseline ein, und
-die Zeitgrenze stieg von 9 auf 53 s.
+No plan comparison checks the cursor branches in packages: their queries contain PL/SQL variables, so `EXPLAIN PLAN`
+cannot explain them as they are. Run time was measured instead. The first execution parses all copies (`dd_util`:
+3.6 s instead of 0.3 s); after that, the tests run as fast as on the original. Without a warm-up run this went into
+the baseline, and the time limit rose from 9 to 53 s.
 
-## Nachtrag 3: Korrekturen nach dem Review
+## Addendum 3: fixes after review
 
-Ein Review von Nachtrag 2 fand zehn Schwächen, ein zweites Review der Korrekturen fünf weitere. Behoben:
+A review of Addendum 2 found ten weaknesses, a second review of the fixes five more. Fixed:
 
-- **Dynamisches SQL über Variablen:** Ein Literal zählt nur, wenn die Variable im Unterprogramm deklariert ist und ihr
-  Wert nie aus ihr selbst gebaut (`v := v || …`, `replace(v, …)`), in eine andere Anweisung eingebaut, an eine
-  Prozedur übergeben oder per `INTO` gefüllt wird. Sonst wäre das Literal nur ein Stück, und Mutanten, die erst mit
-  dem Rest ungültig werden, zählten als erkannt. Varianten, die länger als `VARCHAR2(n)` würden, entfallen (ORA-06502).
-  Im Korpus sind es jetzt 51 statt 57 Literale; heraus fallen die Vorlagen von PLEX, deren Platzhalter `replace`
-  ersetzt.
-- **Daten zurückschreiben im Orakel-Modus** auch dann, wenn alle Tests laufen, und vor der Gegenprobe (danach wird
-  der Mutant neu kompiliert). Hier stieg die Zahl der Reparaturläufe von 271 auf 967, die Laufzeit um 27 s.
-- **Isolation der Views** prüft auch Views, die nur den Aufzeichnungs-Wrapper tragen. Das fand in Lauf 17
-  `plscope_identifiers`: `test_get_view_source` liest ihren Text.
-- Eigene `statement_id` für `EXPLAIN PLAN`, Schleifenwächter in verdoppelten Schleifen, 256-KB-Grenze für die Kopien
-  eines Literals, Aufwärmlauf nur bei Zweigen.
-- **Laufsperre:** Jeder Lauf hält eine Zeilensperre in `PLGAUGE_LOCK`; ein zweiter Lauf auf demselben Schema bricht ab,
-  statt den Code des ersten als Rest eines Absturzes zurückzuspielen.
+- **Dynamic SQL via variables:** a literal counts only if the variable is declared in the subprogram and its value is
+  never built from itself (`v := v || …`, `replace(v, …)`), embedded in another statement, passed to a procedure or
+  filled via `INTO`. Otherwise the literal would only be a fragment, and mutants that only become invalid together with
+  the rest would count as killed. Variants that would be longer than `VARCHAR2(n)` are dropped (ORA-06502). The corpus
+  now has 51 instead of 57 literals; the templates of PLEX, whose placeholders are substituted by `replace`, drop out.
+- **Rewriting data in oracle mode** also when all tests run, and before the second look (after it, the mutant is
+  recompiled). Here the number of repair runs went up from 271 to 967, and the run time by 27 s.
+- **View isolation** also checks views that only carry the recording wrapper. In run 17 this found
+  `plscope_identifiers`: `test_get_view_source` reads its text.
+- Own `statement_id` for `EXPLAIN PLAN`, loop guards in duplicated loops, 256 KB limit for the copies of a literal,
+  warm-up run only with branches.
+- **Run lock:** every run holds a row lock in `PLGAUGE_LOCK`; a second run on the same schema aborts instead of
+  restoring the first run's code as the leftovers of a crash.
 
-Lauf 17 (alles andere wie Lauf 16): 1 062 s, Score 24,1 % (Lauf 16: 24,0 %). Vier Urteile weichen ab, alle an
-bekannten Stellen: die Join-Abschwächung im Cursor von `dd_util` (Zeile 19), der ROR/WHR in `lineage_util` Zeile 283
-und eine Zeitüberschreitung in `plscope_identifiers`. Die Gegenprobe markiert 6 Urteile (`set_attr` zweimal, vier
-knappe Zeitgrenzen).
+Run 17 (everything else as in run 16): 1 062 s, score 24.1 % (run 16: 24.0 %). Four verdicts differ, all at known
+places: the join weakening in the `dd_util` cursor (line 19), the ROR/WHR in `lineage_util` line 283, and a timeout in
+`plscope_identifiers`. The second look marks 6 verdicts (`set_attr` twice, four narrow time limits).
 
-## Wiederholen
+## Reproducing
 
 ```bash
-corpus/fetch.sh                                  # plscope-utils nach corpus/.cache
-# Installation pro Datenbank: eval/plscope-utils/README.md
-PLGAUGE_DB=oracle://plscope_eval:…@…/FREEPDB1,… npx plgauge mutate run eval/plscope-utils --json run.json --report run.html
+corpus/fetch.sh                                  # plscope-utils into corpus/.cache
+# installation per database: eval/plscope-utils/README.md
+PLGAUGE_DB=oracle://plscope_eval:…@…/FREEPDB1,… bin/plgauge mutate run eval/plscope-utils --json run.json --report run.html
 npx tsx scripts/eval-summary.ts run.json survivors.tsv
 npx tsx scripts/sql-compile-check.ts db.json corpus/.cache/utplsql-3.2.2/source   # db.json: {user, password, connectString}
 ```

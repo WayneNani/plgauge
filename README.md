@@ -148,7 +148,7 @@ All options are described in the package documentation:
 
 ## Evaluations on real code
 
-plgauge was run on public open-source PL/SQL projects. The write-ups are in German.
+plgauge was run on public open-source PL/SQL projects:
 
 - [console](eval/console/EVAL.md): mutation testing of an instrumentation and logging package.
 - [plscope-utils](eval/plscope-utils/EVAL.md): the SQL operators on a larger code base.
@@ -161,7 +161,6 @@ The parser is also checked offline on a corpus of about 900 PL/SQL bodies from t
 plgauge is young (version 0.1). There are 153 automated tests, 25 of them against a real Oracle database,
 including full mutation runs in both modes. Known gaps:
 
-- **Language:** the HTML reports and the CLI messages are in German.
 - **Distribution:** plgauge is not on npm; run it from a checkout.
 - **Versions:** only Oracle 23ai/26ai is tested.
 

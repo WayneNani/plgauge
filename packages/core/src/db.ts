@@ -56,7 +56,7 @@ export async function tryExecute(conn: oracledb.Connection, sql: string, ...igno
 }
 
 export function dbIdent(s: string): string {
-  if (!/^[A-Za-z][A-Za-z0-9_$#]*$/.test(s)) throw new Error(`Ungültiger Bezeichner: ${s}`);
+  if (!/^[A-Za-z][A-Za-z0-9_$#]*$/.test(s)) throw new Error(`Invalid identifier: ${s}`);
   return s.toUpperCase();
 }
 
@@ -132,7 +132,7 @@ export async function loadObject(conn: oracledb.Connection, owner: string, name:
     // a view the ALL_* views do not show (DBMS_METADATA may, with SELECT_CATALOG_ROLE): its
     // comments, triggers and text could be neither read nor checked, not even after a crash
     const seen = (await conn.execute<[string]>(`select text from all_views where owner = :o and view_name = :n`, { o: owner, n: name })).rows ?? [];
-    if (!seen.length) throw new Error(`View ${owner}.${name} ist ohne SELECT- oder READ-Recht nicht sichtbar: nicht verändert`);
+    if (!seen.length) throw new Error(`View ${owner}.${name} is not visible without SELECT or READ privilege: left unchanged`);
     const original = await viewDdl(conn, owner, name);
     // CREATE OR REPLACE VIEW drops the comments: compile puts them back
     const t = await conn.execute<[string | null]>(`select comments from all_tab_comments where owner = :o and table_name = :n`, { o: owner, n: name });
@@ -147,13 +147,13 @@ export async function loadObject(conn: oracledb.Connection, owner: string, name:
       `select distinct char_used from all_tab_columns where owner = :o and table_name = :n and char_used in ('B', 'C')`, { o: owner, n: name });
     const used = (u.rows ?? []).map((r) => r[0]);
     if (used.length > 1 && /\b(N?VARCHAR2?|N?CHAR|CHARACTER)\s*\(\s*\d+\s*\)/i.test(seen[0][0] ?? '')) {
-      throw new Error(`View ${owner}.${name} mischt BYTE- und CHAR-Spalten und hat Längen ohne BYTE/CHAR: nicht verändert`);
+      throw new Error(`View ${owner}.${name} mixes BYTE and CHAR columns and has lengths without BYTE/CHAR: left unchanged`);
     }
     if (settings.comments) {
       // another schema's view: COMMENT ON needs COMMENT ANY TABLE, or the comments are lost for good
       const user = (await conn.execute<[string]>(`select user from dual`)).rows![0][0];
       const may = owner === user || ((await conn.execute<[number]>(`select count(*) from session_privs where privilege = 'COMMENT ANY TABLE'`)).rows?.[0]?.[0] ?? 0) > 0;
-      if (!may) throw new Error(`View ${owner}.${name} hat Kommentare, die ohne COMMENT ANY TABLE verloren gingen: nicht verändert`);
+      if (!may) throw new Error(`View ${owner}.${name} has comments that would be lost without COMMENT ANY TABLE: left unchanged`);
     }
     // CAST(… AS VARCHAR2(n)) without BYTE/CHAR takes the session's length semantics at CREATE:
     // compile the view with what its columns have (mixed: the default BYTE)
@@ -215,7 +215,7 @@ export async function viewFromDictionary(conn: oracledb.Connection, owner: strin
   const v = await conn.execute<[string, string, string | null, string | null, string | null]>(
     `select text, editioning_view, type_text, bequeath, duality_view from all_views where owner = :o and view_name = :n`, { o: owner, n: name });
   const row = v.rows?.[0];
-  if (!row) throw new Error(`View ${owner}.${name} nicht gefunden`);
+  if (!row) throw new Error(`View ${owner}.${name} not found`);
   const text = row[0];
   // what this statement cannot say: restored from it, the view would lose it for good
   const extra = await conn.execute<[number, number]>(
@@ -225,7 +225,7 @@ export async function viewFromDictionary(conn: oracledb.Connection, owner: strin
        from dual`, { o: owner, n: name });
   const [cons0, invisible] = extra.rows?.[0] ?? [0, 0];
   if (row[1] === 'Y' || row[2] || row[4] === 'Y' || cons0 > 0 || invisible > 0) {
-    throw new Error(`View ${owner}.${name} lässt sich ohne DBMS_METADATA nicht originalgetreu nachbauen (Editioning-, Objekt- oder Duality-View, benannte Constraints oder unsichtbare Spalten)`);
+    throw new Error(`View ${owner}.${name} cannot be rebuilt faithfully without DBMS_METADATA (editioning, object or duality view, named constraints or invisible columns)`);
   }
   const cols = await conn.execute<[string]>(`select column_name from all_tab_columns where owner = :o and table_name = :n order by column_id`, { o: owner, n: name });
   const cons = await conn.execute<[string]>(`select constraint_type from all_constraints where owner = :o and table_name = :n and constraint_type in ('O', 'V')`, { o: owner, n: name });
@@ -285,7 +285,7 @@ async function keepProperties(conn: oracledb.Connection, obj: SourceObject): Pro
     try {
       await conn.execute(`alter trigger ${full} disable`);
     } catch (e) {
-      return `Trigger ${obj.name} bleibt aktiv (war deaktiviert): ${firstLine(e)}`;
+      return `Trigger ${obj.name} stays enabled (was disabled): ${firstLine(e)}`;
     }
   }
   if (obj.type === 'VIEW' && obj.settings.comments) {
@@ -298,7 +298,7 @@ async function keepProperties(conn: oracledb.Connection, obj: SourceObject): Pro
     });
     if (c.table) await comment(`comment on table ${full} is ${sqlLit(c.table)}`);
     for (const [col, text] of Object.entries(c.cols)) await comment(`comment on column ${full}.${quoteIdent(col)} is ${sqlLit(text)}`);
-    if (failure) return `Kommentare der View ${obj.name} nicht wiederhergestellt: ${failure}`;
+    if (failure) return `Comments of view ${obj.name} not restored: ${failure}`;
   }
   return undefined;
 }
@@ -359,7 +359,7 @@ async function compileHere(conn: oracledb.Connection, obj: SourceObject, source:
   }
   const warning = await keepProperties(conn, obj);
   const err = await objectErrors(conn, obj);
-  return { error: err.length ? err.slice(0, 3).map((e) => `Zeile ${e.line}: ${e.text}`).join('; ') : null, warning };
+  return { error: err.length ? err.slice(0, 3).map((e) => `line ${e.line}: ${e.text}`).join('; ') : null, warning };
 }
 
 /**
@@ -379,18 +379,18 @@ export async function replaceSourceDetailed(conn: oracledb.Connection, obj: Sour
   // what cannot be read cannot be checked after a crash (a restore would take it for dropped)
   if (!now) {
     if (fresh) await journalForget(conn, obj);
-    return { error: `${obj.owner}.${obj.name} ist nicht lesbar (ALL_SOURCE/ALL_VIEWS): nicht verändert`, untouched: fresh };
+    return { error: `${obj.owner}.${obj.name} is not readable (ALL_SOURCE/ALL_VIEWS): left unchanged`, untouched: fresh };
   }
   // someone compiled a newer version since the original was read: the journal would put the old
   // one back over it at the end
   if (fresh && now.sha !== codeFingerprint(obj.type, obj.original)) {
     await journalForget(conn, obj);
-    return { error: `${obj.owner}.${obj.name} wurde geändert, seit es gelesen wurde: nicht verändert`, untouched: true };
+    return { error: `${obj.owner}.${obj.name} was changed since it was read: left unchanged`, untouched: true };
   }
   await journalNote(conn, obj, source, now.sha);
   const out = await compileDetailed(conn, obj, source);
   // rejected at once (a lock, a privilege, a view statement): the object still holds the text before
-  if (out.error && !/^Zeile \d+:/.test(out.error)) {
+  if (out.error && !/^line \d+:/.test(out.error)) {
     // (a privilege, a lock the next restore would hit just the same)
     if (fresh) {
       await journalForget(conn, obj);
@@ -442,10 +442,10 @@ export async function restoreJournal(conn: oracledb.Connection, entries: Journal
         || ((await conn.execute<[number]>(`select count(*) from session_privs where privilege in (${any.map(sqlLit).join(', ')})`)).rows?.[0]?.[0] ?? 0) > 0);
       if (dba === 0 || sees) {
         // plgauge never drops an object: someone did since, on purpose
-        say(`  ✗ ${e.owner}.${e.name} existiert nicht mehr: Journal-Eintrag verworfen, nicht neu angelegt`);
+        say(`  ✗ ${e.owner}.${e.name} no longer exists: journal entry discarded, not recreated`);
         await journalForget(conn, e.object);
       } else {
-        say(`  ✗ ${e.owner}.${e.name} ist für ${user} nicht sichtbar: Journal-Eintrag bleibt, mit dem Benutzer des Laufs zurückspielen (plgauge restore)`);
+        say(`  ✗ ${e.owner}.${e.name} is not visible to ${user}: journal entry kept, restore it as the run's user (plgauge restore)`);
         hidden++;
       }
       continue;
@@ -456,7 +456,7 @@ export async function restoreJournal(conn: oracledb.Connection, entries: Journal
     const comparable = e.currentSha?.startsWith('x') && e.pending === 0;
     if (comparable && cur && ![e.currentSha, e.prevSha, codeFingerprint(e.object.type, e.object.original)].includes(cur.sha)
       && !/plgauge_ctl\.|plgauge\$a|cov\$\./i.test(cur.text)) {
-      say(`  ✗ ${e.owner}.${e.name} wurde nach dem abgebrochenen Lauf geändert: Journal-Eintrag verworfen, die neuere Fassung bleibt`);
+      say(`  ✗ ${e.owner}.${e.name} was changed after the aborted run: journal entry discarded, the newer version stays`);
       await journalForget(conn, e.object);
       continue;
     }
@@ -479,10 +479,10 @@ export async function restoreAll(conn: oracledb.Connection, objs: SourceObject[]
     const out = await compileDetailed(conn, obj, obj.original).catch((e: Error) => ({ error: firstLine(e), warning: undefined }) as CompileOutcome);
     if (out.warning) say(`  ✗ ${out.warning}`);
     if (out.error) {
-      say(`  ✗ Wiederherstellung von ${obj.name} fehlgeschlagen: ${out.error}`);
-      // compile errors ("Zeile n: …"): the original is in place, only invalid; anything else
+      say(`  ✗ Restore of ${obj.name} failed: ${out.error}`);
+      // compile errors ("line n: …"): the original is in place, only invalid; anything else
       // left the changed code there and the entry must stay
-      if (!/^Zeile \d+:/.test(out.error)) {
+      if (!/^line \d+:/.test(out.error)) {
         failed++;
         continue;
       }
@@ -493,7 +493,7 @@ export async function restoreAll(conn: oracledb.Connection, objs: SourceObject[]
   // (may be refused for another schema: the originals are back anyway)
   for (const s of recompile ? schemas : []) {
     await conn.execute(`begin dbms_utility.compile_schema(:s, compile_all => false, reuse_settings => true); end;`, { s })
-      .catch((e: Error) => say(`  Hinweis: Neukompilieren von ${s} nicht möglich: ${firstLine(e)}`));
+      .catch((e: Error) => say(`  Note: cannot recompile ${s}: ${firstLine(e)}`));
   }
   // materialized views on a replaced view or function are left NEEDS_COMPILE (compile_schema
   // leaves them)
@@ -504,7 +504,7 @@ export async function restoreAll(conn: oracledb.Connection, objs: SourceObject[]
     ).catch(() => ({ rows: [] as [string, string][] }));
     for (const [o, n] of mv.rows ?? []) await conn.execute(`alter materialized view ${quoteIdent(o)}.${quoteIdent(n)} compile`).catch(() => {});
   }
-  say(`Originalcode von ${objs.length - failed} Objekten wiederhergestellt${failed ? `, ${failed} nicht (Journal-Eintrag bleibt)` : ''}`);
+  say(`Original code of ${objs.length - failed} objects restored${failed ? `, ${failed} not (journal entry kept)` : ''}`);
   // how many hold changed code still (their entries stay)
   return failed;
 }

@@ -11,13 +11,13 @@ create or replace package pricing is
   function net(p number) return number;
 end;
 /
--- Tabelle
+-- Table
 create table t (x number);
 insert into t values (1);
 `);
   assert.equal(parts.length, 3);
   assert.ok(parts[0].includes('c_vat constant number := 0.19;') && parts[0].includes('function net'), parts[0]);
-  assert.equal(parts[1], '-- Tabelle\ncreate table t (x number)');
+  assert.equal(parts[1], '-- Table\ncreate table t (x number)');
   assert.equal(parts[2], 'insert into t values (1)');
 });
 

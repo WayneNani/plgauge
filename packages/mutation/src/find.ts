@@ -23,7 +23,7 @@ export function findInFile(path: string, buf: Buffer): SourceFile {
   try {
     text = new TextDecoder('utf-8', { fatal: true }).decode(buf);
   } catch {
-    return { path, errors: ['keine UTF-8-Datei'], units: [], points: [], loops: [], skipped: 0, src: buf };
+    return { path, errors: ['not a UTF-8 file'], units: [], points: [], loops: [], skipped: 0, src: buf };
   }
   const f = new Finder(path, text);
   return { ...f.run(), src: buf };
@@ -259,7 +259,7 @@ const sbrTarget = (n: Node) => SBR_KINDS.has(n.op!) || (n.op === 'exit' && n.at!
 interface Env {
   sub: string;
   ctx: 'plsql' | 'sql';
-  /** The enclosing IF branch raises: conditions are checks (category "pruefung"). */
+  /** The enclosing IF branch raises: conditions are checks (category "check"). */
   guard: boolean;
   /** Byte range of the enclosing PL/SQL statement with static SQL (for clause points). */
   scope?: [number, number];
@@ -1074,7 +1074,7 @@ class Finder {
   private stmt(n: Node, env: Env) {
     if (n.op === 'loop' && !this.inConditional(this.t[n.at!].end)) this.loops.push({ unit: this.unit, at: this.eb(n.at!) });
     // SBR: simple statements; RETURN, NULL and control flow stay
-    if (sbrTarget(n)) this.point('SBR', 'stmt', n, env, 'plsql', this.raises(n) ? 'fehlerpfad' : '', ['NULL;']);
+    if (sbrTarget(n)) this.point('SBR', 'stmt', n, env, 'plsql', this.raises(n) ? 'error-path' : '', ['NULL;']);
   }
 
   /** RAISE or RAISE_APPLICATION_ERROR (a statement). */
@@ -1098,7 +1098,7 @@ class Finder {
     const bare = head.includes('PIPELINED') || head.some((w, i) => w === 'SELF' && head[i + 1] === 'AS' && head[i + 2] === 'RESULT');
     const repl = sp.op === 'FUNCTION' && !bare ? 'RETURN NULL;' : 'RETURN;';
     this.points.push({
-      unit: this.unit, op: 'RET', kind: 'insert', sub: env.sub, ctx: 'plsql', cat: 'funktion', start: at, end: at, orig: '',
+      unit: this.unit, op: 'RET', kind: 'insert', sub: env.sub, ctx: 'plsql', cat: 'subprogram', start: at, end: at, orig: '',
       mutants: [` ${repl}`, " RAISE_APPLICATION_ERROR(-20998, 'plgauge: RET');"],
       ...(env.naiveOnly ? { naiveOnly: env.naiveOnly } : {}),
     });
@@ -1114,7 +1114,7 @@ class Finder {
     const a = stmts[0].at2 ?? stmts[0].a;
     const body = this.span(a, last.b - 1);
     if (body.replace(/\s+/g, '').toUpperCase() === 'NULL;') return;
-    this.pointSpan('EXC', 'stmt', a, last.b - 1, body, env, 'plsql', 'fehlerpfad', ['NULL;']);
+    this.pointSpan('EXC', 'stmt', a, last.b - 1, body, env, 'plsql', 'error-path', ['NULL;']);
   }
 
   /** Sufficient ROR replacements (Kaminski, Ammann, Offutt), as in gomutant. */
@@ -1151,7 +1151,7 @@ class Finder {
     if (left === '0' && nonNegative(right, env.ctx === 'plsql')) equivalent = EQUIV_ZERO_LEFT[op];
     if (equivalent && repl.includes(equivalent)) this.skipped++;
     const mutants = repl.filter((r) => r !== equivalent).map((r) => (r === 'TRUE' || r === 'FALSE' ? r : before + r + after));
-    this.point('ROR', 'bool', c, env, env.ctx, env.guard ? 'pruefung' : '', mutants);
+    this.point('ROR', 'bool', c, env, env.ctx, env.guard ? 'check' : '', mutants);
   }
 
   /** Non-redundant LCR replacements (Just et al.), as in gomutant. */
@@ -1163,7 +1163,7 @@ class Finder {
       mutants.splice(2, 1);
       this.skipped++;
     }
-    this.point('LCR', 'bool', c, env, env.ctx, env.guard ? 'pruefung' : '', mutants);
+    this.point('LCR', 'bool', c, env, env.ctx, env.guard ? 'check' : '', mutants);
   }
 
   private exclusiveEquals(x: Node, y: Node): boolean {
@@ -1245,7 +1245,7 @@ class Finder {
       const ie = this.t[c.at!].end;
       m = `${this.src.slice(s, ie)} NOT${this.src.slice(ie, e)}`;
     }
-    this.point('NUL', 'bool', c, env, env.ctx, env.guard ? 'pruefung' : '', [m]);
+    this.point('NUL', 'bool', c, env, env.ctx, env.guard ? 'check' : '', [m]);
   }
 
   /** NVL(a, b) gives a or b; COALESCE drops its first argument or keeps only it; MOD(a, b) becomes a * b. */

@@ -1,74 +1,75 @@
-# Parität der TypeScript-Mutation mit Go-plmut (`9bf5d68`)
+# Parity of the TypeScript mutation with Go plmut (`9bf5d68`)
 
-Stand 13.11.2026, Oracle 23.26.1 Free, utPLSQL 3.2.2.
+As of 13 Nov 2026, Oracle 23.26.1 Free, utPLSQL 3.2.2.
 
-| Vergleich | Ergebnis |
+| Comparison | Result |
 | --- | --- |
-| Mutanten des Beispiels (`mutate points`) | identisch, einschließlich Nummern (75) |
-| Schema-Text des Beispiels (`mutate schema`) | identisch bis auf das fehlende `CREATE OR REPLACE` |
-| Beispiel, naiver Modus | 75/75 Urteile gleich; alle wie `expected.tsv` |
-| Beispiel, Schema-Modus | 75/75 Urteile gleich; alle wie `expected.tsv` |
-| pljson, Schema-Modus, drei Datenbanken | 2 658/2 664 gleich, Score 48,3 % (Go 48,2 %), 314 s (Go 290 s) |
+| Mutants of the example (`mutate points`) | identical, including numbers (75) |
+| Schema text of the example (`mutate schema`) | identical except for the missing `CREATE OR REPLACE` |
+| Example, naive mode | 75/75 verdicts equal; all as in `expected.tsv` |
+| Example, schema mode | 75/75 verdicts equal; all as in `expected.tsv` |
+| pljson, schema mode, three databases | 2 658/2 664 equal, score 48.3 % (Go 48.2 %), 314 s (Go 290 s) |
 
-Die sechs Abweichungen auf pljson gehen auf die Tests zurück, nicht auf die Portierung: Die
-Parser-Suite setzt in `beforeall` die Paketvariable `pljson_parser.json_strict := true` und setzt sie
-nicht zurück. Laufen ihre Tests im selben `ut_runner.run` vor `utplsql_pljson_ext_test.test_date_1`,
-übersieht dieser Test die Mutanten an `json_strict` (Zeilen 312, 506, 511, 521). Welche Tests sich
-einen Aufruf teilen, hängt von den gemessenen Laufzeiten ab; deshalb schwankt das Urteil in beiden
-Fassungen. Zwei der sechs Fälle sind in beiden erkannt (Timeout gegen getötet).
+The six differences on pljson come from the tests, not from the port. The parser suite sets the
+package variable `pljson_parser.json_strict := true` in `beforeall` and does not reset it. If its tests
+run in the same `ut_runner.run` before `utplsql_pljson_ext_test.test_date_1`, that test misses the
+mutants on `json_strict` (lines 312, 506, 511, 521). Which tests share a call depends on the measured
+run times, so the verdict varies in both versions. Two of the six cases are detected in both
+(timeout vs. killed).
 
-Dateien: `example-*.json`, `pljson-schema.json` (Go-Ausgaben); Vergleich mit `plgauge mutate compare`.
+Files: `example-*.json`, `pljson-schema.json` (Go output); comparison with `plgauge mutate compare`.
 
-## Phase 3 und 4: eigener Parser statt Java-Finder
+## Own parser instead of the Java finder
 
-Stand 13.11.2026. Der Finder (`packages/mutation/src/find.ts`) arbeitet auf dem Syntaxbaum des
-Kernparsers. Referenz ist die eingefrorene Ausgabe des Java-Finders auf dem Korpus
-(`finder-corpus.json.gz`, 790 Dateien inklusive console); Vergleich mit `npm run parity:finder`.
+As of 13 Nov 2026. The finder (`packages/mutation/src/find.ts`) works on the syntax tree of the
+core parser. The reference is the frozen output of the Java finder on the corpus
+(`finder-corpus.json.gz`, 790 files including console); comparison with `npm run parity:finder`.
 
-| Vergleich | Ergebnis |
+| Comparison | Result |
 | --- | --- |
-| Stellen des Java-Finders, die der neue Finder genauso findet | 33 202 von 33 219 (Position, Operator, Ersatztexte gleich; 4 375 davon jetzt mit Unterprogrammnamen) |
-| nur Java (17) | 8 Stellen in anonymen Blöcken außerhalb jeder Einheit, 7 LCR und 1 ROR aus IslandSQL-Fehllesungen (`0 and 255` aus BETWEEN, `$if`-Bedingung), 1 SBR aus einem falsch gelesenen q-String |
-| nur neu (1 540) | 888 RET in Type-Methoden und eigenständigen Prozeduren/Funktionen, 338 SBR für `SELECT … INTO`, 289 LCR/NUL, die IslandSQL bei `IS NULL`, `BETWEEN`, `IS OF`, `LIKE … ESCAPE` falsch schachtelte, 18 `assert(…)`-Aufrufe, 7 nach falsch gelesenem q-String |
-| Beispielprojekt | 48 Stellen, alle identisch; 75/75 Urteile in beiden Modi wie `expected.tsv` |
-| pljson, Schema-Modus, drei Datenbanken | alle 2 664 Go-Mutanten wieder vorhanden, 2 657 Urteile gleich; dazu 391 neue Mutanten; 332 s (`pljson-schema-ts.json`) |
+| Points of the Java finder that the new finder finds the same way | 33 202 of 33 219 (position, operator, replacement texts equal; 4 375 of them now with subprogram names) |
+| Java only (17) | 8 points in anonymous blocks outside any unit, 7 LCR and 1 ROR from IslandSQL misreadings (`0 and 255` from BETWEEN, `$if` condition), 1 SBR from a misread q-string |
+| New only (1 540) | 888 RET in type methods and standalone procedures/functions, 338 SBR for `SELECT … INTO`, 289 LCR/NUL that IslandSQL nested incorrectly for `IS NULL`, `BETWEEN`, `IS OF`, `LIKE … ESCAPE`, 18 `assert(…)` calls, 7 after a misread q-string |
+| Example project | 48 points, all identical; 75/75 verdicts in both modes as in `expected.tsv` |
+| pljson, schema mode, three databases | all 2 664 Go mutants present again, 2 657 verdicts equal; plus 391 new mutants; 332 s (`pljson-schema-ts.json`) |
 
-Die sieben pljson-Abweichungen: vier sind der bekannte `json_strict`-Zustand (siehe oben), drei
-sind in beiden Läufen erkannt (Timeout durch Schleifenwächter gegen getötet).
+The seven pljson differences: four are the known `json_strict` state (see above), three are
+detected in both runs (timeout from a loop guard vs. killed).
 
-Coverage auf demselben Parser: Für alle 295 Bodies des Korpus sind instrumentierter Text und
-Sondenkarte identisch mit dem Token-Parser von plcov (`baseline/plcov/corpus-instrumented.tsv`,
-`npm run parity:coverage`); die Korpuszahlen bleiben 280/280, 25 496 Anweisungen, 2 891
-Entscheidungen, 3 383 Teilbedingungen.
+Coverage on the same parser: for all 295 bodies of the corpus, the instrumented text and the probe
+map are identical to those of plcov's token parser (`baseline/plcov/corpus-instrumented.tsv`,
+`npm run parity:coverage`); the corpus figures stay at 280/280, 25 496 statements, 2 891
+decisions, 3 383 conditions.
 
-## Phase 5: Coverage und Mutation zusammen
+## Coverage and mutation together
 
-| Prüfung | Beispielprojekt | pljson |
+| Check | Example project | pljson |
 | --- | --- | --- |
-| Gegenprobe Aufzeichnungslauf gegen Coverage | 51 von 51 geprüften Mutanten stimmig (23 ohne Anweisung drumherum) | 1 632 von 1 636 stimmig; die 4 übrigen: Initialisierung pro Session, ausgelöst von einem anderen ersten Test, weil der Mutationslauf zwei scheiternde Tests ausschließt |
-| Orakel-Modus mit Testauswahl aus der Coverage | 75/75 Urteile wie Go und `expected.tsv`; im Mittel 5,6 statt 14 Tests pro Mutant | Stichprobe 150: 149 Urteile wie im Schema-Modus, 1 in beiden erkannt (Timeout gegen getötet) |
+| Cross-check of recording run against coverage | 51 of 51 checked mutants consistent (23 without an enclosing statement) | 1 632 of 1 636 consistent; the remaining 4: per-session initialization, triggered by a different first test because the mutation run excludes two failing tests |
+| Oracle mode with test selection from coverage | 75/75 verdicts as in Go and `expected.tsv`; on average 5.6 instead of 14 tests per mutant | sample of 150: 149 verdicts as in schema mode, 1 detected in both (timeout vs. killed) |
 
-Die Gegenprobe fand zwei echte Fehler, beide behoben: Der Testkatalog der Coverage erkannte utPLSQL-Pfade ohne
-Schema nicht (keine Zuordnung pro Test), und die Zuordnung nur über Zeilen griff daneben, wenn eine Bedingung und die
-Anweisungen ihres Zweigs auf einer Zeile stehen (`when buf = '{' then …`). Anweisungen haben deshalb jetzt auch Spalten.
-Die Coverage startet jeden Testlauf mit frischem Paketzustand; ein pljson-Test, der sonst nur auf frisch kompiliertem
-Code bestand, wich deshalb vorher scheinbar durch die Instrumentierung ab.
+The cross-check found two real bugs, both fixed. The coverage test catalog did not recognize utPLSQL
+paths without a schema (no per-test mapping). And mapping by lines alone went wrong when a condition and
+the statements of its branch are on one line (`when buf = '{' then …`), so statements now also have
+columns. Coverage starts every test run with fresh package state; before that, a pljson test that
+otherwise only passed on freshly compiled code seemed to deviate because of the instrumentation.
 
-## Bewusste Änderungen seit dem Gleichstand
+## Deliberate changes since parity was reached
 
-`baseline/plcov/corpus-instrumented.tsv` hielt bis Phase 5 die Ergebnisse des alten Token-Parsers fest (295 von 295
-gleich). Seitdem verfolgt es den zuletzt geprüften Stand (`npm run parity:coverage -- --accept`):
+`baseline/plcov/corpus-instrumented.tsv` recorded the results of the old token parser until coverage
+and mutation were combined (295 of 295 equal). Since then it tracks the last checked state
+(`npm run parity:coverage -- --accept`):
 
-| Änderung | Betroffene Bodies | Prüfung |
+| Change | Bodies affected | Check |
 | --- | --- | --- |
-| A6: einfache CASE-Ausdrücke gemessen (Sonde vor jedem Ergebnis) | 13 | Korpus-Kompiliertest: 330 von 332 Bodies, die im Original kompilieren, kompilieren instrumentiert; die 2 übrigen sind Namenskonflikte zwischen Beispielskripten (ORA-00955) |
-| Anweisungen mit Spalten in der Sondenkarte | alle (beim Vergleich ausgeblendet) | – |
+| Simple CASE expressions measured (probe before each result) | 13 | Corpus compile test: 330 of 332 bodies that compile in the original also compile instrumented; the remaining 2 are name clashes between example scripts (ORA-00955) |
+| Statements with columns in the probe map | all (hidden in the comparison) | – |
+| Branch labels and gap reasons in English | all (texts only) | With labels and reasons left out, instrumented code and probe map are identical to the previous state for all 295 bodies |
 
-### Mutation seit A10 (SQL-Operatoren)
+### Mutation since the SQL operators
 
-| Änderung | Prüfung |
+| Change | Check |
 | --- | --- |
-| Neue Operatoren der Stufe 2 (SEL, JOI, ORD, UNI, AGR, SUB, WHR, COL) | `npm run parity:finder` vergleicht nur Stufe 1 mit dem Java-Finder, unverändert |
-| SQL-Mutanten beider Stufen werden im Schema durch Verdoppeln der PL/SQL-Anweisung geschaltet statt per `CASE` im SQL; SQL in Cursor-Deklarationen läuft einzeln kompiliert | Beispielprojekt: alle 81 Urteile wie von Hand erwartet, in beiden Modi; Gegenprobe mit der Coverage ohne Widerspruch |
-| `PLSCOPE_SETTINGS` bleibt beim Neukompilieren erhalten; `plmut_rt` mit Invoker-Rechten | plscope-utils: 35 von 36 Tests laufen unter dem Werkzeug wie direkt (vorher 26) |
-
+| New level 2 operators (SEL, JOI, ORD, UNI, AGR, SUB, WHR, COL) | `npm run parity:finder` compares only level 1 with the Java finder, unchanged |
+| SQL mutants of both levels are switched in the schema by duplicating the PL/SQL statement instead of by `CASE` in the SQL; SQL in cursor declarations is compiled one mutant at a time | Example project: all 81 verdicts as expected by hand, in both modes; cross-check against coverage without contradiction |
+| `PLSCOPE_SETTINGS` is kept on recompilation; `plmut_rt` with invoker rights | plscope-utils: 35 of 36 tests run under the tool as they do directly (previously 26) |

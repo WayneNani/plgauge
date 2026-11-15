@@ -81,7 +81,7 @@ test('a dead run\'s view is restored, a view changed since keeps the newer text'
       out.length = 0;
       await restoreJournal(conn, await mine(), quiet(out));
       assert.match(await text(), /select 3 a/);
-      assert.match(out.join('\n'), /geändert/);
+      assert.match(out.join('\n'), /was changed after the aborted run/);
       assert.deepEqual(await mine(), []);
     } finally {
       await conn.execute(`drop view plgauge_jv`).catch(() => {});
@@ -97,7 +97,7 @@ test('a unit dropped after the dead run is not created again', { skip: !m && 'PL
     await conn.execute(`drop function plgauge_journal_gone`);
     const out: string[] = [];
     await restoreJournal(conn, (await journalEntries(conn)).filter((e) => e.name === 'PLGAUGE_JOURNAL_GONE'), quiet(out));
-    assert.match(out.join('\n'), /existiert nicht mehr/);
+    assert.match(out.join('\n'), /no longer exists/);
     const n = (await conn.execute<[number]>(`select count(*) from user_objects where object_name = 'PLGAUGE_JOURNAL_GONE'`)).rows![0][0];
     assert.equal(n, 0);
     assert.equal((await journalEntries(conn)).filter((e) => e.name === 'PLGAUGE_JOURNAL_GONE').length, 0);
@@ -223,7 +223,7 @@ test('a view dropped after a run died mid-compile (pending) is not created again
     await conn.execute(`drop view plgauge_jp`);
     const out: string[] = [];
     await restoreJournal(conn, (await journalEntries(conn)).filter((e) => e.name === 'PLGAUGE_JP'), quiet(out));
-    assert.match(out.join('\n'), /existiert nicht mehr/);
+    assert.match(out.join('\n'), /no longer exists/);
     assert.equal((await conn.execute<[number]>(`select count(*) from user_views where view_name = 'PLGAUGE_JP'`)).rows![0][0], 0);
   });
 });

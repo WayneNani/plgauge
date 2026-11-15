@@ -10,8 +10,8 @@ import type { RunReport } from '@plgauge/coverage';
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const pctNum = (m: Metric) => (m.total ? (m.covered / m.total) * 100 : null);
-const fmtPct = (v: number | null) => (v === null ? '–' : `${v.toLocaleString('de-DE', { maximumFractionDigits: 1 })} %`);
-const fmtMs = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toLocaleString('de-DE', { maximumFractionDigits: 2 })} s` : `${ms.toLocaleString('de-DE', { maximumFractionDigits: ms < 10 ? 1 : 0 })} ms`);
+const fmtPct = (v: number | null) => (v === null ? '–' : `${v.toLocaleString('en-US', { maximumFractionDigits: 1 })} %`);
+const fmtMs = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 })} s` : `${ms.toLocaleString('en-US', { maximumFractionDigits: ms < 10 ? 1 : 0 })} ms`);
 const md = (s: string) => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>');
 
 const KEYWORDS = new Set(('and as begin between body by case close constant create cursor declare default delete else elsif end exception exit continue fetch for forall from function goto group having if in insert into is like loop merge not null of on open or order package pragma procedure raise replace return reverse rowtype select set then type update using values when where while with true false is_null raise_application_error commit rollback savepoint execute immediate bulk collect limit record table index varchar2 number boolean pls_integer date timestamp clob others no_data_found too_many_rows case_not_found deterministic pipelined authid definer current_user').split(' '));
@@ -25,11 +25,11 @@ const DARK = `  --bg: #0e1413; --surface: #151d1c; --sunk: #1b2524; --ink: #e2ea
 
 type MetricKey = 'stmt' | 'branch' | 'cond' | 'mcdc' | 'loop';
 const METRICS: { key: MetricKey; label: string; help: string }[] = [
-  { key: 'stmt', label: 'Anweisungen', help: 'Jede ausführbare Anweisung einzeln, auch wenn mehrere in einer Zeile stehen.' },
-  { key: 'branch', label: 'Branches', help: 'Jeder Zweig von IF, CASE, Schleifenbedingungen und Exception-Handlern, auch implizite ELSE-Zweige.' },
-  { key: 'cond', label: 'Bedingungen', help: 'Jede Teilbedingung von AND/OR-Ausdrücken mindestens einmal WAHR und einmal FALSCH.' },
-  { key: 'mcdc', label: 'MC/DC', help: 'Jede Teilbedingung hat nachweislich allein das Ergebnis ihrer Entscheidung verändert (nur PL/SQL).' },
-  { key: 'loop', label: 'Schleifen', help: 'Schleifen mit 0, genau 1 und mehreren Durchläufen (0 entfällt bei einfacher LOOP).' },
+  { key: 'stmt', label: 'Statements', help: 'Every executable statement on its own, even when several share a line.' },
+  { key: 'branch', label: 'Branches', help: 'Every branch of IF, CASE, loop conditions and exception handlers, implicit ELSE branches included.' },
+  { key: 'cond', label: 'Conditions', help: 'Every sub-condition of AND/OR expressions at least once TRUE and once FALSE.' },
+  { key: 'mcdc', label: 'MC/DC', help: 'Every sub-condition was shown to change the outcome of its decision on its own (PL/SQL only).' },
+  { key: 'loop', label: 'Loops', help: 'Loops with 0, exactly 1 and several iterations (0 does not apply to a basic LOOP).' },
 ];
 
 function sum(objs: ObjectResult[], k: MetricKey): Metric {
@@ -60,16 +60,16 @@ export interface MutationResultLite {
   detail?: string;
 }
 
-const MUT_HELP = 'Anteil der künstlich eingebauten Fehler, die ein Test bemerkt. Zeigt, ob ausgeführter Code auch geprüft wird.';
+const MUT_HELP = 'Share of deliberately injected faults that a test notices. Shows whether executed code is also checked.';
 const DETECTED = new Set(['KILLED', 'TIMEOUT', 'MEMORY']);
 const VALID = new Set(['KILLED', 'TIMEOUT', 'MEMORY', 'SURVIVED', 'NOT_COVERED']);
 const mutScore = (rs: MutationResultLite[]): Metric => ({
   covered: rs.filter((x) => DETECTED.has(x.status)).length,
   total: rs.filter((x) => VALID.has(x.status)).length,
 });
-const STATUS_DE: Record<string, string> = {
-  KILLED: 'getötet', TIMEOUT: 'Zeitgrenze', MEMORY: 'Speicher', SURVIVED: 'überlebt', NOT_COVERED: 'nicht erreicht',
-  COMPILE_ERROR: 'kompiliert nicht', ERROR: 'Fehler',
+const STATUS_TEXT: Record<string, string> = {
+  KILLED: 'killed', TIMEOUT: 'timeout', MEMORY: 'memory limit', SURVIVED: 'survived', NOT_COVERED: 'not reached',
+  COMPILE_ERROR: 'does not compile', ERROR: 'error',
 };
 
 /** Mutation results per object key ("PACKAGE BODY NAME") and ALL_SOURCE line. */
@@ -104,12 +104,12 @@ export function renderHtml(r: RunReport, opts: { mutation?: { results: MutationR
   const brPct = pctNum(totals.branch);
   const mcPct = pctNum(totals.mcdc);
   const headline = utPct !== null && brPct !== null
-    ? `utPLSQL meldet <em>${fmtPct(utPct)}</em> Zeilen-Coverage. Getestet sind <em class="t-${tone(brPct)}">${fmtPct(brPct)}</em> der Branches${mcPct !== null ? ` und <em class="t-${tone(mcPct)}">${fmtPct(mcPct)}</em> MC/DC` : ''}.`
-    : 'Coverage-Messung per Quellcode-Instrumentierung';
+    ? `utPLSQL reports <em>${fmtPct(utPct)}</em> line coverage. <em class="t-${tone(brPct)}">${fmtPct(brPct)}</em> of the branches${mcPct !== null ? ` and <em class="t-${tone(mcPct)}">${fmtPct(mcPct)}</em> MC/DC` : ''} are tested.`
+    : 'Coverage measured by source code instrumentation';
 
   const compareRows = [
     `<div class="cmp-row ref">
-       <div class="cmp-label"><strong>Zeilen</strong><span>utPLSQL heute (DBMS_PROFILER)</span></div>
+       <div class="cmp-label"><strong>Lines</strong><span>utPLSQL today (DBMS_PROFILER)</span></div>
        ${bar(ut, 'ref')}
        <div class="cmp-val"><b>${fmtPct(utPct)}</b><small>${ut.covered}/${ut.total}</small></div>
      </div>`,
@@ -131,24 +131,24 @@ export function renderHtml(r: RunReport, opts: { mutation?: { results: MutationR
   const facts = `
     <div class="facts">
       <div class="fact ${r.equivalent ? 'f-ok' : 'f-bad'}">
-        <span class="fact-k">Verhalten unverändert</span>
-        <span class="fact-v">${r.equivalent ? `${nTests}/${nTests} Tests identisch` : 'Ergebnisse weichen ab'}</span>
-        <span class="fact-d">${r.equivalent ? `Jeder Test liefert mit und ohne Instrumentierung dasselbe Ergebnis (${passed} bestanden).` : `Abweichend: ${(r.differingTests ?? []).map(esc).join('; ') || 'siehe Protokoll'}.`}${r.flakyTests?.length ? ` ${r.flakyTests.length} unzuverlässige Test${r.flakyTests.length === 1 ? '' : 's'} ausgenommen (Ergebnis wechselt schon ohne Instrumentierung): ${r.flakyTests.map((t) => esc(t.split('::').pop()!)).join(', ')}.` : ''}</span>
+        <span class="fact-k">Behaviour unchanged</span>
+        <span class="fact-v">${r.equivalent ? `${nTests}/${nTests} tests identical` : 'Results differ'}</span>
+        <span class="fact-d">${r.equivalent ? `Every test gives the same result with and without instrumentation (${passed} passed).` : `Differing: ${(r.differingTests ?? []).map(esc).join('; ') || 'see log'}.`}${r.flakyTests?.length ? ` ${r.flakyTests.length} flaky test${r.flakyTests.length === 1 ? '' : 's'} excluded (result changes even without instrumentation): ${r.flakyTests.map((t) => esc(t.split('::').pop()!)).join(', ')}.` : ''}</span>
       </div>
       <div class="fact">
-        <span class="fact-k">Instrumentieren (TypeScript)</span>
+        <span class="fact-k">Instrumentation (TypeScript)</span>
         <span class="fact-v">${fmtMs(r.timings.instrumentMs)}</span>
-        <span class="fact-d">Parsen und Sonden setzen für ${nObj} Objekt${nObj === 1 ? '' : 'e'}. Kompilieren in der DB: ${fmtMs(r.timings.compileMs)}.</span>
+        <span class="fact-d">Parsing and placing probes for ${nObj} object${nObj === 1 ? '' : 's'}. Compiling in the database: ${fmtMs(r.timings.compileMs)}.</span>
       </div>
       ${slowest && slowInstr ? `<div class="fact">
-        <span class="fact-k">Laufzeit-Overhead</span>
-        <span class="fact-v">${factor !== null ? `× ${factor.toLocaleString('de-DE', { maximumFractionDigits: 1 })}` : '–'}</span>
-        <span class="fact-d">Sondenreichster Test „${esc(slowest.name)}“: ${fmtMs(slowest.time * 1000)} ohne Coverage${slowUt ? `, ${fmtMs(slowUt.time * 1000)} mit utPLSQL-Coverage` : ''}, ${fmtMs(slowInstr.time * 1000)} mit plgauge.</span>
+        <span class="fact-k">Runtime overhead</span>
+        <span class="fact-v">${factor !== null ? `× ${factor.toLocaleString('en-US', { maximumFractionDigits: 1 })}` : '–'}</span>
+        <span class="fact-d">Slowest test “${esc(slowest.name)}”: ${fmtMs(slowest.time * 1000)} without coverage${slowUt ? `, ${fmtMs(slowUt.time * 1000)} with utPLSQL coverage` : ''}, ${fmtMs(slowInstr.time * 1000)} with plgauge.</span>
       </div>` : ''}
       <div class="fact">
-        <span class="fact-k">Testläufe gesamt</span>
+        <span class="fact-k">Test runs total</span>
         <span class="fact-v">${fmtMs(r.timings.instrumentedMs)}</span>
-        <span class="fact-d">Ohne Coverage ${fmtMs(r.timings.baselineMs)}, mit utPLSQL-Coverage ${fmtMs(r.timings.utplsqlCoverageMs)}.</span>
+        <span class="fact-d">Without coverage ${fmtMs(r.timings.baselineMs)}, with utPLSQL coverage ${fmtMs(r.timings.utplsqlCoverageMs)}.</span>
       </div>
     </div>`;
 
@@ -335,41 +335,41 @@ aside.findings { background: var(--surface); border: 1px solid var(--line); bord
     <div class="meta">
       <span>Schema <b>${esc(r.schema)}</b></span>
       <span>${esc(r.database.replace(/ - Develop.*$/, ''))}</span>
-      <span>SQL-Sonden ${r.sqlProbes ? 'aktiv' : 'aus'}</span>
-      <span>${esc(new Date(r.generated).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC' }))} UTC</span>
+      <span>SQL probes ${r.sqlProbes ? 'on' : 'off'}</span>
+      <span>${esc(new Date(r.generated).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC' }))} UTC</span>
     </div>
   </div>
 
   <section class="hero" aria-labelledby="h-hero">
-    <div class="eyebrow">Gemessen mit denselben ${nTests} utPLSQL-Tests</div>
+    <div class="eyebrow">Measured with the same ${nTests} utPLSQL tests</div>
     <h1 id="h-hero">${headline}</h1>
     <div class="compare">${compareRows}</div>
     ${facts}
   </section>
 
   <section aria-labelledby="h-obj">
-    <header><div class="eyebrow">Objekte</div><h2 id="h-obj">Abdeckung je Programmeinheit</h2></header>
+    <header><div class="eyebrow">Objects</div><h2 id="h-obj">Coverage per program unit</h2></header>
     <div class="tbl"><table>
-      <thead><tr><th>Objekt</th><th>Zeilen (utPLSQL)</th>${METRICS.map((m) => `<th>${m.label}</th>`).join('')}${muts ? '<th>Mutation Score</th>' : ''}<th class="find">Lücken</th></tr></thead>
+      <thead><tr><th>Object</th><th>Lines (utPLSQL)</th>${METRICS.map((m) => `<th>${m.label}</th>`).join('')}${muts ? '<th>Mutation Score</th>' : ''}<th class="find">Gaps</th></tr></thead>
       <tbody>${tableRows}</tbody>
     </table></div>
   </section>
 
-  <div class="legend" aria-label="Legende">
-    <span><i class="sw" style="background:var(--ok)"></i>vollständig</span>
-    <span><i class="sw" style="background:var(--warn)"></i>teilweise (Zweig oder Bedingung fehlt)</span>
-    <span><i class="sw" style="background:var(--bad)"></i>nie ausgeführt</span>
+  <div class="legend" aria-label="Legend">
+    <span><i class="sw" style="background:var(--ok)"></i>complete</span>
+    <span><i class="sw" style="background:var(--warn)"></i>partial (branch or condition missing)</span>
+    <span><i class="sw" style="background:var(--bad)"></i>never executed</span>
     <span><i class="sw" style="background:var(--nf)"></i>NOT_FEASIBLE</span>
-    <span><span class="tf"><b class="on T">T</b><b class="on F">F</b><b class="on N">N</b></span>Teilbedingung war WAHR / FALSCH / NULL</span>
-    <span><span class="ut"><i class="y"></i></span> utPLSQL-Zeile gezählt</span>
+    <span><span class="tf"><b class="on T">T</b><b class="on F">F</b><b class="on N">N</b></span>sub-condition was TRUE / FALSE / NULL</span>
+    <span><span class="ut"><i class="y"></i></span> line counted by utPLSQL</span>
   </div>
 
   ${sections}
 
-  <section class="method" aria-label="Methode">
-    <div><h4>So wird gemessen</h4><p>plgauge liest den kompilierten Quelltext, setzt Sonden an jede Anweisung, Entscheidung und Teilbedingung und kompiliert den Code neu. Die Sonden fügen keine Zeilen ein, Fehlermeldungen behalten ihre Zeilennummern. Danach laufen die utPLSQL-Tests, und der Originalcode wird wiederhergestellt.</p></div>
-    <div><h4>NULL und Kurzschluss</h4><p>Jede Teilbedingung wird als WAHR, FALSCH oder NULL gezählt. Die Sonden geben den Wert unverändert zurück, deshalb bleiben Kurzschlussauswertung und NULL-Semantik erhalten. MC/DC wertet nicht ausgewertete Teilbedingungen als Platzhalter (unique cause mit Kurzschluss).</p></div>
-    <div><h4>Grenzen des Prototyps</h4><p>Bedingungen in WHERE-, ON- und HAVING-Klauseln werden bewusst nicht instrumentiert, weil das den Ausführungsplan verändern würde. Dynamisches SQL, mit wrap verschlüsselter Code und Compound-Trigger werden nicht gemessen. Treffer aus anderen Sessions (Jobs, parallele Abfragen) fehlen noch.</p></div>
+  <section class="method" aria-label="Method">
+    <div><h4>How it is measured</h4><p>plgauge reads the compiled source, places probes on every statement, decision and sub-condition and recompiles the code. The probes add no lines, so error messages keep their line numbers. Then the utPLSQL tests run, and the original code is restored.</p></div>
+    <div><h4>NULL and short-circuit</h4><p>Every sub-condition is counted as TRUE, FALSE or NULL. The probes return the value unchanged, so short-circuit evaluation and NULL semantics are preserved. MC/DC treats sub-conditions that were not evaluated as wildcards (unique cause with short-circuit).</p></div>
+    <div><h4>Limits</h4><p>Conditions in WHERE, ON and HAVING clauses are deliberately not instrumented, because that would change the execution plan. Dynamic SQL and code obfuscated with wrap are not measured. Hits from sessions of other users, and from parallel query slaves that run fewer than 1000 statements, are lost.</p></div>
   </section>
 </div>
 
@@ -406,9 +406,9 @@ aside.findings { background: var(--surface); border: 1px solid var(--line); bord
 // -------------------------------------------------------------------- object
 
 function testList(idx: number[] | undefined, names: string[], max = 10): string {
-  if (!idx?.length) return '<div style="opacity:.75">von keinem Test erreicht</div>';
+  if (!idx?.length) return '<div style="opacity:.75">reached by no test</div>';
   const items = idx.slice(0, max).map((k) => `<div>• ${names[k] ?? esc(String(k))}</div>`).join('');
-  return items + (idx.length > max ? `<div style="opacity:.75">… und ${idx.length - max} weitere</div>` : '');
+  return items + (idx.length > max ? `<div style="opacity:.75">… and ${idx.length - max} more</div>` : '');
 }
 
 /** Surviving mutants on executed lines: the tests run this code but would not notice a fault in it. */
@@ -430,14 +430,14 @@ const one = (s: string, max = 48) => {
 
 function renderObject(o: ObjectResult, idx: number, tip: (html: string) => string, names: string[], muts?: Map<number, MutationResultLite[]>): string {
   const chips = [
-    o.utplsql ? `<span class="chip ref">Zeilen (utPLSQL) <b>${fmtPct(pctNum(o.utplsql))}</b></span>` : '',
+    o.utplsql ? `<span class="chip ref">Lines (utPLSQL) <b>${fmtPct(pctNum(o.utplsql))}</b></span>` : '',
     ...[...METRICS.map((m) => [m.label, o.metrics[m.key]] as const), ...(muts ? [['Mutation Score', mutScore([...muts.values()].flat())] as const] : [])]
       .map(([label, m]) => `<span class="chip t-${tone(pctNum(m))}">${label} <b>${fmtPct(pctNum(m))}</b></span>`),
   ].join('');
 
   const head = `<div class="obj-head"><div><div class="eyebrow">${esc(o.type.toLowerCase())}</div><h3>${esc(o.owner.toLowerCase())}.${esc(o.name.toLowerCase())}</h3></div><div class="chips">${chips}</div></div>`;
   if (o.instrumentError) {
-    return `<section class="obj" id="o${idx}">${head}<p class="err">Nicht instrumentiert: ${esc(o.instrumentError)}</p></section>`;
+    return `<section class="obj" id="o${idx}">${head}<p class="err">Not instrumented: ${esc(o.instrumentError)}</p></section>`;
   }
 
   // condition marks by source offset
@@ -488,7 +488,7 @@ function renderObject(o: ObjectResult, idx: number, tip: (html: string) => strin
       const mc = c.mcdc === 'na' || d.conds.length < 2 ? '' : `<b class="mc ${c.mcdc}">MC/DC ${c.mcdc === 'yes' ? '✓' : '✗'}</b>`;
       const after = `<span class="tf" data-tip="${tipId}" aria-hidden="true"><b class="T${c.t ? ' on' : ''}">T</b><b class="F${c.f ? ' on' : ''}">F</b><b class="N${c.n ? ' on' : ''}">N</b>${mc}</span>`;
       open = { endOffset: c.span.end, cls, tipId, after };
-      htmlLines[htmlLines.length - 1] += `<span class="cond ${cls}" data-tip="${tipId}" tabindex="0" aria-label="Teilbedingung ${c.t ? 'WAHR gesehen' : 'nie WAHR'}, ${c.f ? 'FALSCH gesehen' : 'nie FALSCH'}">`;
+      htmlLines[htmlLines.length - 1] += `<span class="cond ${cls}" data-tip="${tipId}" tabindex="0" aria-label="Sub-condition ${c.t ? 'seen TRUE' : 'never TRUE'}, ${c.f ? 'seen FALSE' : 'never FALSE'}">`;
     }
     const cls = t.kind === 'trivia' ? (t.text.trimStart().startsWith('--') || t.text.trimStart().startsWith('/*') ? 'com' : null)
       : t.kind === 'string' ? 'str' : t.kind === 'number' ? 'nm' : t.kind === 'ident' && KEYWORDS.has(t.text.toLowerCase()) ? 'kw' : null;
@@ -504,67 +504,67 @@ function renderObject(o: ObjectResult, idx: number, tip: (html: string) => strin
     const st = o.lineStatus[line];
     const hits = o.lineHits[line];
     const utLine = o.utplsql?.lines[line];
-    const utMark = utLine === undefined ? '' : `<i class="${utLine ? 'y' : 'n'}" title="utPLSQL: ${utLine ? 'ausgeführt' : 'nicht ausgeführt'}"></i>`;
+    const utMark = utLine === undefined ? '' : `<i class="${utLine ? 'y' : 'n'}" title="utPLSQL: ${utLine ? 'executed' : 'not executed'}"></i>`;
     let badge = '';
     const brs = branchesByLine.get(line)?.filter((b) => !b.nf);
     if (brs?.length) {
       const cov = brs.filter((b) => b.hits > 0).length;
       const v = (cov / brs.length) * 100;
-      const id = tip(`<b>Zweige in Zeile ${line}</b><hr>${brs.map((b) => `<div class="row"><span>${md(b.label)}</span><span>${b.hits}×${b.tests ? ` · ${b.tests.length} Test${b.tests.length === 1 ? '' : 's'}` : ''}</span></div>${b.hits === 0 && b.reason ? `<div style="opacity:.75">${md(b.reason)}</div>` : ''}`).join('')}`);
-      badge += `<span class="br t-${tone(v)}" data-tip="${id}" tabindex="0">◆ ${cov}/${brs.length} Zweige</span>`;
+      const id = tip(`<b>Branches on line ${line}</b><hr>${brs.map((b) => `<div class="row"><span>${md(b.label)}</span><span>${b.hits}×${b.tests ? ` · ${b.tests.length} Test${b.tests.length === 1 ? '' : 's'}` : ''}</span></div>${b.hits === 0 && b.reason ? `<div style="opacity:.75">${md(b.reason)}</div>` : ''}`).join('')}`);
+      badge += `<span class="br t-${tone(v)}" data-tip="${id}" tabindex="0">◆ ${cov}/${brs.length} branches</span>`;
     }
     const lp = loopByLine.get(line);
     if (lp && !lp.nf) {
       const goals = lp.kind === 'loop' ? 2 : 3;
       const cov = (lp.kind === 'loop' ? 0 : +(lp.zero > 0)) + +(lp.one > 0) + +(lp.many > 0);
-      const id = tip(`<b>Schleife (${lp.kind})</b><hr>${lp.kind === 'loop' ? '' : `<div class="row"><span>0 Durchläufe</span><span>${lp.zero}×</span></div>`}<div class="row"><span>genau 1 Durchlauf</span><span>${lp.one}×</span></div><div class="row"><span>mehrere Durchläufe</span><span>${lp.many}×</span></div>`);
+      const id = tip(`<b>Loop (${lp.kind})</b><hr>${lp.kind === 'loop' ? '' : `<div class="row"><span>0 iterations</span><span>${lp.zero}×</span></div>`}<div class="row"><span>exactly 1 iteration</span><span>${lp.one}×</span></div><div class="row"><span>several iterations</span><span>${lp.many}×</span></div>`);
       badge += `<span class="br t-${tone((cov / goals) * 100)}" data-tip="${id}" tabindex="0">↻ ${cov}/${goals}</span>`;
     }
     const ms = muts?.get(line);
     if (ms?.length) {
       const v = mutScore(ms);
-      const id = tip(`<b>Mutanten in Zeile ${line}</b><hr>${ms.map((m) => `<div class="row"><span><code>${esc(one(m.original))}</code> → <code>${esc(one(m.mutated))}</code> <span style="opacity:.7">${esc(m.op)}</span></span><span>${STATUS_DE[m.status] ?? esc(m.status)}</span></div>${m.status === 'KILLED' && m.killedBy ? `<div style="opacity:.75">von ${esc(m.killedBy)}</div>` : ''}`).join('')}`);
-      badge += `<span class="br mut t-${tone(pctNum(v))}" data-tip="${id}" tabindex="0">✱ ${v.covered}/${v.total} Mutanten</span>`;
+      const id = tip(`<b>Mutants on line ${line}</b><hr>${ms.map((m) => `<div class="row"><span><code>${esc(one(m.original))}</code> → <code>${esc(one(m.mutated))}</code> <span style="opacity:.7">${esc(m.op)}</span></span><span>${STATUS_TEXT[m.status] ?? esc(m.status)}</span></div>${m.status === 'KILLED' && m.killedBy ? `<div style="opacity:.75">by ${esc(m.killedBy)}</div>` : ''}`).join('')}`);
+      badge += `<span class="br mut t-${tone(pctNum(v))}" data-tip="${id}" tabindex="0">✱ ${v.covered}/${v.total} mutants</span>`;
     }
     return `<tr id="o${idx}-L${line}" class="${st ? `s-${st}` : ''}"><td class="ln">${line}</td><td class="ut">${utMark}</td><td class="hits">${hits === undefined ? '' : o.lineTests?.[line]?.length || hits === 0
-      ? `<span data-tip="${tip(`<b>Zeile ${line}: ${hits.toLocaleString('de-DE')}× ausgeführt</b><hr>${testList(o.lineTests?.[line], names)}`)}" tabindex="0">${hits.toLocaleString('de-DE')}×</span>`
-      : `${hits.toLocaleString('de-DE')}×`}</td><td class="src">${htmlLines[k] ?? ''}${badge}</td></tr>`;
+      ? `<span data-tip="${tip(`<b>Line ${line}: executed ${hits.toLocaleString('en-US')}×</b><hr>${testList(o.lineTests?.[line], names)}`)}" tabindex="0">${hits.toLocaleString('en-US')}×</span>`
+      : `${hits.toLocaleString('en-US')}×`}</td><td class="src">${htmlLines[k] ?? ''}${badge}</td></tr>`;
   }).join('');
 
   const mutFindings = unchecked(o, muts).map(({ line, m }) => ({
-    line, kind: 'mut', title: `Ausgeführt, aber ungeprüft: \`${one(m.original, 40)}\` → \`${one(m.mutated, 40)}\` bleibt unbemerkt`,
-    detail: `${m.op}: Die Tests führen die Zeile aus, keiner scheitert an der Änderung.`,
+    line, kind: 'mut', title: `Executed but unchecked: \`${one(m.original, 40)}\` → \`${one(m.mutated, 40)}\` goes unnoticed`,
+    detail: `${m.op}: the tests execute the line, none of them fails on the change.`,
   }));
   const all = [...o.findings, ...mutFindings].sort((a, b) => a.line - b.line);
   const findings = all.length
-    ? `<ol>${all.map((f) => `<li><a href="#o${idx}-L${f.line}"><span class="fl">Z. ${f.line}</span><span class="ft"><span class="kind ${f.kind}">${KIND[f.kind]}</span>${md(f.title)}${f.detail ? `<small>${md(f.detail)}</small>` : ''}</span></a></li>`).join('')}</ol>`
-    : `<div class="none">Keine Lücken gefunden.</div>`;
+    ? `<ol>${all.map((f) => `<li><a href="#o${idx}-L${f.line}"><span class="fl">L. ${f.line}</span><span class="ft"><span class="kind ${f.kind}">${KIND[f.kind]}</span>${md(f.title)}${f.detail ? `<small>${md(f.detail)}</small>` : ''}</span></a></li>`).join('')}</ol>`
+    : `<div class="none">No gaps found.</div>`;
   const gaps = o.gaps.length
-    ? `<h4>Nicht gemessen</h4><ol class="gaps">${o.gaps.map((g) => `<li><span class="fl">Z. ${g.line}</span><span>${esc(g.reason)}</span></li>`).join('')}</ol>`
+    ? `<h4>Not measured</h4><ol class="gaps">${o.gaps.map((g) => `<li><span class="fl">L. ${g.line}</span><span>${esc(g.reason)}</span></li>`).join('')}</ol>`
     : '';
 
   return `<section class="obj" id="o${idx}" aria-label="${esc(o.name)}">
     ${head}
     <div class="obj-body">
       <div class="code"><table>${rows}</table></div>
-      <aside class="findings"><h4>Lücken (${all.length})</h4>${findings}${gaps}</aside>
+      <aside class="findings"><h4>Gaps (${all.length})</h4>${findings}${gaps}</aside>
     </div>
   </section>`;
 }
 
-const KIND: Record<string, string> = { stmt: 'Anweisung', branch: 'Branch', cond: 'Bedingung', mcdc: 'MC/DC', loop: 'Schleife', mut: 'Mutant' };
+const KIND: Record<string, string> = { stmt: 'Statement', branch: 'Branch', cond: 'Condition', mcdc: 'MC/DC', loop: 'Loop', mut: 'Mutant' };
 
 function condTip(c: CondResult, d: ObjectResult['decisions'][number]): string {
   const lines = [
     `<b><code>${esc(c.text.replace(/\s+/g, ' '))}</code></b>`,
-    `<div style="opacity:.75">Teilbedingung ${c.i} von ${d.conds.length} · ${d.ctx === 'sql' ? 'SQL' : 'PL/SQL'}</div>`,
+    `<div style="opacity:.75">Sub-condition ${c.i} of ${d.conds.length} · ${d.ctx === 'sql' ? 'SQL' : 'PL/SQL'}</div>`,
     '<hr>',
-    ...([['WAHR', c.t], ['FALSCH', c.f], ['NULL', c.n]] as const).map(([w, n]) => `<div class="row"><span>${w}</span><span>${n.toLocaleString('de-DE')}×</span></div>`),
+    ...([['TRUE', c.t], ['FALSE', c.f], ['NULL', c.n]] as const).map(([w, n]) => `<div class="row"><span>${w}</span><span>${n.toLocaleString('en-US')}×</span></div>`),
   ];
   if (c.mcdc !== 'na' && d.conds.length > 1) {
-    lines.push('<hr>', c.mcdc === 'yes' ? '<div>MC/DC: unabhängige Wirkung nachgewiesen ✓</div>' : `<div>MC/DC: unabhängige Wirkung nicht nachgewiesen</div>${c.suggestion ? `<div style="margin-top:4px">Fehlender Testfall: ${md(c.suggestion)}</div>` : ''}`);
+    lines.push('<hr>', c.mcdc === 'yes' ? '<div>MC/DC: independent effect shown ✓</div>' : `<div>MC/DC: independent effect not shown</div>${c.suggestion ? `<div style="margin-top:4px">Missing test case: ${md(c.suggestion)}</div>` : ''}`);
   } else if (c.mcdc === 'na') {
-    lines.push('<hr>', '<div style="opacity:.75">In SQL ist die Auswertungsreihenfolge nicht festgelegt, deshalb kein MC/DC.</div>');
+    lines.push('<hr>', '<div style="opacity:.75">In SQL the evaluation order is not defined, so no MC/DC.</div>');
   }
   return lines.join('');
 }

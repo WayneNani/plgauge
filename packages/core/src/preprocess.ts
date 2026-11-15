@@ -27,7 +27,7 @@ export function preprocessBlocks(src: string): { text: string; blocks: [number, 
     const top = stack[stack.length - 1];
     const thenAfter = (from: number) => {
       for (let j = from + 1; j < toks.length; j++) if (toks[j].up === '$THEN') return j;
-      throw new Error(`$THEN fehlt nach ${t.text} (Zeile ${t.line})`);
+      throw new Error(`Missing $THEN after ${t.text} (line ${t.line})`);
     };
     switch (t.up) {
       case '$IF': {
@@ -38,7 +38,7 @@ export function preprocessBlocks(src: string): { text: string; blocks: [number, 
         break;
       }
       case '$ELSIF': case '$ELSE': {
-        if (!top || top.kind !== 'if') throw new Error(`${t.up} ohne $IF (Zeile ${t.line})`);
+        if (!top || top.kind !== 'if') throw new Error(`${t.up} without $IF (line ${t.line})`);
         const end = t.up === '$ELSE' ? t.end : toks[(k = thenAfter(k))].end;
         top.branches.push([top.branchStart, t.start]);
         blank.push([t.start, end]);
@@ -50,7 +50,7 @@ export function preprocessBlocks(src: string): { text: string; blocks: [number, 
         break;
       case '$END': {
         const f = stack.pop();
-        if (!f) throw new Error(`$END ohne $IF (Zeile ${t.line})`);
+        if (!f) throw new Error(`$END without $IF (line ${t.line})`);
         if (f.kind === 'error') blank.push([f.start, t.end]);
         else {
           blocks.push([f.start, t.end]);
@@ -63,7 +63,7 @@ export function preprocessBlocks(src: string): { text: string; blocks: [number, 
         break; // inquiry directives like $$plsql_unit stay
     }
   }
-  if (stack.length) throw new Error('$IF ohne $END');
+  if (stack.length) throw new Error('$IF without $END');
   const chars = src.split('');
   for (const [a, b] of blank) for (let k = a; k < b; k++) if (chars[k] !== '\n') chars[k] = ' ';
   return { text: chars.join(''), blocks };

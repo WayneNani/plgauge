@@ -108,7 +108,7 @@ export async function runCorpus(dirs: string[], db?: { user: string; password: s
     try {
       const src = preprocess(u.text);
       const r = instrument(src, 'CORPUS', newIds(), { sqlProbes: true });
-      if (r.instrumented.split('\n').length !== u.text.split('\n').length) throw new Error('Zeilenzahl verändert');
+      if (r.instrumented.split('\n').length !== u.text.split('\n').length) throw new Error('line count changed');
       res.parsed++;
       res.decisions += r.map.decisions.length;
       res.conditions += r.map.decisions.reduce((a, d) => a + d.conds.length, 0);
@@ -146,7 +146,7 @@ async function compileCheck(units: CorpusUnit[], instrumented: Map<CorpusUnit, s
       `select line, text from user_errors where name = :n and type = :t and attribute = 'ERROR' order by sequence`,
       { n: /^".*"$/.test(last) ? name : name.toUpperCase(), t: u.kind.toUpperCase() },
     );
-    return r.rows?.length ? r.rows.slice(0, 2).map((x) => `Zeile ${x[0]}: ${x[1].trim().split('\n')[0]}`).join('; ') : null;
+    return r.rows?.length ? r.rows.slice(0, 2).map((x) => `line ${x[0]}: ${x[1].trim().split('\n')[0]}`).join('; ') : null;
   };
   const compile = async (u: CorpusUnit, text: string) => {
     // strip a schema prefix so that everything lands in the corpus schema

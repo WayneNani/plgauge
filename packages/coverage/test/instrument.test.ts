@@ -147,7 +147,7 @@ test('MC/DC: detects independence pairs and proposes the missing vector', () => 
   const [c1, c2] = res.decisions[0].conds;
   assert.equal(c1.mcdc, 'yes');
   assert.equal(c2.mcdc, 'no');
-  assert.match(c2.suggestion!, /`a > 1` = WAHR, `b > 1` = FALSCH → Ergebnis FALSCH/);
+  assert.match(c2.suggestion!, /`a > 1` = TRUE, `b > 1` = FALSE → result FALSE/);
   assert.deepEqual(res.metrics.mcdc, { covered: 1, total: 2 });
   assert.deepEqual(res.metrics.branch, { covered: 2, total: 2 });
 });

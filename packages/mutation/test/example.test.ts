@@ -29,24 +29,24 @@ function expected(): Map<string, string> {
 
 function check(results: Result[]) {
   const want = expected();
-  assert.equal(results.length, want.size, 'Zahl der Mutanten');
+  assert.equal(results.length, want.size, 'number of mutants');
   const wrong: string[] = [];
   for (const r of results) {
     const key = `${r.sub}|${r.op}|${r.original}|${r.mutated}`;
     const w = want.get(key);
     const got = r.status === 'NOT_COVERED' ? 'SURVIVED' : r.status; // no test reaches it: survives every run
-    if (w === undefined) wrong.push(`unerwartet: ${key}`);
-    else if (!w.split('|').includes(got)) wrong.push(`${r.line} ${r.op} ${r.original} → ${r.mutated}: ${r.status}, erwartet ${w} (${r.detail ?? ''})`);
+    if (w === undefined) wrong.push(`unexpected: ${key}`);
+    else if (!w.split('|').includes(got)) wrong.push(`${r.line} ${r.op} ${r.original} → ${r.mutated}: ${r.status}, expected ${w} (${r.detail ?? ''})`);
   }
   assert.deepEqual(wrong, []);
 }
 
-test('example: coverage, cross-check with the recording run, oracle mode with coverage selection', { skip: !db && 'PLGAUGE_DB nicht gesetzt', timeout: 900_000 }, async () => {
+test('example: coverage, cross-check with the recording run, oracle mode with coverage selection', { skip: !db && 'PLGAUGE_DB not set', timeout: 900_000 }, async () => {
   const cov = toCoverageExport(await runCoverage(await projectCoverageConfig(dir, db!, true), () => {}));
-  assert.ok(cov.tests.filter((t) => !t.setup).length >= 14, 'Tests mit Einzelzuordnung');
+  assert.ok(cov.tests.filter((t) => !t.setup).length >= 14, 'tests with their own mapping');
   const schema = await runMutation({ dir, dbUrls: [db!], mode: 'schema' });
   const c = crossCheck(schema.results, new CoverageIndex(cov));
-  assert.ok(c.checked > 40, `geprüft: ${c.checked}`);
+  assert.ok(c.checked > 40, `checked: ${c.checked}`);
   assert.deepEqual(c.contradictions.map((x) => `${x.r.line} ${x.r.op} ${x.test}`), []);
   const naive = await runMutation({ dir, dbUrls: [db!], mode: 'naive', coverage: cov });
   check(naive.results);
@@ -55,19 +55,19 @@ test('example: coverage, cross-check with the recording run, oracle mode with co
 });
 
 for (const mode of ['naive', 'schema'] as const) {
-  test(`example verdicts as expected (${mode})`, { skip: !db && 'PLGAUGE_DB nicht gesetzt', timeout: 600_000 }, async () => {
+  test(`example verdicts as expected (${mode})`, { skip: !db && 'PLGAUGE_DB not set', timeout: 600_000 }, async () => {
     const want = expected();
     const rep = await runMutation({ dir, dbUrls: [db!], mode });
-    assert.equal(rep.results.length, want.size, 'Zahl der Mutanten');
+    assert.equal(rep.results.length, want.size, 'number of mutants');
     const wrong: string[] = [];
     for (const r of rep.results) {
       const key = `${r.sub}|${r.op}|${r.original}|${r.mutated}`;
       const w = want.get(key);
       const got = r.status === 'NOT_COVERED' ? 'SURVIVED' : r.status; // no test reaches it: survives every run
-      if (w === undefined) wrong.push(`unerwartet: ${key}`);
-      else if (!w.split('|').includes(got)) wrong.push(`${r.line} ${r.op} ${r.original} → ${r.mutated}: ${r.status}, erwartet ${w} (${r.detail ?? ''})`);
-      const side = r.sub === 'storniere' && r.original === "p_modus = 'final'" && r.mutated === 'TRUE';
-      if (!!r.sideEffect !== side) wrong.push(`${r.line} ${r.mutated}: Nebenwirkung ${!!r.sideEffect}, erwartet ${side}`);
+      if (w === undefined) wrong.push(`unexpected: ${key}`);
+      else if (!w.split('|').includes(got)) wrong.push(`${r.line} ${r.op} ${r.original} → ${r.mutated}: ${r.status}, expected ${w} (${r.detail ?? ''})`);
+      const side = r.sub === 'cancel_order' && r.original === "p_mode = 'final'" && r.mutated === 'TRUE';
+      if (!!r.sideEffect !== side) wrong.push(`${r.line} ${r.mutated}: side effect ${!!r.sideEffect}, expected ${side}`);
     }
     assert.deepEqual(wrong, []);
   });
@@ -76,7 +76,7 @@ for (const mode of ['naive', 'schema'] as const) {
 // Several schemas (A4): units written as other_schema.name. Needs CREATE ANY PROCEDURE and
 // EXECUTE ANY PROCEDURE for the user of PLGAUGE_DB and a second schema, e.g. PLGAUGE_LIB_SCHEMA=DEMO_LIB.
 const lib = process.env.PLGAUGE_LIB_SCHEMA;
-test('several schemas: a unit of another schema is mutated in both modes', { skip: (!db || !lib) && 'PLGAUGE_DB / PLGAUGE_LIB_SCHEMA nicht gesetzt', timeout: 600_000 }, async () => {
+test('several schemas: a unit of another schema is mutated in both modes', { skip: (!db || !lib) && 'PLGAUGE_DB / PLGAUGE_LIB_SCHEMA not set', timeout: 600_000 }, async () => {
   const L = lib!.toLowerCase();
   const p = mkdtempSync(join(tmpdir(), 'plgauge-multi-'));
   mkdirSync(join(p, 'src'));
@@ -121,7 +121,7 @@ END;
 });
 
 // Cursor declarations (UNION ALL), cursor FOR loops (duplicated) and dynamic SQL (literal switched in place)
-test('cursors, cursor FOR loops and dynamic SQL: everything switched, same verdicts in both modes', { skip: !db && 'PLGAUGE_DB nicht gesetzt', timeout: 900_000 }, async () => {
+test('cursors, cursor FOR loops and dynamic SQL: everything switched, same verdicts in both modes', { skip: !db && 'PLGAUGE_DB not set', timeout: 900_000 }, async () => {
   const p = mkdtempSync(join(tmpdir(), 'plgauge-qsql-'));
   mkdirSync(join(p, 'src'));
   writeFileSync(join(p, 'src', 'q.sql'), `CREATE TABLE IF NOT EXISTS plgauge_q_t (id NUMBER, v NUMBER)
@@ -192,14 +192,14 @@ END;
   const log: string[] = [];
   const schema = await runMutation({ dir: p, dbUrls: [db!], mode: 'schema', log: (m) => log.push(m) });
   const naive = await runMutation({ dir: p, dbUrls: [db!], mode: 'naive', skipInstall: true });
-  assert.ok(log.some((l) => /0 Mutanten verworfen, 0 Stellen ohne Schema/.test(l)), log.join('\n'));
+  assert.ok(log.some((l) => /0 mutants dropped, 0 points without the schema/.test(l)), log.join('\n'));
   assert.ok(schema.results.some((r) => r.mutant.point.dyn) && schema.results.some((r) => r.mutant.point.union), 'dynamic SQL and cursor points');
   assert.deepEqual(verdict(schema.results), verdict(naive.results));
   // the boundaries v > 15, v >= 20 and v < 20 are tested by the data: their ROR variants are killed
   assert.ok(schema.results.filter((r) => r.op === 'ROR' && r.status === 'KILLED').length >= 6);
 });
 
-test('a run first puts back what a crashed run left in the journal', { skip: !db && 'PLGAUGE_DB nicht gesetzt', timeout: 600_000 }, async () => {
+test('a run first puts back what a crashed run left in the journal', { skip: !db && 'PLGAUGE_DB not set', timeout: 600_000 }, async () => {
   const conn = await oracledb.getConnection(parseDbUrl(db!));
   try {
     const owner = (await conn.execute<[string]>(`select user from dual`)).rows![0][0];
@@ -215,12 +215,12 @@ test('a run first puts back what a crashed run left in the journal', { skip: !db
   }
 });
 
-test('a second run on the same schema stops at once instead of restoring the first run’s code', { skip: !db && 'PLGAUGE_DB nicht gesetzt', timeout: 600_000 }, async () => {
+test('a second run on the same schema stops at once instead of restoring the first run’s code', { skip: !db && 'PLGAUGE_DB not set', timeout: 600_000 }, async () => {
   const conn = await oracledb.getConnection(parseDbUrl(db!));
   try {
     // the lock as a running run holds it
     await lockRun(conn, RUN_LOCK);
-    await assert.rejects(runMutation({ dir, dbUrls: [db!], mode: 'schema', skipInstall: true, sample: 1, seed: 1 }), /anderer plgauge-Lauf/);
+    await assert.rejects(runMutation({ dir, dbUrls: [db!], mode: 'schema', skipInstall: true, sample: 1, seed: 1 }), /Another plgauge run/);
   } finally {
     await conn.close();
   }
@@ -230,7 +230,7 @@ test('a second run on the same schema stops at once instead of restoring the fir
 });
 
 // CREATE OR REPLACE VIEW drops INSTEAD OF triggers: such a view must not be touched
-test('a view with an INSTEAD OF trigger is not mutated and keeps its trigger', { skip: !db && 'PLGAUGE_DB nicht gesetzt', timeout: 600_000 }, async () => {
+test('a view with an INSTEAD OF trigger is not mutated and keeps its trigger', { skip: !db && 'PLGAUGE_DB not set', timeout: 600_000 }, async () => {
   const p = mkdtempSync(join(tmpdir(), 'plgauge-trg-'));
   mkdirSync(join(p, 'src'));
   writeFileSync(join(p, 'src', 'v.sql'), `CREATE TABLE IF NOT EXISTS plgauge_trg_t (id NUMBER, s VARCHAR2(10))
@@ -258,7 +258,7 @@ END;
   const rep = await runMutation({ dir: p, dbUrls: [db!], mode: 'schema', log: (m) => log.push(m) });
   // only the trigger's own code is mutated, not the view
   assert.deepEqual(rep.results.filter((r) => r.mutant.unitRef.type === 'VIEW'), [], rep.results.map((r) => `${r.unit} ${r.op}`).join('\n'));
-  assert.ok(log.some((l) => l.includes('INSTEAD-OF-Trigger')), log.join('\n'));
+  assert.ok(log.some((l) => l.includes('INSTEAD OF trigger')), log.join('\n'));
   const conn = await oracledb.getConnection(parseDbUrl(db!));
   try {
     const n = (await conn.execute<[number]>(`select count(*) from user_triggers where trigger_name = 'PLGAUGE_TRG_IO'`)).rows![0][0];
@@ -269,16 +269,16 @@ END;
 });
 
 // CREATE OR REPLACE drops a view's comments and enables a disabled trigger: both come back
-test('a mutated view keeps its comments, a mutated disabled trigger stays disabled', { skip: !db && 'PLGAUGE_DB nicht gesetzt', timeout: 600_000 }, async () => {
+test('a mutated view keeps its comments, a mutated disabled trigger stays disabled', { skip: !db && 'PLGAUGE_DB not set', timeout: 600_000 }, async () => {
   const p = mkdtempSync(join(tmpdir(), 'plgauge-keep-'));
   mkdirSync(join(p, 'src'));
   writeFileSync(join(p, 'src', 'v.sql'), `CREATE TABLE IF NOT EXISTS plgauge_keep_t (id NUMBER, s VARCHAR2(10))
 /
 CREATE OR REPLACE VIEW plgauge_keep_v AS SELECT id, s FROM plgauge_keep_t WHERE id > 0
 /
-COMMENT ON TABLE plgauge_keep_v IS 'die View'
+COMMENT ON TABLE plgauge_keep_v IS 'the view'
 /
-COMMENT ON COLUMN plgauge_keep_v.s IS 'die Spalte'
+COMMENT ON COLUMN plgauge_keep_v.s IS 'the column'
 /
 CREATE OR REPLACE TRIGGER plgauge_keep_trg BEFORE INSERT ON plgauge_keep_t FOR EACH ROW
 BEGIN IF :new.id > 100 THEN :new.s := 'gross'; END IF; END;
@@ -305,8 +305,8 @@ END;
     const conn = await oracledb.getConnection(parseDbUrl(db!));
     try {
       const one = async (sql: string) => (await conn.execute<[string]>(sql)).rows?.[0]?.[0];
-      assert.equal(await one(`select comments from user_tab_comments where table_name = 'PLGAUGE_KEEP_V'`), 'die View', mode);
-      assert.equal(await one(`select comments from user_col_comments where table_name = 'PLGAUGE_KEEP_V' and column_name = 'S'`), 'die Spalte', mode);
+      assert.equal(await one(`select comments from user_tab_comments where table_name = 'PLGAUGE_KEEP_V'`), 'the view', mode);
+      assert.equal(await one(`select comments from user_col_comments where table_name = 'PLGAUGE_KEEP_V' and column_name = 'S'`), 'the column', mode);
       assert.equal(await one(`select status from user_triggers where trigger_name = 'PLGAUGE_KEEP_TRG'`), 'DISABLED', mode);
     } finally {
       await conn.close();
@@ -315,7 +315,7 @@ END;
 });
 
 // a dead run's journal must not overwrite what someone compiled into the unit since
-test('a leftover journal entry does not overwrite newer work in the unit', { skip: !db && 'PLGAUGE_DB nicht gesetzt', timeout: 600_000 }, async () => {
+test('a leftover journal entry does not overwrite newer work in the unit', { skip: !db && 'PLGAUGE_DB not set', timeout: 600_000 }, async () => {
   const conn = await oracledb.getConnection(parseDbUrl(db!));
   try {
     const owner = (await conn.execute<[string]>(`select user from dual`)).rows![0][0];

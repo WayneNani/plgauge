@@ -36,7 +36,7 @@ export interface InstrumentResult {
 
 export class ParseError extends Error {
   constructor(message: string, public line: number) {
-    super(`${message} (Zeile ${line})`);
+    super(`${message} (line ${line})`);
   }
 }
 
@@ -91,7 +91,7 @@ class Instrumenter {
       this.t = r.tokens;
       this.unit = r.unit;
     } catch (e) {
-      if (e instanceof ParseFailure) throw new ParseError(e.message.replace(/ \(Zeile \d+\)$/, ''), e.line);
+      if (e instanceof ParseFailure) throw new ParseError(e.message.replace(/ \(\w+ \d+\)$/, ''), e.line);
       throw e;
     }
     this.match = matchParens(this.t);
@@ -113,13 +113,13 @@ class Instrumenter {
         const begin = u.kids.findIndex((k) => k.k === 'decls' || k.k === 'body');
         // a CALL trigger has no PL/SQL of its own
         if (begin < 0) {
-          this.gap(this.t[u.a].line, 'CALL-Trigger: kein PL/SQL-Rumpf zu messen');
+          this.gap(this.t[u.a].line, 'CALL trigger: no PL/SQL body to measure');
           break;
         }
         const first = u.kids[begin];
         const declIdx = first.k === 'decls' ? first.a - 1 : first.a; // DECLARE token
         for (let k = u.a; k < declIdx; k++) {
-          if (this.t[k].up === 'WHEN') this.gap(this.t[k].line, 'WHEN-Klausel des Triggers wird nicht gemessen');
+          if (this.t[k].up === 'WHEN') this.gap(this.t[k].line, 'WHEN clause of the trigger is not measured');
           if (this.t[k].up === '(' && this.match[k] > 0) k = this.match[k];
         }
         for (const k of u.kids.slice(begin)) {
@@ -138,9 +138,9 @@ class Instrumenter {
     let k = 0;
     while (['CREATE', 'OR', 'REPLACE', 'EDITIONABLE', 'NONEDITIONABLE', 'EDITIONING'].includes(toks[k]?.up)) k++;
     const kind = toks[k]?.up;
-    if (kind === 'PACKAGE' && toks[k + 1]?.up !== 'BODY') throw new ParseError('Package-Spezifikationen werden nicht instrumentiert', toks[k].line);
+    if (kind === 'PACKAGE' && toks[k + 1]?.up !== 'BODY') throw new ParseError('Package specifications are not instrumented', toks[k].line);
     if (!['PACKAGE', 'PROCEDURE', 'FUNCTION', 'TYPE', 'TRIGGER'].includes(kind ?? '')) {
-      throw new ParseError(`Nicht unterstützter Objekttyp "${toks[k]?.text ?? ''}"`, toks[k]?.line ?? 1);
+      throw new ParseError(`Unsupported object type "${toks[k]?.text ?? ''}"`, toks[k]?.line ?? 1);
     }
   }
 
@@ -180,7 +180,7 @@ class Instrumenter {
     return this.text(a, bInclusive).replace(/\s+/g, ' ');
   }
   private caseGaps(a: number, b: number, where: string) {
-    for (let k = a; k < b; k++) if (this.t[k].up === 'CASE' && this.t[k].kind === 'ident') this.gap(this.t[k].line, `CASE-Ausdruck in ${where} wird nicht gemessen`);
+    for (let k = a; k < b; k++) if (this.t[k].up === 'CASE' && this.t[k].kind === 'ident') this.gap(this.t[k].line, `CASE expression in ${where} is not measured`);
   }
   private get nf(): boolean {
     return this.nfPending || this.nfRange || this.nfNest > 0;
@@ -314,7 +314,7 @@ class Instrumenter {
         }
         return 'block';
       case 'EXECUTE':
-        this.gap(this.t[s.a].line, 'Dynamisches SQL (EXECUTE IMMEDIATE) wird nicht instrumentiert');
+        this.gap(this.t[s.a].line, 'Dynamic SQL (EXECUTE IMMEDIATE) is not instrumented');
         return 'execute-immediate';
       default:
         if (SQL_START.has(u)) {
@@ -343,7 +343,7 @@ class Instrumenter {
         return;
       }
     }
-    c.branches.push(this.br('ELSE (implizit)', this.t[endIdx], { derived: { decision: last!.id, outcome: 'notT' } }));
+    c.branches.push(this.br('ELSE (implicit)', this.t[endIdx], { derived: { decision: last!.id, outcome: 'notT' } }));
   }
 
   private caseStmt(s: Node) {
@@ -373,7 +373,7 @@ class Instrumenter {
         return;
       }
     }
-    arm('ELSE (implizit → CASE_NOT_FOUND)', this.t[endIdx], null, this.t[endIdx].start, (id) => `else ${this.rt}.b(${id}); raise case_not_found; `);
+    arm('ELSE (implicit → CASE_NOT_FOUND)', this.t[endIdx], null, this.t[endIdx].start, (id) => `else ${this.rt}.b(${id}); raise case_not_found; `);
   }
 
   private loop(s: Node, insertPos: number) {
@@ -383,19 +383,19 @@ class Instrumenter {
     const loopIdx = s.at!;
     if (first.up === 'WHILE') {
       loop.kind = 'while';
-      this.twoWay('while', s.kids[0], first, 'Bedingung WAHR → Durchlauf', 'Bedingung nicht WAHR → Ende');
+      this.twoWay('while', s.kids[0], first, 'Condition TRUE → iteration', 'Condition not TRUE → end');
     } else if (first.up === 'FOR') {
       if (this.t.slice(s.a + 1, loopIdx).some((t) => t.up === 'SELECT' || t.up === 'WITH')) loop.kind = 'cursor-for';
       if (loop.kind === 'cursor-for') this.scanRegion(s.a + 1, loopIdx, 'sql', 'start', s.kids.filter((k) => k.k !== 'seq' && k.k !== 'branch'));
       else {
         loop.kind = 'for';
-        this.caseGaps(s.a + 1, loopIdx, 'Schleifengrenzen');
+        this.caseGaps(s.a + 1, loopIdx, 'loop bounds');
       }
       // 21c: FOR i IN … WHEN cond (skips the iteration) / WHILE cond (ends the loop)
       for (const f of s.kids.filter((k) => k.k === 'branch')) {
         const when = f.name === 'for-when';
-        this.twoWay(when ? 'for-when' : 'for-while', f.kids[0], this.t[f.a], when ? 'WHEN WAHR → Durchlauf' : 'WHILE WAHR → weiter',
-          when ? 'WHEN nicht WAHR → übersprungen' : 'WHILE nicht WAHR → Ende');
+        this.twoWay(when ? 'for-when' : 'for-while', f.kids[0], this.t[f.a], when ? 'WHEN TRUE → iteration' : 'WHILE TRUE → continue',
+          when ? 'WHEN not TRUE → skipped' : 'WHILE not TRUE → end');
       }
     }
     this.ins(insertPos, `${this.rt}.le(${loop.id});`);
@@ -410,7 +410,7 @@ class Instrumenter {
     const kw = this.t[s.a];
     if (s.at! < 0) return;
     const exit = kw.up === 'EXIT';
-    this.twoWay(exit ? 'exit-when' : 'continue-when', s.kids[0], kw, `WAHR → ${exit ? 'Schleife verlassen' : 'nächste Iteration'}`, 'nicht WAHR → weiter');
+    this.twoWay(exit ? 'exit-when' : 'continue-when', s.kids[0], kw, `TRUE → ${exit ? 'exit loop' : 'next iteration'}`, 'not TRUE → continue');
   }
 
   /** A construct of one decision with its two outcomes (WHILE, EXIT/CONTINUE WHEN, FOR … WHEN/WHILE). */
@@ -431,7 +431,7 @@ class Instrumenter {
   /** Wraps a condition with decision and condition probes. */
   private decision(kind: DecisionKind, cond: Node, ctx: 'plsql' | 'sql'): Decision | null {
     const { a, b } = cond;
-    if (b <= a) throw new ParseError('Leere Bedingung', this.t[a]?.line ?? 0);
+    if (b <= a) throw new ParseError('Empty condition', this.t[a]?.line ?? 0);
     if (ctx === 'sql' && !this.opts.sqlProbes) return null;
     const id = this.ids.dec++;
     const vectors = ctx === 'plsql';
@@ -453,7 +453,7 @@ class Instrumenter {
     };
     this.map.decisions.push(d);
     // a CASE inside the condition gets no probes of its own: say so
-    this.caseGaps(a, b, 'einer Bedingung');
+    this.caseGaps(a, b, 'a condition');
     return d;
   }
 
@@ -486,7 +486,7 @@ class Instrumenter {
     // the runtime keys a condition as d*256 + i*4 + v: from the 64th on it would hit the next
     // decision's; those conditions go unmeasured
     if (i > 63) {
-      if (i === 64) this.gap(this.t[j].line, 'Entscheidung mit mehr als 63 Bedingungen: die weiteren werden nicht gemessen');
+      if (i === 64) this.gap(this.t[j].line, 'Decision with more than 63 conditions: the rest are not measured');
       return { t: 'cond', i };
     }
     this.ins(this.t[j].start, `${this.rt}.${this.probeCtx === 'sql' ? this.q : ''}${pos ? 'c' : 'n'}(${d},${i},`);
@@ -503,7 +503,7 @@ class Instrumenter {
 
   private tokenOr(j: number, end: number, d: number, conds: Condition[], pos: boolean): CondNode {
     const [node, k] = this.pLogic('or', j, end, d, conds, pos);
-    if (k !== end) throw new ParseError(`Bedingung nicht vollständig verstanden bei "${this.t[k].text}"`, this.t[k].line);
+    if (k !== end) throw new ParseError(`Condition not fully understood at "${this.t[k].text}"`, this.t[k].line);
     return node;
   }
 
@@ -528,19 +528,19 @@ class Instrumenter {
   }
 
   private pPrimary(j: number, end: number, d: number, conds: Condition[], pos: boolean): [CondNode, number] {
-    if (j >= end) throw new ParseError('Operand fehlt in Bedingung', this.t[Math.min(j, this.t.length - 1)].line);
+    if (j >= end) throw new ParseError('Operand missing in condition', this.t[Math.min(j, this.t.length - 1)].line);
     if (this.t[j].up === '(' && this.t[j].kind === 'op') {
       const m = this.match[j];
-      if (m < 0) throw new ParseError('Schließende Klammer fehlt', this.t[j].line);
+      if (m < 0) throw new ParseError('Closing parenthesis missing', this.t[j].line);
       const after = this.upAt(m + 1);
       if (m < end && (m + 1 === end || after === 'AND' || after === 'OR') && this.groupIsBoolean(j + 1, m)) {
         const [n, k] = this.pLogic('or', j + 1, m, d, conds, pos);
-        if (k !== m) throw new ParseError('Klammerausdruck nicht verstanden', this.t[k].line);
+        if (k !== m) throw new ParseError('Parenthesized expression not understood', this.t[k].line);
         return [n, m + 1];
       }
     }
     const k = this.atomEnd(j, end);
-    if (k === j) throw new ParseError(`Operand fehlt vor "${this.t[k].text}"`, this.t[k].line);
+    if (k === j) throw new ParseError(`Operand missing before "${this.t[k].text}"`, this.t[k].line);
     return [this.atom(j, k, d, conds, pos), k];
   }
 
@@ -609,11 +609,11 @@ class Instrumenter {
       if (u !== 'CASE') continue;
       const cl = stack[stack.length - 1];
       const c = cases.get(k);
-      const skip = ctx !== 'sql' ? '' : !this.opts.sqlProbes ? 'CASE-Ausdruck in SQL: Messung erst ab Oracle 23ai/26ai möglich'
-        : !SQL_SAFE_CLAUSES.has(cl) ? `CASE in ${cl.toUpperCase()}-Klausel bewusst nicht gemessen (würde den Ausführungsplan verändern)`
-        : cl === 'select' && hasGroupBy ? 'CASE in Abfrage mit GROUP BY oder DISTINCT … ORDER BY nicht gemessen (Ausdrücke müssen identisch bleiben)' : '';
+      const skip = ctx !== 'sql' ? '' : !this.opts.sqlProbes ? 'CASE expression in SQL: measurable only from Oracle 23ai/26ai on'
+        : !SQL_SAFE_CLAUSES.has(cl) ? `CASE in ${cl.toUpperCase()} clause deliberately not measured (would change the execution plan)`
+        : cl === 'select' && hasGroupBy ? 'CASE in query with GROUP BY or DISTINCT … ORDER BY not measured (expressions must stay identical)' : '';
       if (skip || !c) {
-        this.gap(tk.line, skip || 'CASE-Ausdruck nicht verstanden, nicht gemessen');
+        this.gap(tk.line, skip || 'CASE expression not understood, not measured');
         continue;
       }
       if (this.upAt(k + 1) === 'WHEN') this.caseExpr(c, ctx, cl);
@@ -638,7 +638,7 @@ class Instrumenter {
         return;
       }
     }
-    c.branches.push(this.br('ELSE (implizit → NULL)', this.t[n.b - 1], { derived: { decision: last!.id, outcome: 'notT' } }));
+    c.branches.push(this.br('ELSE (implicit → NULL)', this.t[n.b - 1], { derived: { decision: last!.id, outcome: 'notT' } }));
   }
 
   /** CASE x WHEN v THEN r …: a branch probe in front of every result, also for the implicit ELSE. */
@@ -679,7 +679,7 @@ class Instrumenter {
     const endTok = this.t[n.b - 1];
     const id = this.ids.branch++;
     this.ins(endTok.start, `else case when ${rt}.${bt}(${id}) then null else ${copy} end `);
-    c.branches.push(this.br('ELSE (implizit → NULL)', endTok, { probe: id }));
+    c.branches.push(this.br('ELSE (implicit → NULL)', endTok, { probe: id }));
   }
 
   // ------------------------------------------------------------------ edits

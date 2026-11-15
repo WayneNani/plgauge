@@ -59,8 +59,8 @@ test('simple CASE expressions, FOR filters (21c) and compound triggers: measured
   const body = `package body plgauge_constructs is
   function word(n number) return varchar2 is
   begin
-    return case n when 1 then 'eins' when 2 then 'zwei' else 'viel' end
-        || case mod(n, 2) when 0 then '/gerade' end;
+    return case n when 1 then 'one' when 2 then 'two' else 'many' end
+        || case mod(n, 2) when 0 then '/even' end;
   end;
   function in_sql(n number) return varchar2 is
     r varchar2(20);
@@ -95,7 +95,7 @@ end;`;
   end before each row;
   after statement is
   begin
-    if g_rows > 5 then raise_application_error(-20001, 'zu viele'); end if;
+    if g_rows > 5 then raise_application_error(-20001, 'too many'); end if;
   end after statement;
 end plgauge_constructs_trg;`;
   try {
@@ -111,7 +111,7 @@ end plgauge_constructs_trg;`;
     await conn.execute(`create or replace ${trigger}`);
     const expected = await check();
     // update fires the trigger: 1 inserted as 10, updated to 2 + 1 = 3; filters: 3 6 9, then 1 2 3
-    assert.equal(expected, 'eins,a;zwei/gerade,b;viel,-;viel/gerade,-;3369.1.2.3');
+    assert.equal(expected, 'one,a;two/even,b;many,-;many/even,-;3369.1.2.3');
 
     const ids = newIds();
     const rb = instrument(body, m![1].toUpperCase(), ids, { sqlProbes: true });

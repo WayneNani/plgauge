@@ -22,8 +22,6 @@ An example report is in [`examples/order_pricing/report/index.html`](../../examp
 
 ![Coverage report of the order_pricing example](../../docs/images/coverage-report.png)
 
-The HTML report and the CLI messages are in German.
-
 ## What line coverage misses: the demo
 
 The same test suite (10 utPLSQL tests), measured on Oracle AI Database 26ai Free (23.26):
@@ -37,7 +35,7 @@ The same test suite (10 utPLSQL tests), measured on Oracle AI Database 26ai Free
   `if p_weight_kg > 20 then … end if;` (a single line) was never TRUE. The profiler counts a line as soon as
   its condition is evaluated.
 - **MC/DC** finds missing test cases and proposes them concretely. The report shows, for example,
-  „`p_vip` = WAHR, `p_amount > 1000` = FALSCH → Ergebnis FALSCH“ (`p_vip` TRUE, `p_amount > 1000` FALSE, outcome FALSE).
+  "`p_vip` = TRUE, `p_amount > 1000` = FALSE → result FALSE".
 - **`archive_orders`:** the exception handler is marked with `pragma coverage('NOT_FEASIBLE')`. plgauge excludes it;
   utPLSQL counts it as not covered.
 - All 10 tests give the same result with and without instrumentation.
@@ -280,7 +278,7 @@ npm run typecheck
 - **Not measured:** dynamic SQL (the `EXECUTE IMMEDIATE` statement itself counts), code encrypted with `wrap`, and
   trigger `WHEN` clauses (Oracle allows no PL/SQL calls there; whether the body ran shows in its first statement).
   CASE expressions in conditions and in loop bounds are not measured either. The report lists such places under
-  „Nicht gemessen“ (not measured).
+  "Not measured".
 - **Measured** (listed here for clarity):
   - compound triggers: each timing point is treated like a block;
   - simple `CASE x WHEN …` expressions: a branch probe before each result,

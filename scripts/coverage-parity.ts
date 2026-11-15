@@ -52,24 +52,24 @@ for (const dir of dirs) {
       const src = preprocess(u.text);
       const id = `${u.file}:${u.line} ${u.kind} ${u.name}`;
       if (write) {
-        try { out.push(`${id}\t${hash(legacy!(src, 'C', newIds(), { sqlProbes: true }))}`); } catch (e) { out.push(`${id}\tFEHLER ${(e as Error).message}`); }
+        try { out.push(`${id}\t${hash(legacy!(src, 'C', newIds(), { sqlProbes: true }))}`); } catch (e) { out.push(`${id}\tERROR ${(e as Error).message}`); }
         continue;
       }
       let got: string;
-      try { got = hash(instrument(src, 'C', newIds(), { sqlProbes: true })); } catch (e) { got = `FEHLER ${(e as Error).message}`; }
+      try { got = hash(instrument(src, 'C', newIds(), { sqlProbes: true })); } catch (e) { got = `ERROR ${(e as Error).message}`; }
       out.push(`${id}\t${got}`);
       const exp = want.get(id);
-      if (exp === undefined) { shown.push(`neu im Korpus: ${id}`); continue; }
+      if (exp === undefined) { shown.push(`new in corpus: ${id}`); continue; }
       if (exp === got) same++;
-      else if (exp.startsWith('FEHLER')) { oldFail++; shown.push(`nur neu ok: ${id}`); }
-      else if (got.startsWith('FEHLER')) { newFail++; shown.push(`nur alt ok: ${id}: ${got}`); }
-      else { diff++; shown.push(`verschieden: ${id}`); }
+      else if (exp.startsWith('ERROR')) { oldFail++; shown.push(`only new ok: ${id}`); }
+      else if (got.startsWith('ERROR')) { newFail++; shown.push(`only old ok: ${id}: ${got}`); }
+      else { diff++; shown.push(`different: ${id}`); }
     }
   }
 }
 if (write || accept) {
   writeFileSync(BASE, out.join('\n') + '\n');
-  console.log(`${out.length} Einheiten nach ${BASE} geschrieben`);
+  console.log(`${out.length} units written to ${BASE}`);
   process.exit(0);
 }
 console.log(JSON.stringify({ same, diff, oldFail, newFail }));

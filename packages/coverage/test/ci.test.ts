@@ -10,7 +10,7 @@ import {
 } from '@plgauge/coverage';
 
 // "CREATE OR REPLACE" on line 2 of the file, the unit keyword on line 3: ALL_SOURCE line 1 = file line 3
-const SRC = `-- Kopf
+const SRC = `-- Header
 CREATE OR REPLACE
 PACKAGE BODY p AS
   PROCEDURE q(a NUMBER) IS
@@ -35,7 +35,7 @@ const exp = (hitsThen: number, tests: number[]): CoverageExport => ({
     statements: [{ line: 4, endLine: 6, hits: 2, tests }, { line: 5, endLine: 5, hits: hitsThen, tests: hitsThen ? tests : [] }],
     branches: [
       { line: 4, col: 5, label: 'THEN', kind: 'if', hits: hitsThen, tests: hitsThen ? tests : [], construct: 1, condition: { line: 4, col: 8, endLine: 4, endCol: 13 } },
-      { line: 6, col: 5, label: 'ELSE (implizit)', kind: 'if', hits: 2 - hitsThen, tests, construct: 1, condition: { line: 4, col: 8, endLine: 4, endCol: 13 } },
+      { line: 6, col: 5, label: 'ELSE (implicit)', kind: 'if', hits: 2 - hitsThen, tests, construct: 1, condition: { line: 4, col: 8, endLine: 4, endCol: 13 } },
     ],
     conditions: [{ decision: 1, index: 1, text: 'a > 0', context: 'plsql', range: { line: 4, col: 8, endLine: 4, endCol: 13 }, tests: { T: [], F: tests, N: [] }, t: hitsThen, f: 2 - hitsThen, n: 0, mcdc: 'na' }],
     notMeasured: [],
@@ -83,7 +83,7 @@ test('ci: merging adds hits and joins test lists; thresholds read the merged hit
   assert.deepEqual(quotas(m).branch, { covered: 2, total: 2 });
   assert.deepEqual(checkQuotas(m, { stmt: 100, branch: 100 }), []);
   assert.deepEqual(checkQuotas(a, { branch: 80 }), ['Branches: 50.0 % < 80 % (1/2)']);
-  assert.throws(() => mergeExports([a, { ...b, objects: [{ ...b.objects[0], rawSha256: 'y' }] }]), /verschiedener Quelltext/);
+  assert.throws(() => mergeExports([a, { ...b, objects: [{ ...b.objects[0], rawSha256: 'y' }] }]), /different source/);
 });
 
 test('ci: diff mode keeps what touches changed lines', () => {
@@ -93,5 +93,5 @@ test('ci: diff mode keeps what touches changed lines', () => {
   const r = restrictToChanged(exp(0, [0]), map, diff);
   assert.deepEqual(r.objects[0].statements!.map((s) => s.line), [5]); // x := 1 (file line 7)
   assert.equal(r.objects[0].branches.length, 0);
-  assert.deepEqual(checkQuotas(r, { stmt: 100 }), ['Anweisungen: 0.0 % < 100 % (0/1)']);
+  assert.deepEqual(checkQuotas(r, { stmt: 100 }), ['Statements: 0.0 % < 100 % (0/1)']);
 });

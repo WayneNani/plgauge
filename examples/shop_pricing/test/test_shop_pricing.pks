@@ -1,35 +1,35 @@
 CREATE OR REPLACE PACKAGE test_shop_pricing AS
-  --%suite(Preise im Shop)
+  --%suite(Shop prices)
 
-  --%test(Rabatt über der Grenze)
-  PROCEDURE rabatt_ueber_grenze;
-  --%test(Kein Rabatt unter der Grenze)
-  PROCEDURE kein_rabatt_unter_grenze;
-  --%test(Express kostet 15)
+  --%test(Discount above the threshold)
+  PROCEDURE discount_above_threshold;
+  --%test(No discount below the threshold)
+  PROCEDURE no_discount_below_threshold;
+  --%test(Express costs 15)
   PROCEDURE express;
-  --%test(Kleine Bestellung kostet Versand)
-  PROCEDURE versand_klein;
-  --%test(Endpreis lehnt null ab)
+  --%test(A small order pays shipping)
+  PROCEDURE shipping_small_order;
+  --%test(Final price rejects null)
   --%throws(-20001)
-  PROCEDURE endpreis_null;
-  --%test(Endpreis für eine große Bestellung)
-  PROCEDURE endpreis_gross;
-  --%test(Buchung legt eine Zeile an)
-  PROCEDURE buche_legt_an;
-  --%test(Probestorno löscht die Bestellung)
-  PROCEDURE storno_probe;
-  --%test(Unbekannter Kunde hat keinen Umsatz)
-  PROCEDURE umsatz_unbekannt;
-  --%test(Umsatz über zwei Bestellungen)
-  PROCEDURE umsatz_zwei;
-  --%test(Treuepunkte für vier Bestellungen)
-  PROCEDURE treuepunkte_vier;
-  --%test(Anteil am Ganzen 0 wirft)
+  PROCEDURE final_price_null;
+  --%test(Final price of a large order)
+  PROCEDURE final_price_large;
+  --%test(Placing an order inserts a row)
+  PROCEDURE place_order_inserts;
+  --%test(A trial cancellation deletes the order)
+  PROCEDURE trial_cancel;
+  --%test(An unknown customer has no revenue)
+  PROCEDURE revenue_unknown_customer;
+  --%test(Revenue over two orders)
+  PROCEDURE revenue_two_orders;
+  --%test(Loyalty points for four orders)
+  PROCEDURE loyalty_points_four;
+  --%test(Ratio of a whole of 0 raises)
   --%throws(-20002)
-  PROCEDURE anteil_null;
-  --%test(Bestellnummer aus langer ID)
-  PROCEDURE bestellnummer_lang;
-  --%test(Raten mit Rest)
-  PROCEDURE raten_mit_rest;
+  PROCEDURE ratio_zero_whole;
+  --%test(Order number from a long ID)
+  PROCEDURE order_number_long_id;
+  --%test(Installments with a remainder)
+  PROCEDURE installments_with_rest;
 END test_shop_pricing;
 /
