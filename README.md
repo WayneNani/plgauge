@@ -75,10 +75,13 @@ Open the `index.html` files in a browser. The mutation run also lists its surviv
 like this:
 
 ```text
-  SURVIVED    shop_pricing.pkb:44  ROR  storniere  p_modus = 'final' → TRUE
+Other:
+  SURVIVED    shop_pricing.pkb:6  ROR  discount  p_amount >= c_discount_threshold → p_amount > c_discount_threshold
+  SURVIVED    shop_pricing.pkb:44  ROR  cancel_order  p_mode = 'final' → TRUE
+  …
 
-81 Mutanten: KILLED 58, SURVIVED 17, NOT_COVERED 1, TIMEOUT 5
-Mutation Score 77.8 % · 14 Tests · Baseline 95ms · Laufzeit 20.543s
+81 mutants: KILLED 59, SURVIVED 17, NOT_COVERED 1, TIMEOUT 4
+Mutation Score 77.8 % · 14 Tests · Baseline 77ms · run time 19.929s
 ```
 
 When you are done, remove the database with `docker rm -f plgauge-db` (or `podman rm -f plgauge-db`).
