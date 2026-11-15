@@ -605,6 +605,10 @@ class Worker {
     } finally {
       this.inTests = false;
     }
+    // a test may have left CURRENT_SCHEMA switched (a mutant made it skip the switch back): the
+    // run's packages are found in the run's schema only
+    const home = await this.currentSchema();
+    await this.test.conn.execute(`alter session set current_schema = "${home.replace(/"/g, '""')}"`).catch(() => {});
     stopped();
     if (r.killed || (!r.timedOut && lostConnection(r.err))) await this.reconnectTest();
     return r;
