@@ -1,43 +1,43 @@
 #!/usr/bin/env -S npx tsx
 /**
- * pltest – coverage and mutation testing for PL/SQL
+ * plgauge – coverage and mutation testing for PL/SQL
  *
- *   pltest coverage --config plcov.json [--out report]  measure coverage, write report ("run" is the old name)
- *   pltest coverage [dir] --db oracle://…               same for a project with pltest.json/plmut.json (its units, its tests)
- *   pltest instrument <file.sql> [--no-sql]             print instrumented source (offline)
- *   pltest deploy <file.sql ...> --config plcov.json    run SQL*Plus-style scripts (demo setup)
- *   pltest report <coverage.json> [--mutation run.json] re-render HTML from saved JSON; with mutation results: joint report
- *   pltest export <coverage.json> [--format F] [--src dir] [--out file]
+ *   plgauge coverage --config plcov.json [--out report]  measure coverage, write report ("run" is the old name)
+ *   plgauge coverage [dir] --db oracle://…               same for a project with plgauge.json/plmut.json (its units, its tests)
+ *   plgauge instrument <file.sql> [--no-sql]             print instrumented source (offline)
+ *   plgauge deploy <file.sql ...> --config plcov.json    run SQL*Plus-style scripts (demo setup)
+ *   plgauge report <coverage.json> [--mutation run.json] re-render HTML from saved JSON; with mutation results: joint report
+ *   plgauge export <coverage.json> [--format F] [--src dir] [--out file]
  *                                                       exchange format plcov-coverage/1 (json) or for CI:
  *                                                       cobertura, sonar, lcov, junit; --src maps objects to files
- *   pltest merge a.json b.json … --out merged.json      merge runs (plcov-coverage/1)
- *   pltest check <coverage.json|run.json> --min-stmt N --min-branch N --min-cond N --min-mcdc N --min-score N
+ *   plgauge merge a.json b.json … --out merged.json      merge runs (plcov-coverage/1)
+ *   plgauge check <coverage.json|run.json> --min-stmt N --min-branch N --min-cond N --min-mcdc N --min-score N
  *                                                       CI thresholds; exit code 3 if one is missed
- *   pltest corpus <dir ...> [--db plcov.json]           robustness check on a corpus of PL/SQL files
- *   pltest restore --config plcov.json [--list]         put back code left changed by a killed run (journal)
- *   pltest mutate run [dir] [--mode schema|naive] …     mutation testing of a project with pltest.json
+ *   plgauge corpus <dir ...> [--db plcov.json]           robustness check on a corpus of PL/SQL files
+ *   plgauge restore --config plcov.json [--list]         put back code left changed by a killed run (journal)
+ *   plgauge mutate run [dir] [--mode schema|naive] …     mutation testing of a project with plgauge.json
  *        --diff origin/main                             only mutants on lines changed since the merge base (also coverage, check)
- *   pltest mutate points|schema [dir]                   list mutants / print the schema rewrite (offline)
- *   pltest mutate compare a.json b.json                 compare two runs (also against the Go plmut)
- *   pltest crosscheck --coverage c.json --mutation m.json  recording run of the mutation against measured coverage
+ *   plgauge mutate points|schema [dir]                   list mutants / print the schema rewrite (offline)
+ *   plgauge mutate compare a.json b.json                 compare two runs (also against the Go plmut)
+ *   plgauge crosscheck --coverage c.json --mutation m.json  recording run of the mutation against measured coverage
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import {
   changedLines, connect, currentSchema, restoreJournal, ensureJournal, firstLine, journalEntries, journalForget, lockRun, preprocess, quoteIdent as qi, RUN_LOCK, splitScript,
   type ConnectConfig,
-} from '@pltest/core';
+} from '@plgauge/core';
 import {
   checkQuotas, instrument, mergeExports, newIds, quotas, restrictToChanged, runCoverage, runCorpus, sourceMap, sqlFiles, toCobertura,
   toCoverageExport, toJunit,
   toLcov, toSonar, type CoverageExport, type QuotaKey, type RunConfig, type RunReport,
-} from '@pltest/coverage';
-import { renderHtml } from '@pltest/report';
+} from '@plgauge/coverage';
+import { renderHtml } from '@plgauge/report';
 import {
   buildSchema, compare, CoverageIndex, crossCheck, crossCheckText, htmlReport, jsonReport, mutationTestingReport, parseDbUrl,
   loadConfig as loadProject, mutateFiles, projectCoverageConfig, projectMutants, runMutation, switchable, textReport,
   type LinkedResult, type Point,
-} from '@pltest/mutation';
+} from '@plgauge/mutation';
 
 const args = process.argv.slice(2);
 const cmd = args.shift();
@@ -101,7 +101,7 @@ function scoreGate(results: { status: string }[], min: number | undefined, abort
 function loadConfig(path: string | undefined): RunConfig {
   if (!path) throw new Error('--config fehlt');
   const cfg = JSON.parse(readFileSync(path, 'utf8')) as RunConfig;
-  cfg.password = process.env.PLTEST_PASSWORD ?? process.env.PLCOV_PASSWORD ?? cfg.password;
+  cfg.password = process.env.PLGAUGE_PASSWORD ?? process.env.PLCOV_PASSWORD ?? cfg.password;
   return cfg;
 }
 
@@ -139,7 +139,7 @@ async function main() {
       enforce(checkQuotas(exp, th.cov));
       // changed code left in the schema: always a failure (set after the gate above)
       if (report.unrestored) {
-        console.error(`FEHLER: ${report.unrestored} Objekte nicht wiederhergestellt: pltest restore`);
+        console.error(`FEHLER: ${report.unrestored} Objekte nicht wiederhergestellt: plgauge restore`);
         process.exitCode = 1;
       }
       break;
@@ -302,7 +302,7 @@ async function main() {
         for (const su of buildSchema(mutants, new Set(), naive)) process.stdout.write(`-- ${su.key}\n${su.text}\n/\n`);
         break;
       }
-      if (sub !== 'run') throw new Error('Verwendung: pltest mutate run|points|schema|compare …');
+      if (sub !== 'run') throw new Error('Verwendung: plgauge mutate run|points|schema|compare …');
       const rep = await runMutation({
         dir, dbUrls: db.split(',').filter(Boolean), ops: opSet, timeoutFactor: factor, mode, skipInstall, diff,
         resetCmd, sample: sampleN, seed, log: quiet ? undefined : (m) => console.error(m), confirm: !noConfirm,
@@ -321,10 +321,10 @@ async function main() {
     case 'crosscheck': {
       const cov = opt('coverage');
       const mut = opt('mutation');
-      if (!cov || !mut) throw new Error('Verwendung: pltest crosscheck --coverage plcov-coverage.json --mutation run.json');
+      if (!cov || !mut) throw new Error('Verwendung: plgauge crosscheck --coverage plcov-coverage.json --mutation run.json');
       const idx = new CoverageIndex(JSON.parse(readFileSync(cov, 'utf8')) as CoverageExport);
       const res = (JSON.parse(readFileSync(mut, 'utf8')).results ?? []) as LinkedResult[];
-      if (!res.some((r) => r.coveredBy)) throw new Error('Mutationslauf ohne aufgezeichnete Tests (Schema-Modus von pltest nötig)');
+      if (!res.some((r) => r.coveredBy)) throw new Error('Mutationslauf ohne aufgezeichnete Tests (Schema-Modus von plgauge nötig)');
       const c = crossCheck(res, idx);
       process.stdout.write(crossCheckText(c));
       if (c.contradictions.length) process.exitCode = 1;
@@ -367,10 +367,10 @@ async function main() {
             const logoff = (await conn.execute<[number]>(`select count(*) from all_triggers where owner = :o and trigger_name = 'COV$_LOGOFF'`, { o: home })).rows?.[0]?.[0] ?? 0;
             if (!entries.length && !logoff) {
               console.error('Journal leer: kein Objekt ist verändert.');
-              // a coverage run of another schema keeps its journal there (pltest restore --config …)
+              // a coverage run of another schema keeps its journal there (plgauge restore --config …)
               if (fromUrls) {
-                const other = await conn.execute<[string]>(`select owner from all_tables where table_name = 'PLTEST_JOURNAL' and owner not in (user, :h, :s)`, { h: home, s: session }).catch(() => ({ rows: [] as [string][] }));
-                for (const [o] of other.rows ?? []) console.error(`  Hinweis: auch Schema ${o} hat ein Journal (ein Coverage-Lauf dort: pltest restore --config …)`);
+                const other = await conn.execute<[string]>(`select owner from all_tables where table_name = 'PLGAUGE_JOURNAL' and owner not in (user, :h, :s)`, { h: home, s: session }).catch(() => ({ rows: [] as [string][] }));
+                for (const [o] of other.rows ?? []) console.error(`  Hinweis: auch Schema ${o} hat ein Journal (ein Coverage-Lauf dort: plgauge restore --config …)`);
               }
               continue;
             }
@@ -410,7 +410,7 @@ async function main() {
       break;
     }
     default:
-      console.error('Verwendung: pltest coverage|mutate|report|export|merge|check|crosscheck|instrument|deploy|corpus|restore …  (siehe README.md)');
+      console.error('Verwendung: plgauge coverage|mutate|report|export|merge|check|crosscheck|instrument|deploy|corpus|restore …  (siehe README.md)');
       process.exitCode = 2;
   }
 }

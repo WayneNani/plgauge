@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
 # Starts Oracle AI Database Free (23ai/26ai, gvenzl image), installs utPLSQL 3.2.2 and creates
-# an application user with the rights pltest needs. For CI jobs and local setups.
+# an application user with the rights plgauge needs. For CI jobs and local setups.
 #
-#   ci/setup-db.sh                      # container "pltest-db" on port 1521, user "app"
-#   PLTEST_PORT=15299 PLTEST_NAME=x PLTEST_USER=demo ci/setup-db.sh
+#   ci/setup-db.sh                      # container "plgauge-db" on port 1521, user "app"
+#   PLGAUGE_PORT=15299 PLGAUGE_NAME=x PLGAUGE_USER=demo ci/setup-db.sh
 #
-# Prints the connection URL for pltest (oracle://user:pw@host:port/FREEPDB1) as the last line.
-# Passwords are generated unless ORACLE_PASSWORD / PLTEST_PASSWORD are set; in GitHub Actions
+# Prints the connection URL for plgauge (oracle://user:pw@host:port/FREEPDB1) as the last line.
+# Passwords are generated unless ORACLE_PASSWORD / PLGAUGE_PASSWORD are set; in GitHub Actions
 # mask them with ::add-mask:: (done below when GITHUB_ACTIONS is set).
 set -euo pipefail
-NAME=${PLTEST_NAME:-pltest-db}
-PORT=${PLTEST_PORT:-1521}
-APP=${PLTEST_USER:-app}
-IMAGE=${PLTEST_IMAGE:-docker.io/gvenzl/oracle-free:23-slim}
-UTPLSQL=${PLTEST_UTPLSQL:-v3.2.2}
+NAME=${PLGAUGE_NAME:-plgauge-db}
+PORT=${PLGAUGE_PORT:-1521}
+APP=${PLGAUGE_USER:-app}
+IMAGE=${PLGAUGE_IMAGE:-docker.io/gvenzl/oracle-free:23-slim}
+UTPLSQL=${PLGAUGE_UTPLSQL:-v3.2.2}
 pw() { head -c18 /dev/urandom | base64 | tr -dc A-Za-z0-9 | head -c 16; }
 ORACLE_PASSWORD=${ORACLE_PASSWORD:-$(pw)}
-APP_PASSWORD=${PLTEST_PASSWORD:-$(pw)}
+APP_PASSWORD=${PLGAUGE_PASSWORD:-$(pw)}
 UT3_PASSWORD=$(pw)
 if [ -n "${GITHUB_ACTIONS:-}" ]; then echo "::add-mask::$ORACLE_PASSWORD"; echo "::add-mask::$APP_PASSWORD"; echo "::add-mask::$UT3_PASSWORD"; fi
 

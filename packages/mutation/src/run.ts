@@ -21,8 +21,8 @@ import oracledb from 'oracledb';
 import {
   dbIdent, ensureJournal, journalEntries, loadObject, restoreJournal, lockRun, RUN_LOCK, objectErrors, replaceSourceDetailed, restoreAll, runScript, sha256, splitScript, touches,
   type ChangedLines, type SourceObject,
-} from '@pltest/core';
-import type { CoverageExport } from '@pltest/coverage';
+} from '@plgauge/core';
+import type { CoverageExport } from '@plgauge/coverage';
 import { CoverageIndex, unitLineOf } from './link.js';
 import { expand, mutatedUnit, objectName, objectOwner, unitKey, withoutCreate, withoutLeadingComments, type Mutant, type Point } from './mutant.js';
 import { findPoints } from './find.js';
@@ -115,9 +115,9 @@ export interface Report {
   unrestored?: string[];
 }
 
-/** The project file: pltest.json, or plmut.json from before the merge. */
+/** The project file: plgauge.json, or plmut.json from before the merge. */
 export function loadConfig(dir: string): Config {
-  const file = existsSync(join(dir, 'pltest.json')) ? 'pltest.json' : 'plmut.json';
+  const file = existsSync(join(dir, 'plgauge.json')) ? 'plgauge.json' : 'plmut.json';
   const c = JSON.parse(readFileSync(join(dir, file), 'utf8')) as Partial<Config>;
   return { install: c.install ?? [], mutate: c.mutate ?? [], tests: c.tests ?? [] };
 }
@@ -223,9 +223,9 @@ class Worker {
       await c.close().catch(() => {});
       // held before: someone else has it now (a session of ours the server has not cleaned up
       // cannot be told apart; stopping is the safe side)
-      if (this.held && (e as Error).message.includes('anderer pltest-Lauf')) {
+      if (this.held && (e as Error).message.includes('anderer plgauge-Lauf')) {
         this.foreign = true;
-        this.run.abort ??= `Laufsperre${this.name} an einen anderen Lauf verloren (oder die alte Sitzung hält sie noch); geänderter Code bleibt im Journal: pltest restore, sobald die Sperre frei ist`;
+        this.run.abort ??= `Laufsperre${this.name} an einen anderen Lauf verloren (oder die alte Sitzung hält sie noch); geänderter Code bleibt im Journal: plgauge restore, sobald die Sperre frei ist`;
         this.logf(`FEHLER${this.name}: ${this.run.abort}, Lauf wird abgebrochen`);
       }
       throw e;
@@ -331,7 +331,7 @@ class Worker {
       // an original that did not go back (a session of the dead run still holds the unit, say):
       // this run would take the changed code for the original and lose the true one at its end
       const still = await journalEntries(c);
-      if (still.length) throw new Error(`${still.length} Objekte eines abgebrochenen Laufs ließen sich nicht wiederherstellen (${still.map((e) => e.name).join(', ')}); erst pltest restore`);
+      if (still.length) throw new Error(`${still.length} Objekte eines abgebrochenen Laufs ließen sich nicht wiederherstellen (${still.map((e) => e.name).join(', ')}); erst plgauge restore`);
     } finally {
       await c.close().catch(() => {});
     }
@@ -1218,7 +1218,7 @@ export async function runMutation(opt: Options): Promise<Report> {
   opt.dbUrls.forEach((u, i) => run.workers.push(new Worker(u, opt.dbUrls.length > 1 ? ` w${i + 1}` : '', run)));
   let report: Report | undefined;
   const onSig = () => {
-    if (run.interrupted) return run.logf('Die Originale werden gerade wiederhergestellt, bitte warten (sonst: pltest restore)');
+    if (run.interrupted) return run.logf('Die Originale werden gerade wiederhergestellt, bitte warten (sonst: plgauge restore)');
     run.interrupted = true;
     run.logf('Abbruch angefordert, stelle Originale wieder her …');
     // test calls in flight end now (a CI cancel kills the process a few seconds later)
@@ -1270,7 +1270,7 @@ export async function runMutation(opt: Options): Promise<Report> {
     // (the lock lost while restoring: the report must not look complete)
     if (report && run.abort && !report.aborted) report.aborted = run.abort;
     if (left.length) {
-      const msg = `FEHLER: Originale nicht wiederhergestellt (${left.join('; ')}); geänderter Code steht im Journal: pltest restore`;
+      const msg = `FEHLER: Originale nicht wiederhergestellt (${left.join('; ')}); geänderter Code steht im Journal: plgauge restore`;
       (opt.log ?? console.error)(msg);
       if (report) report.unrestored = left;
     }
@@ -1524,7 +1524,7 @@ async function explain(w: Worker, owner: string, name: string): Promise<{ rows: 
   const c = await oracledb.getConnection(w.db);
   // PLAN_TABLE may be a table of the schema rather than the session's temporary one: an ID of
   // its own, and the rows go with the rollback at close (never committed)
-  const id = `pltest${randomUUID().slice(0, 8)}`;
+  const id = `plgauge${randomUUID().slice(0, 8)}`;
   try {
     const t0 = performance.now();
     await c.execute(`explain plan set statement_id = '${id}' for select * from "${owner}"."${name}"`);

@@ -4,7 +4,7 @@
  *
  * Every change to a code object goes through `replaceSource`, which records the
  * original in the restore journal first (see journal.ts). A run that dies leaves
- * the journal behind, and `pltest restore` puts the originals back.
+ * the journal behind, and `plgauge restore` puts the originals back.
  */
 import oracledb from 'oracledb';
 import { createHash } from 'node:crypto';
@@ -249,7 +249,7 @@ export interface CompileOutcome {
   /** Compiled, but a property could not be put back (a trigger's DISABLED status, say). */
   warning?: string;
   /**
-   * Rejected at once, and pltest had not changed the object before: it holds its original, the
+   * Rejected at once, and plgauge had not changed the object before: it holds its original, the
    * journal has no entry for it, nothing to restore.
    */
   untouched?: boolean;
@@ -420,7 +420,7 @@ async function currentCode(conn: oracledb.Connection, obj: Pick<SourceObject, 'o
 
 /**
  * Journal entries a dead run left, back to their originals, unless the unit holds code that is
- * neither pltest's (the fingerprint of what it compiled last) nor carries its marks: then
+ * neither plgauge's (the fingerprint of what it compiled last) nor carries its marks: then
  * someone has put newer work there since, which wins; its entry is dropped with a warning.
  */
 export async function restoreJournal(conn: oracledb.Connection, entries: JournalEntry[], say: (m: string) => void): Promise<number> {
@@ -441,17 +441,17 @@ export async function restoreJournal(conn: oracledb.Connection, entries: Journal
       const sees = dba === undefined && (e.owner === user || e.owner === schema
         || ((await conn.execute<[number]>(`select count(*) from session_privs where privilege in (${any.map(sqlLit).join(', ')})`)).rows?.[0]?.[0] ?? 0) > 0);
       if (dba === 0 || sees) {
-        // pltest never drops an object: someone did since, on purpose
+        // plgauge never drops an object: someone did since, on purpose
         say(`  ✗ ${e.owner}.${e.name} existiert nicht mehr: Journal-Eintrag verworfen, nicht neu angelegt`);
         await journalForget(conn, e.object);
       } else {
-        say(`  ✗ ${e.owner}.${e.name} ist für ${user} nicht sichtbar: Journal-Eintrag bleibt, mit dem Benutzer des Laufs zurückspielen (pltest restore)`);
+        say(`  ✗ ${e.owner}.${e.name} ist für ${user} nicht sichtbar: Journal-Eintrag bleibt, mit dem Benutzer des Laufs zurückspielen (plgauge restore)`);
         hidden++;
       }
       continue;
     }
     // noted before its compile and not settled, or by an older version (other fingerprints): no
-    // comparison possible, the original goes back; pltest's code: the text it was about to
+    // comparison possible, the original goes back; plgauge's code: the text it was about to
     // compile, the one before, or the original itself
     const comparable = e.currentSha?.startsWith('x') && e.pending === 0;
     if (comparable && cur && ![e.currentSha, e.prevSha, codeFingerprint(e.object.type, e.object.original)].includes(cur.sha)

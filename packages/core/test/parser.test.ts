@@ -1,7 +1,7 @@
 /** The core parser: structure, precedence, and the constructs it reads instead of giving up. */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parse, parseUnit, walk, type Node } from '@pltest/core';
+import { parse, parseUnit, walk, type Node } from '@plgauge/core';
 
 /** The tree as a compact string: kind[op](children). */
 function shape(n: Node, tokens: { text: string }[]): string {

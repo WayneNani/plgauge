@@ -149,7 +149,7 @@ Geschäftslogik in statischem SQL hält, hat einen höheren Anteil. Dort lohnt S
 
 In plscope-utils stehen mehr SQL-Zeilen in den 7 Views (1 411) als in den 7 Package Bodies (908). Seit dem Nachtrag
 mutiert das Werkzeug auch `CREATE VIEW`, mit beiden Stufen (Umschaltung: `packages/mutation/README.md`). Die Views
-kommen per Glob in `pltest.json` dazu.
+kommen per Glob in `plgauge.json` dazu.
 
 | | |
 | --- | --- |
@@ -304,7 +304,7 @@ Ein Review von Nachtrag 2 fand zehn Schwächen, ein zweites Review der Korrektur
   `plscope_identifiers`: `test_get_view_source` liest ihren Text.
 - Eigene `statement_id` für `EXPLAIN PLAN`, Schleifenwächter in verdoppelten Schleifen, 256-KB-Grenze für die Kopien
   eines Literals, Aufwärmlauf nur bei Zweigen.
-- **Laufsperre:** Jeder Lauf hält eine Zeilensperre in `PLTEST_LOCK`; ein zweiter Lauf auf demselben Schema bricht ab,
+- **Laufsperre:** Jeder Lauf hält eine Zeilensperre in `PLGAUGE_LOCK`; ein zweiter Lauf auf demselben Schema bricht ab,
   statt den Code des ersten als Rest eines Absturzes zurückzuspielen.
 
 Lauf 17 (alles andere wie Lauf 16): 1 062 s, Score 24,1 % (Lauf 16: 24,0 %). Vier Urteile weichen ab, alle an
@@ -317,7 +317,7 @@ knappe Zeitgrenzen).
 ```bash
 corpus/fetch.sh                                  # plscope-utils nach corpus/.cache
 # Installation pro Datenbank: eval/plscope-utils/README.md
-PLMUT_DB=oracle://plscope_eval:…@…/FREEPDB1,… npx pltest mutate run eval/plscope-utils --json run.json --report run.html
+PLMUT_DB=oracle://plscope_eval:…@…/FREEPDB1,… npx plgauge mutate run eval/plscope-utils --json run.json --report run.html
 npx tsx scripts/eval-summary.ts run.json survivors.tsv
 npx tsx scripts/sql-compile-check.ts db.json corpus/.cache/utplsql-3.2.2/source   # db.json: {user, password, connectString}
 ```

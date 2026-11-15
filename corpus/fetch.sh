@@ -15,7 +15,7 @@ fetch logger         https://github.com/OraOpenSource/Logger.git     600f0c44   
 fetch alexandria     https://github.com/mortenbra/alexandria-plsql-utils.git ada48755  # per-file licences
 fetch pljson         https://github.com/pljson/pljson.git            09a54e4e   # MIT
 fetch console        https://github.com/ogobrecht/console.git        72ff8f85   # MIT
-# added for A5 (larger corpus), pltest
+# added for A5 (larger corpus), plgauge
 fetch utplsql-3.2.2      https://github.com/utPLSQL/utPLSQL.git                  5852e44d   # Apache 2.0
 fetch oos-utils          https://github.com/OraOpenSource/oos-utils.git          b6217292   # MIT
 fetch plex               https://github.com/ogobrecht/plex.git                   3b13e44d   # MIT

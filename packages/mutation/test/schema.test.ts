@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { buildSchema, expand, findPoints, livePlan, locate, mutatedUnit, planDiff, positionOf, type PlanRow, type SourceFile } from '@pltest/mutation';
+import { buildSchema, expand, findPoints, livePlan, locate, mutatedUnit, planDiff, positionOf, type PlanRow, type SourceFile } from '@plgauge/mutation';
 
 function testFile(): SourceFile {
   const src =
@@ -116,7 +116,7 @@ test('schema: SQL points duplicate their statement; errors in a copy drop that v
 });
 
 test('schema: a view block gets one UNION ALL branch per variant; select lists switch in place', () => {
-  const path = join(mkdtempSync(join(tmpdir(), 'pltest-')), 'v.sql');
+  const path = join(mkdtempSync(join(tmpdir(), 'plgauge-')), 'v.sql');
   writeFileSync(path, 'create or replace view v as\n  select a + 1 as b from t where a < 3;\n');
   const ms = expand(findPoints([path]));
   assert.deepEqual(ms.map((m) => `${m.id} ${m.op} ${m.mutated}`), ['1 AOR a - 1', '2 ROR a <= 3', '3 ROR a <> 3', '4 ROR FALSE', '5 WHR TRUE']);
@@ -146,7 +146,7 @@ test('schema: a view block gets one UNION ALL branch per variant; select lists s
 });
 
 test('schema: view points without a block are recorded by the main block (no test that skips it queries the view)', () => {
-  const path = join(mkdtempSync(join(tmpdir(), 'pltest-')), 'r.sql');
+  const path = join(mkdtempSync(join(tmpdir(), 'plgauge-')), 'r.sql');
   writeFileSync(path, 'create view r as\n  with h (n) as (select 1 from dual union all select n + 1 from h where n < 3)\n  select n from h where n > 1;\n');
   const ms = expand(findPoints([path]));
   const loose = ms.filter((m) => !m.point.scope);
@@ -157,7 +157,7 @@ test('schema: view points without a block are recorded by the main block (no tes
 });
 
 test('schema: an ordered view keeps its main query unwrapped; a failing wrapper marks its block broken', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'pltest-'));
+  const dir = mkdtempSync(join(tmpdir(), 'plgauge-'));
   writeFileSync(join(dir, 'o.sql'), 'create view o as\n  with w as (select a from t where a > 1)\n  select a from w where a < 9 order by a;\n');
   const ms = expand(findPoints([join(dir, 'o.sql')]));
   const su = buildSchema(ms, new Set(), new Set(), 'DEMO')[0];
@@ -197,7 +197,7 @@ test('positionOf: offset to line and column in code points', () => {
 });
 
 test('schema: cursor declarations get UNION ALL branches, cursor FOR loops are duplicated, dynamic SQL literals switch in place', () => {
-  const path = join(mkdtempSync(join(tmpdir(), 'pltest-')), 'k.pkb');
+  const path = join(mkdtempSync(join(tmpdir(), 'plgauge-')), 'k.pkb');
   writeFileSync(path, `CREATE OR REPLACE PACKAGE BODY k AS
   PROCEDURE p IS
     CURSOR c IS SELECT a + 1 AS b FROM t WHERE a > 2;
@@ -329,7 +329,7 @@ test('livePlan: dead branches and the schema scaffold drop out; a changed plan s
 });
 
 test('schema: a view whose points all run one by one keeps a recording wrapper; a plain view goes in as written', () => {
-  const path = join(mkdtempSync(join(tmpdir(), 'pltest-')), 'w.sql');
+  const path = join(mkdtempSync(join(tmpdir(), 'plgauge-')), 'w.sql');
   writeFileSync(path, 'create or replace view w as\n  with x as (select a from t where a > 0)\n  select a from x where a < 3;\n');
   const ms = expand(findPoints([path]));
   const all = new Set(ms.map((m) => m.point));

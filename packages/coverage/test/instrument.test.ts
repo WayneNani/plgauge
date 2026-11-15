@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { instrument } from '@pltest/coverage';
-import { analyze } from '@pltest/coverage';
-import { newIds, type Hits } from '@pltest/coverage';
+import { instrument } from '@plgauge/coverage';
+import { analyze } from '@plgauge/coverage';
+import { newIds, type Hits } from '@plgauge/coverage';
 
 const run = (src: string, sqlProbes = true) => instrument(src, 'S', newIds(), { sqlProbes });
 const proc = (body: string, decl = '') => `procedure p(a number, b number, c boolean) is\n${decl}begin\n${body}\nend p;\n`;
@@ -171,7 +171,7 @@ test('regression corpus: tricky boolean structures', () => {
 });
 
 test('offline preprocessor keeps the last $IF branch and every line break', async () => {
-  const { preprocess } = await import('@pltest/core');
+  const { preprocess } = await import('@plgauge/core');
   const src = "begin\n  $if dbms_db_version.version < 12 $then\n  old;\n  $elsif x $then mid;\n  $else\n  new($$plsql_line);\n  $end\n  $error 'nope' $end\nend;\n";
   const out = preprocess(src);
   assert.equal(out.length, src.length);

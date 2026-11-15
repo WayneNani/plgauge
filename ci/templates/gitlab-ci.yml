@@ -1,9 +1,9 @@
-# GitLab CI: PL/SQL tests with coverage and mutation testing (pltest).
-# Copy into .gitlab-ci.yml of a project with pltest.json. Needs a runner with Docker-in-Docker.
+# GitLab CI: PL/SQL tests with coverage and mutation testing (plgauge).
+# Copy into .gitlab-ci.yml of a project with plgauge.json. Needs a runner with Docker-in-Docker.
 # Coverage appears in merge requests (Cobertura), test results as JUnit.
 variables:
-  PLTEST_REPO: https://git.example.com/tools/pltest.git   # adapt
-  PLTEST_REF: main
+  PLGAUGE_REPO: https://git.example.com/tools/plgauge.git   # adapt
+  PLGAUGE_REF: main
   DOCKER_HOST: tcp://docker:2375
   DOCKER_TLS_CERTDIR: ""
   GIT_DEPTH: 0                                             # the diff mode needs the merge base
@@ -15,19 +15,19 @@ plsql:
   timeout: 45 minutes
   before_script:
     - apt-get update -qq && apt-get install -y -qq docker.io >/dev/null
-    - git clone --depth 1 --branch "$PLTEST_REF" "$PLTEST_REPO" /opt/pltest && (cd /opt/pltest && npm ci)
-    - export PLTEST=/opt/pltest/bin/pltest
+    - git clone --depth 1 --branch "$PLGAUGE_REF" "$PLGAUGE_REPO" /opt/plgauge && (cd /opt/plgauge && npm ci)
+    - export PLGAUGE=/opt/plgauge/bin/plgauge
     # the database container runs next to the job: reach it through the dind host
-    - export PLMUT_DB=$(/opt/pltest/ci/setup-db.sh | tail -1 | sed 's/127.0.0.1/docker/')
+    - export PLMUT_DB=$(/opt/plgauge/ci/setup-db.sh | tail -1 | sed 's/127.0.0.1/docker/')
   script:
-    - $PLTEST coverage . --out coverage --min-branch 70 --min-stmt 80
-    - $PLTEST export coverage/coverage.json --format cobertura --src . --out coverage/cobertura.xml
-    - $PLTEST export coverage/coverage.json --format junit --out coverage/junit.xml
+    - $PLGAUGE coverage . --out coverage --min-branch 70 --min-stmt 80
+    - $PLGAUGE export coverage/coverage.json --format cobertura --src . --out coverage/cobertura.xml
+    - $PLGAUGE export coverage/coverage.json --format junit --out coverage/junit.xml
     - |
       if [ -n "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" ]; then
         git fetch -q origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
-        $PLTEST mutate run . --skip-install --diff "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" --json mutation.json --report mutation.html --min-score 60
-        $PLTEST report coverage/coverage.json --mutation mutation.json --out joint
+        $PLGAUGE mutate run . --skip-install --diff "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" --json mutation.json --report mutation.html --min-score 60
+        $PLGAUGE report coverage/coverage.json --mutation mutation.json --out joint
       fi
   artifacts:
     when: always

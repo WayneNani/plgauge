@@ -4,10 +4,10 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { parseUnifiedDiff } from '@pltest/core';
+import { parseUnifiedDiff } from '@plgauge/core';
 import {
   checkQuotas, mergeExports, quotas, restrictToChanged, sourceMap, toCobertura, toJunit, toLcov, toSonar, type CoverageExport,
-} from '@pltest/coverage';
+} from '@plgauge/coverage';
 
 // "CREATE OR REPLACE" on line 2 of the file, the unit keyword on line 3: ALL_SOURCE line 1 = file line 3
 const SRC = `-- Kopf
@@ -43,7 +43,7 @@ const exp = (hitsThen: number, tests: number[]): CoverageExport => ({
 });
 
 function files() {
-  const dir = mkdtempSync(join(tmpdir(), 'pltest-'));
+  const dir = mkdtempSync(join(tmpdir(), 'plgauge-'));
   const f = join(dir, 'p.pkb');
   writeFileSync(f, SRC);
   return { dir, f, map: sourceMap([f]) };

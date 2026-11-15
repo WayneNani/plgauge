@@ -1,8 +1,8 @@
 {
-  "name": "@pltest/mutation",
+  "name": "@plgauge/mutation",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "exports": { ".": "./src/index.ts" },
-  "dependencies": {"@pltest/core": "*", "@pltest/coverage": "*", "oracledb": "^26.0.0"}
+  "dependencies": {"@plgauge/core": "*", "@plgauge/coverage": "*", "oracledb": "^26.0.0"}
 }

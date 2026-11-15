@@ -8,9 +8,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import oracledb from 'oracledb';
-import { instrument } from '@pltest/coverage';
-import { newIds } from '@pltest/coverage';
-import { installRuntime } from '@pltest/coverage';
+import { instrument } from '@plgauge/coverage';
+import { newIds } from '@plgauge/coverage';
+import { installRuntime } from '@plgauge/coverage';
 
 const db = process.env.PLCOV_DB;
 const m = db ? /^([^/]+)\/([^@]+)@(.+)$/.exec(db) : null;
@@ -151,15 +151,15 @@ test('several schemas: code of another schema is measured, the runtime stays wit
   const conn = await oracledb.getConnection({ user: m![1], password: m![2], connectString: m![3] });
   const L = lib!.toUpperCase();
   try {
-    await conn.execute(`create or replace package ${L}.pltest_calc is function grade(n number) return varchar2; end;`);
-    await conn.execute(`create or replace package body ${L}.pltest_calc is
+    await conn.execute(`create or replace package ${L}.plgauge_calc is function grade(n number) return varchar2; end;`);
+    await conn.execute(`create or replace package body ${L}.plgauge_calc is
       function grade(n number) return varchar2 is
       begin
         if n >= 90 then return 'A'; elsif n >= 50 then return 'B'; end if;
         return 'C';
       end;
     end;`);
-    await conn.execute(`create or replace package pltest_multi_test is
+    await conn.execute(`create or replace package plgauge_multi_test is
       --%suite
 
       --%test
@@ -167,27 +167,27 @@ test('several schemas: code of another schema is measured, the runtime stays wit
       --%test
       procedure middle;
     end;`);
-    await conn.execute(`create or replace package body pltest_multi_test is
-      procedure top is begin ut.expect(${L}.pltest_calc.grade(95)).to_equal('A'); end;
-      procedure middle is begin ut.expect(${L}.pltest_calc.grade(60)).to_equal('B'); end;
+    await conn.execute(`create or replace package body plgauge_multi_test is
+      procedure top is begin ut.expect(${L}.plgauge_calc.grade(95)).to_equal('A'); end;
+      procedure middle is begin ut.expect(${L}.plgauge_calc.grade(60)).to_equal('B'); end;
     end;`);
-    const { runCoverage } = await import('@pltest/coverage');
+    const { runCoverage } = await import('@plgauge/coverage');
     const r = await runCoverage({
-      user: m![1], password: m![2], connectString: m![3], schema: m![1], schemas: [L], include: '^PLTEST_CALC$',
-      tests: ['pltest_multi_test'], baselineRuns: 1,
+      user: m![1], password: m![2], connectString: m![3], schema: m![1], schemas: [L], include: '^PLGAUGE_CALC$',
+      tests: ['plgauge_multi_test'], baselineRuns: 1,
     }, () => {});
     assert.ok(r.equivalent, 'same results with instrumentation');
-    const o = r.objects.find((x) => x.name === 'PLTEST_CALC')!;
+    const o = r.objects.find((x) => x.name === 'PLGAUGE_CALC')!;
     assert.equal(o.owner, L);
     assert.equal(o.instrumentError, undefined);
     assert.deepEqual(o.metrics.stmt, { covered: 3, total: 4 }); // IF and two RETURNs ran, RETURN 'C' never
     assert.equal(o.lineTests[4]?.length, 2, 'both tests reach the IF');
     // the original code is back
-    const src = await conn.execute<[string]>(`select text from all_source where owner = :o and name = 'PLTEST_CALC' and type = 'PACKAGE BODY' and text like '%cov$%'`, { o: L });
+    const src = await conn.execute<[string]>(`select text from all_source where owner = :o and name = 'PLGAUGE_CALC' and type = 'PACKAGE BODY' and text like '%cov$%'`, { o: L });
     assert.equal(src.rows!.length, 0);
   } finally {
-    await conn.execute(`drop package pltest_multi_test`).catch(() => undefined);
-    await conn.execute(`drop package ${L}.pltest_calc`).catch(() => undefined);
+    await conn.execute(`drop package plgauge_multi_test`).catch(() => undefined);
+    await conn.execute(`drop package ${L}.plgauge_calc`).catch(() => undefined);
     await conn.close();
   }
 });
@@ -201,7 +201,7 @@ test('hits of a scheduler job started by a test are collected under #background'
     return; // nothing to check without the privilege
   }
   try {
-    await conn.execute(`create or replace procedure pltest_bg_work(n number) is
+    await conn.execute(`create or replace procedure plgauge_bg_work(n number) is
       s number := 0;
     begin
       for i in 1 .. n loop
@@ -211,31 +211,31 @@ test('hits of a scheduler job started by a test are collected under #background'
         dbms_output.put_line(s);
       end if;
     end;`);
-    await conn.execute(`create or replace package pltest_bg_test is
+    await conn.execute(`create or replace package plgauge_bg_test is
       --%suite
 
       --%test
       procedure job_runs;
     end;`);
-    await conn.execute(`create or replace package body pltest_bg_test is
+    await conn.execute(`create or replace package body plgauge_bg_test is
       procedure job_runs is
         n number;
       begin
-        dbms_scheduler.create_job(job_name => 'PLTEST_BG_JOB', job_type => 'PLSQL_BLOCK',
-          job_action => 'begin pltest_bg_work(5); end;', enabled => true, auto_drop => true);
+        dbms_scheduler.create_job(job_name => 'PLGAUGE_BG_JOB', job_type => 'PLSQL_BLOCK',
+          job_action => 'begin plgauge_bg_work(5); end;', enabled => true, auto_drop => true);
         for i in 1 .. 60 loop
-          select count(*) into n from user_scheduler_jobs where job_name = 'PLTEST_BG_JOB';
+          select count(*) into n from user_scheduler_jobs where job_name = 'PLGAUGE_BG_JOB';
           exit when n = 0;
           dbms_session.sleep(0.5);
         end loop;
         ut.expect(n).to_equal(0);
       end;
     end;`);
-    const { runCoverage } = await import('@pltest/coverage');
+    const { runCoverage } = await import('@plgauge/coverage');
     const r = await runCoverage({
-      user: m![1], password: m![2], connectString: m![3], schema: m![1], include: '^PLTEST_BG_WORK$', tests: ['pltest_bg_test'], baselineRuns: 1,
+      user: m![1], password: m![2], connectString: m![3], schema: m![1], include: '^PLGAUGE_BG_WORK$', tests: ['plgauge_bg_test'], baselineRuns: 1,
     }, () => {});
-    const o = r.objects.find((x) => x.name === 'PLTEST_BG_WORK')!;
+    const o = r.objects.find((x) => x.name === 'PLGAUGE_BG_WORK')!;
     assert.equal(o.instrumentError, undefined);
     assert.deepEqual(o.metrics.stmt, { covered: 4, total: 4 }, 'the job ran every statement');
     const bg = r.tests.findIndex((t) => t.path === '#background');
@@ -244,9 +244,9 @@ test('hits of a scheduler job started by a test are collected under #background'
     const left = await conn.execute<[number]>(`select count(*) from user_triggers where trigger_name = 'COV$_LOGOFF'`);
     assert.equal(left.rows![0][0], 0, 'logoff trigger removed after the run');
   } finally {
-    await conn.execute(`begin dbms_scheduler.drop_job('PLTEST_BG_JOB', force => true); end;`).catch(() => undefined);
-    await conn.execute(`drop package pltest_bg_test`).catch(() => undefined);
-    await conn.execute(`drop procedure pltest_bg_work`).catch(() => undefined);
+    await conn.execute(`begin dbms_scheduler.drop_job('PLGAUGE_BG_JOB', force => true); end;`).catch(() => undefined);
+    await conn.execute(`drop package plgauge_bg_test`).catch(() => undefined);
+    await conn.execute(`drop procedure plgauge_bg_work`).catch(() => undefined);
     await conn.close();
   }
 });

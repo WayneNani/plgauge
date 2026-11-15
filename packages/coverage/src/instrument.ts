@@ -14,7 +14,7 @@
  * in source order, exactly as by the token parser this replaces (plan phase 3), so the
  * instrumented text is the same byte for byte.
  */
-import { matchParens, parseUnit, ParseFailure, tokenize, type Node, type Token } from '@pltest/core';
+import { matchParens, parseUnit, ParseFailure, tokenize, type Node, type Token } from '@plgauge/core';
 import type {
   Branch, CondNode, Condition, Construct, ConstructKind, Decision, DecisionKind,
   IdCounters, LoopProbe, ObjectMap, Span, StatementProbe,

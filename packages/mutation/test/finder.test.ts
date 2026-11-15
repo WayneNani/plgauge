@@ -7,10 +7,10 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { expand, findPoints, mutatedUnit, switchable, withoutCreate } from '@pltest/mutation';
+import { expand, findPoints, mutatedUnit, switchable, withoutCreate } from '@plgauge/mutation';
 
 function points(src: string, name = 'h.pkb') {
-  const path = join(mkdtempSync(join(tmpdir(), 'pltest-')), name);
+  const path = join(mkdtempSync(join(tmpdir(), 'plgauge-')), name);
   writeFileSync(path, src);
   return findPoints([path]);
 }

@@ -16,7 +16,7 @@ import { readFileSync } from 'node:fs';
 import {
   connect, databaseInfo, dbIdent, firstLine, utInfoContext, restoreJournal, ensureJournal, journalEntries, loadObjects, lockRun, replaceSourceDetailed, restoreAll, RUN_LOCK, runScript, sha256, splitScript,
   runTestsJunit as runTests, suiteTests, tryExecute, type SourceObject, type TestCase, type TestRun,
-} from '@pltest/core';
+} from '@plgauge/core';
 import { instrument } from './instrument.js';
 import { analyze, type ObjectResult } from './analyze.js';
 import { newIds, type Hits, type ObjectMap, type TestHits, type TestInfo } from './model.js';
@@ -53,7 +53,7 @@ export interface RunConfig {
   installScripts?: string[];
 }
 
-export type { TestCase, TestRun } from '@pltest/core';
+export type { TestCase, TestRun } from '@plgauge/core';
 
 export interface RunReport {
   generated: string;
@@ -124,8 +124,8 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       if (down) await c.close().catch(() => {});
       else lock = c;
     } catch (e) {
-      if ((e as Error).message.includes('anderer pltest-Lauf')) foreign = true;
-      throw new Error(`Laufsperre verloren: ${firstLine(e)}${foreign ? ' – schon instrumentierter Code bleibt im Journal: pltest restore, sobald die Sperre frei ist' : ''}`);
+      if ((e as Error).message.includes('anderer plgauge-Lauf')) foreign = true;
+      throw new Error(`Laufsperre verloren: ${firstLine(e)}${foreign ? ' – schon instrumentierter Code bleibt im Journal: plgauge restore, sobald die Sperre frei ist' : ''}`);
     }
   })().finally(() => { checking = undefined; }));
   // the lock confirmed before a change at the end (restore, trigger drop): without it another run
@@ -139,7 +139,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
   const restoreOwn = async (objs: SourceObject[], c: oracledb.Connection = conn) => {
     const mine = new Set(objs.map((o) => `${o.owner}|${o.name}|${o.type}`));
     const n = await restoreJournal(c, (await journalEntries(c)).filter((e) => mine.has(`${e.owner}|${e.name}|${e.type}`)), say);
-    if (n) say(`FEHLER: ${n} Objekte nicht wiederhergestellt, ihr instrumentierter Code steht im Journal: pltest restore`);
+    if (n) say(`FEHLER: ${n} Objekte nicht wiederhergestellt, ihr instrumentierter Code steht im Journal: plgauge restore`);
     return n;
   };
   // the logoff trigger this run created, dropped under a confirmed lock (a run that took the lock
@@ -164,7 +164,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
   let testing = false;
   const onSig = () => {
     if (interrupted) {
-      say('Die Originale werden gerade wiederhergestellt, bitte warten (sonst: pltest restore)');
+      say('Die Originale werden gerade wiederhergestellt, bitte warten (sonst: plgauge restore)');
       return;
     }
     interrupted = true;
@@ -207,7 +207,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       try {
         await restoreJournal(r, left, say);
         const still = await journalEntries(r);
-        if (still.length) throw new Error(`${still.length} Objekte eines abgebrochenen Laufs ließen sich nicht wiederherstellen (${still.map((e) => e.name).join(', ')}); erst pltest restore`);
+        if (still.length) throw new Error(`${still.length} Objekte eines abgebrochenen Laufs ließen sich nicht wiederherstellen (${still.map((e) => e.name).join(', ')}); erst plgauge restore`);
       } finally {
         await r.close().catch(() => {});
       }
@@ -319,7 +319,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     if (!(await confirmed())) {
       // another run may have restored this one's code at its start, maybe while the tests ran
       restore.length = 0;
-      throw new Error('Laufsperre während des Laufs verloren (ein anderer Lauf oder die alte Sitzung hält sie): die Messung ist ungültig, instrumentierter Code bleibt im Journal; pltest restore, sobald die Sperre frei ist');
+      throw new Error('Laufsperre während des Laufs verloren (ein anderer Lauf oder die alte Sitzung hält sie): die Messung ist ungültig, instrumentierter Code bleibt im Journal; plgauge restore, sobald die Sperre frei ist');
     }
     const unrestored = await restoreOwn(restore);
     restore.length = 0;
@@ -380,12 +380,12 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       fin = await connectHome().catch(() => conn);
     }
     await dropLogoff(fin).catch(() => {});
-    if (logoff) say('FEHLER: Trigger cov$_logoff nicht entfernt: pltest restore');
+    if (logoff) say('FEHLER: Trigger cov$_logoff nicht entfernt: plgauge restore');
     try {
       if (restore.length && !(await confirmed())) {
-        say(`FEHLER: ${restore.length} Objekte nicht wiederhergestellt (Laufsperre nicht bestätigt), ihr instrumentierter Code steht im Journal: pltest restore`);
+        say(`FEHLER: ${restore.length} Objekte nicht wiederhergestellt (Laufsperre nicht bestätigt), ihr instrumentierter Code steht im Journal: plgauge restore`);
       } else if (restore.length) {
-        await restoreOwn(restore, fin).catch((e: Error) => say(`FEHLER: Originale nicht wiederhergestellt (${firstLine(e)}), der instrumentierte Code steht im Journal: pltest restore`));
+        await restoreOwn(restore, fin).catch((e: Error) => say(`FEHLER: Originale nicht wiederhergestellt (${firstLine(e)}), der instrumentierte Code steht im Journal: plgauge restore`));
       }
     } finally {
       if (fin !== conn) await fin.close().catch(() => {});
@@ -505,4 +505,4 @@ async function loadTestCatalog(
 }
 
 
-export { parseJunit, parseSonar } from '@pltest/core';
+export { parseJunit, parseSonar } from '@plgauge/core';

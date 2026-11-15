@@ -8,7 +8,7 @@
  * they look at the same code. Test paths are lower case: owner.package.procedure.
  * Probes reached outside any test (suite beforeall/afterall) are attributed to explicit
  * setup entries ("#owner.package", setup: true) instead of to a test.
- * Optional since pltest: `statements` with their line range, so that a consumer can find
+ * Optional since plgauge: `statements` with their line range, so that a consumer can find
  * the statement around a position (mutation testing selects tests with it).
  */
 import type { RunReport } from './run.js';
@@ -42,7 +42,7 @@ export interface CoverageExport {
       decision: number; index: number; text: string; context: 'plsql' | 'sql'; range: Range; tests: { T: number[]; F: number[]; N: number[] };
       t?: number; f?: number; n?: number; mcdc?: 'yes' | 'no' | 'na'; nf?: boolean;
     }[];
-    /** Quotas as measured (pltest). Missing after merging runs: recomputed from hits. */
+    /** Quotas as measured (plgauge). Missing after merging runs: recomputed from hits. */
     metrics?: Record<'stmt' | 'branch' | 'cond' | 'mcdc' | 'loop', { covered: number; total: number }>;
     notMeasured: { line: number; reason: string }[];
   }[];

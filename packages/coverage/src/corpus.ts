@@ -11,7 +11,7 @@ import { join, relative } from 'node:path';
 import { TextDecoder } from 'node:util';
 import oracledb from 'oracledb';
 import { instrument } from './instrument.js';
-import { firstLine, parseUnit, preprocess, walk as walkTree } from '@pltest/core';
+import { firstLine, parseUnit, preprocess, walk as walkTree } from '@plgauge/core';
 import { newIds } from './model.js';
 import { HITS_TABLE, RUNTIME_BODY, RUNTIME_SPEC } from './runtime.js';
 

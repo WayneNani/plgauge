@@ -14,5 +14,5 @@ grant select on v_$session to plscope_eval;
 
 Dann als `plscope_eval` im Verzeichnis `database`: `@install.sql` und `@install_test.sql` (läuft alle 36 Tests).
 
-Lauf: `PLMUT_DB=oracle://plscope_eval:…@…/FREEPDB1,… npx pltest mutate run eval/plscope-utils --json run.json`.
+Lauf: `PLMUT_DB=oracle://plscope_eval:…@…/FREEPDB1,… npx plgauge mutate run eval/plscope-utils --json run.json`.
 Auswertung: [`EVAL.md`](EVAL.md).

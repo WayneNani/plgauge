@@ -56,7 +56,7 @@ export function textReport(rep: Report): string {
     .filter((s) => c.get(s)).map((s) => `${s} ${c.get(s)}`);
   out.push('', `${rep.results.length} Mutanten: ${parts.join(', ')}${shaky.length ? ` (${shaky.length} mit unsicherem Urteil)` : ''}`);
   if (rep.aborted) out.push(`ABGEBROCHEN: ${rep.aborted}; die Ergebnisse sind unvollständig`);
-  if (rep.unrestored?.length) out.push(`FEHLER: Originale nicht wiederhergestellt (${rep.unrestored.join('; ')}): pltest restore`);
+  if (rep.unrestored?.length) out.push(`FEHLER: Originale nicht wiederhergestellt (${rep.unrestored.join('; ')}): plgauge restore`);
   out.push(`Mutation Score ${score(rep).toFixed(1)} % · ${rep.tests} Tests · Baseline ${fmt(rep.baselineMs)} · Laufzeit ${fmt(rep.elapsedMs)}`);
   for (const t of rep.flakyTests) out.push(`unzuverlässiger Test, nachträglich ausgeschlossen: ${t}`);
   if (rep.excludedTests > 0) out.push(`${rep.excludedTests} Tests ausgeschlossen, weil sie schon ohne Mutanten scheitern`);
@@ -96,17 +96,17 @@ export function mutationTestingReport(rep: Report, root: string): string {
     thresholds: { high: 80, low: 60 },
     projectRoot: resolve(root),
     files,
-    framework: { name: 'pltest mutate', version: '0.1' },
+    framework: { name: 'plgauge mutate', version: '0.1' },
   }, null, 2);
 }
 
 /** A self-contained page that renders the report with the mutation-testing-elements web component. */
 export function htmlReport(rep: Report, root: string): string {
   return `<!DOCTYPE html>
-<html lang="de"><head><meta charset="utf-8"><title>pltest – Mutationsbericht</title>
+<html lang="de"><head><meta charset="utf-8"><title>plgauge – Mutationsbericht</title>
 <script src="https://cdn.jsdelivr.net/npm/mutation-testing-elements@3.5.1/dist/mutation-test-elements.js"></script>
 </head><body>
-${rep.aborted ? `<p style="color:#b00;font:bold 1rem sans-serif">ABGEBROCHEN: ${rep.aborted.replace(/[<&]/g, (c) => (c === '<' ? '&lt;' : '&amp;'))}; die Ergebnisse sind unvollständig</p>\n` : ''}<mutation-test-report-app titlePostfix="pltest"></mutation-test-report-app>
+${rep.aborted ? `<p style="color:#b00;font:bold 1rem sans-serif">ABGEBROCHEN: ${rep.aborted.replace(/[<&]/g, (c) => (c === '<' ? '&lt;' : '&amp;'))}; die Ergebnisse sind unvollständig</p>\n` : ''}<mutation-test-report-app titlePostfix="plgauge"></mutation-test-report-app>
 <script>document.querySelector('mutation-test-report-app').report = ${mutationTestingReport(rep, root).replace(/</g, '\\u003c')};</script>
 <noscript>Der Bericht braucht JavaScript.</noscript>
 </body></html>
@@ -129,7 +129,7 @@ export const mutantKey = (r: { file: string; line: number; col?: number; op: str
   `${basename(r.file)}|${r.line}|${r.col ?? ''}|${r.op}|${r.original}|${r.mutated}`;
 
 /**
- * Compares two runs (plmut JSON of the Go version or of pltest). Mutants are matched
+ * Compares two runs (plmut JSON of the Go version or of plgauge). Mutants are matched
  * by their key, not by ID. NOT_COVERED counts as SURVIVED; a mismatch that both runs
  * detect (killed, timeout, memory) is listed separately.
  */

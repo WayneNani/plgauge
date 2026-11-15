@@ -11,7 +11,7 @@
  * that reach the mutant: good enough to select tests in the oracle mode, and the
  * yardstick for the cross-check against the recording run of the schema mode.
  */
-import type { CoverageExport } from '@pltest/coverage';
+import type { CoverageExport } from '@plgauge/coverage';
 import { objectName, originalUnit, withoutCreate, lineCol, type Mutant } from './mutant.js';
 
 export type CoverageObject = CoverageExport['objects'][number];

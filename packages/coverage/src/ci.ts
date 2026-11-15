@@ -13,7 +13,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { TextDecoder } from 'node:util';
-import { parse, touches, type ChangedLines } from '@pltest/core';
+import { parse, touches, type ChangedLines } from '@plgauge/core';
 import type { CoverageExport } from './export.js';
 
 type Obj = CoverageExport['objects'][number];
@@ -139,7 +139,7 @@ export function toCobertura(exp: CoverageExport, map?: SourceMap): string {
   const out = [
     '<?xml version="1.0" ?>',
     '<!DOCTYPE coverage SYSTEM "http://cobertura.sourceforge.net/xml/coverage-04.dtd">',
-    `<coverage line-rate="${rate([lc, lt])}" branch-rate="${rate([bc, bt])}" lines-covered="${lc}" lines-valid="${lt}" branches-covered="${bc}" branches-valid="${bt}" complexity="0" version="pltest" timestamp="${ts}">`,
+    `<coverage line-rate="${rate([lc, lt])}" branch-rate="${rate([bc, bt])}" lines-covered="${lc}" lines-valid="${lt}" branches-covered="${bc}" branches-valid="${bt}" complexity="0" version="plgauge" timestamp="${ts}">`,
     '  <sources><source>.</source></sources>',
     '  <packages>',
   ];
@@ -175,7 +175,7 @@ export function toJunit(exp: CoverageExport): string {
     const s = t.path.split('.').slice(0, -1).join('.');
     suites.set(s, [...(suites.get(s) ?? []), t]);
   }
-  const out = ['<?xml version="1.0" encoding="UTF-8"?>', '<testsuites name="pltest">'];
+  const out = ['<?xml version="1.0" encoding="UTF-8"?>', '<testsuites name="plgauge">'];
   for (const [suite, ts] of suites) {
     const fail = ts.filter((t) => t.status === 'failed').length;
     const err = ts.filter((t) => t.status === 'error').length;

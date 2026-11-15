@@ -1,10 +1,10 @@
 /**
- * A project: the directory with pltest.json (or plmut.json from before the merge), its
+ * A project: the directory with plgauge.json (or plmut.json from before the merge), its
  * install scripts, the files whose units are mutated and the utPLSQL tests. Coverage of a
  * project measures exactly these units with exactly these tests.
  */
 import { join } from 'node:path';
-import type { RunConfig } from '@pltest/coverage';
+import type { RunConfig } from '@plgauge/coverage';
 import { findPoints } from './find.js';
 import { objectName } from './mutant.js';
 import { loadConfig, mutateFiles } from './run.js';

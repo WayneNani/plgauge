@@ -4,9 +4,9 @@
  * line the mutants and their verdicts beside the coverage, and as a finding every
  * surviving mutant on an executed line (the tests run the code but do not check it).
  */
-import { tokenize } from '@pltest/core';
-import type { CondResult, Metric, ObjectResult } from '@pltest/coverage';
-import type { RunReport } from '@pltest/coverage';
+import { tokenize } from '@plgauge/core';
+import type { CondResult, Metric, ObjectResult } from '@plgauge/coverage';
+import type { RunReport } from '@plgauge/coverage';
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const pctNum = (m: Metric) => (m.total ? (m.covered / m.total) * 100 : null);
@@ -46,7 +46,7 @@ function bar(m: Metric, cls = ''): string {
   return `<div class="bar ${cls} t-${tone(v)}" role="img" aria-label="${fmtPct(v)}"><span style="width:${v ?? 0}%"></span></div>`;
 }
 
-/** The parts of a mutation result (pltest mutate run --json) the joint report reads. */
+/** The parts of a mutation result (plgauge mutate run --json) the joint report reads. */
 export interface MutationResultLite {
   unit: string;
   line: number;

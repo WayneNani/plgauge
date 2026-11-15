@@ -1,11 +1,11 @@
-# @pltest/mutation – Mutation Testing für PL/SQL (vormals plmut)
+# @plgauge/mutation – Mutation Testing für PL/SQL (vormals plmut)
 
 Portierung von plmut (Go) nach TypeScript. Abgeglichen gegen die Go-Fassung auf Stand `9bf5d68`
 (Daten in `baseline/plmut/`): Beispielprojekt in beiden Modi und pljson-Volllauf.
 
 ## Ablauf
 
-1. **Stellen finden** (`find.ts`): auf dem Syntaxbaum des gemeinsamen Parsers (`@pltest/core`).
+1. **Stellen finden** (`find.ts`): auf dem Syntaxbaum des gemeinsamen Parsers (`@plgauge/core`).
    Bis Phase 4 kam das aus einem Java-Finder (IslandSQL); seine Ausgabe auf dem Korpus liegt
    eingefroren in `baseline/plmut/finder-corpus.json.gz`, Vergleich mit `npm run parity:finder`.
 2. **Schema** (Standard, `--mode schema`): alle Mutanten hinter Schaltern in einem Build
@@ -18,13 +18,13 @@ Portierung von plmut (Go) nach TypeScript. Abgeglichen gegen die Go-Fassung auf 
 5. **Gegenprobe** (abschaltbar mit `--no-confirm`): Urteile, die von Umständen abhängen können, laufen ein zweites
    Mal (siehe unten).
 
-Jede Änderung am Code läuft über das Wiederherstellungs-Journal des Kerns (`pltest restore`). Hat ein abgebrochener
+Jede Änderung am Code läuft über das Wiederherstellungs-Journal des Kerns (`plgauge restore`). Hat ein abgebrochener
 Lauf Einheiten verändert zurückgelassen, stellt der nächste Lauf sie beim Start aus dem Journal wieder her, bevor er
-installiert oder Originale liest. Hat seitdem jemand eine neuere Fassung kompiliert (Text weder von pltest noch das Original, ohne
+installiert oder Originale liest. Hat seitdem jemand eine neuere Fassung kompiliert (Text weder von plgauge noch das Original, ohne
 Schaltaufrufe) oder das Objekt gelöscht, bleibt das so: der Eintrag wird mit Warnung verworfen. Während eines Laufs ändert man die Objekte des Schemas besser nicht: jeder Mutant und das
 Zurückspielen am Ende kompilieren über sie hinweg (ein Coverage-Lauf lässt am Ende stehen, was inzwischen jemand
 anderes kompiliert oder gelöscht hat). Damit das nicht einen noch laufenden Lauf trifft, hält jeder Lauf für seine Dauer
-eine Zeilensperre in `PLTEST_LOCK` (eigene Verbindung, nie committet); ein zweiter Lauf auf demselben Schema bricht
+eine Zeilensperre in `PLGAUGE_LOCK` (eigene Verbindung, nie committet); ein zweiter Lauf auf demselben Schema bricht
 sofort ab, auch ein Coverage-Lauf (beide Werkzeuge nehmen dieselbe Sperre und stellen beim Start wieder her, was ein
 abgebrochener Lauf des einen oder anderen im Journal hinterlassen hat). Die Sperre endet mit der Sitzung, auch wenn der Prozess stirbt. Lässt sich ein Rest nicht zurückspielen (etwa weil eine Sitzung des toten Laufs die Einheit noch hält), bricht der Lauf ab, statt den veränderten Code für das Original zu halten. Sperre und Journal liegen im Schema des Laufs; ein Coverage-Lauf über mehrere Schemas sperrt nur sein Laufzeitschema, Mutationsläufe auf den gemessenen Schemas dürfen dann nicht gleichzeitig laufen.
 
@@ -157,17 +157,17 @@ nicht wiederholt: Das kostete so viel wie der Lauf selbst.
 
 ```bash
 export PLMUT_DB=oracle://user:pw@host:port/service          # mehrere Worker: kommagetrennt
-npx pltest mutate points examples/shop_pricing              # Mutanten anzeigen, offline
-npx pltest mutate run examples/shop_pricing --report report.html
-npx pltest mutate run eval/pljson --mode naive --sample 200 --seed 7 --json naive.json
-npx pltest mutate compare a.json b.json                     # auch gegen JSON der Go-Fassung
+npx plgauge mutate points examples/shop_pricing              # Mutanten anzeigen, offline
+npx plgauge mutate run examples/shop_pricing --report report.html
+npx plgauge mutate run eval/pljson --mode naive --sample 200 --seed 7 --json naive.json
+npx plgauge mutate compare a.json b.json                     # auch gegen JSON der Go-Fassung
 ```
 
 Für die CI: `--diff origin/main` (nur Mutanten auf Zeilen, die sich seit der Merge-Basis geändert haben) und
 `--min-score 60` (Exit-Code 3 darunter). Weitere Optionen: `--ops ROR,SBR`, `--timeout-factor 5`, `--skip-install`, `-q`, `--no-confirm`,
 `--coverage plcov-coverage.json` (Orakel-Modus: nur die Tests, die die Anweisung um den Mutanten
 ausgeführt haben).
-Projektdatei `pltest.json` (oder `plmut.json`): `install` (Skripte, gelesen wie von SQL*Plus mit Standardeinstellungen:
+Projektdatei `plgauge.json` (oder `plmut.json`): `install` (Skripte, gelesen wie von SQL*Plus mit Standardeinstellungen:
 `/` und `RUN` führen die letzte Anweisung aus, auch ein zweites Mal; eine Leerzeile oder `.` beendet die Eingabe von SQL
 ohne Ausführung, außer bei `SET SQLBLANKLINES ON`; `EXIT` beendet das Skript; Substitutionsvariablen – `&x`, `DEFINE` – werden nicht ersetzt), `mutate` (Globs der Dateien),
 `tests` (utPLSQL-Pfade).
@@ -186,11 +186,11 @@ und ein Mutationslauf, der `app_util.…` mutiert (sie sperren verschiedene Sche
 Coverage und Mutation lesen dieselbe Projektdatei, und die Ergebnisse passen zueinander:
 
 ```bash
-npx pltest coverage examples/shop_pricing --out cov          # misst genau die Einheiten des Projekts
-npx pltest mutate run examples/shop_pricing --json run.json
-npx pltest crosscheck --coverage cov/plcov-coverage.json --mutation run.json
-npx pltest report cov/coverage.json --mutation run.json --out joint
-npx pltest mutate run examples/shop_pricing --mode naive --coverage cov/plcov-coverage.json
+npx plgauge coverage examples/shop_pricing --out cov          # misst genau die Einheiten des Projekts
+npx plgauge mutate run examples/shop_pricing --json run.json
+npx plgauge crosscheck --coverage cov/plcov-coverage.json --mutation run.json
+npx plgauge report cov/coverage.json --mutation run.json --out joint
+npx plgauge mutate run examples/shop_pricing --mode naive --coverage cov/plcov-coverage.json
 ```
 
 - **Gegenprobe** (`crosscheck`): Jeder Test, der im Aufzeichnungslauf einen Mutanten erreicht, muss

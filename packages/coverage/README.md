@@ -1,4 +1,4 @@
-# @pltest/coverage – Branch-, Bedingungs- und MC/DC-Coverage für PL/SQL (vormals plcov)
+# @plgauge/coverage – Branch-, Bedingungs- und MC/DC-Coverage für PL/SQL (vormals plcov)
 
 utPLSQL misst Coverage heute über `DBMS_PROFILER` und `DBMS_PLSQL_CODE_COVERAGE` und meldet daraus eine **Zeilen**-Quote.
 plcov ist ein Prototyp, der stattdessen den Quellcode **instrumentiert**, wie JaCoCo oder Istanbul. So misst er Anweisungen, Branches
@@ -37,27 +37,27 @@ docker exec ora23 bash -lc 'cd /tmp/utplsql_source && echo exit | sqlplus -S sys
 
 # 3. Demo-Code und Tests einspielen, messen
 npm install
-npx pltest deploy --config examples/order_pricing/plcov.json examples/order_pricing/src/*.sql examples/order_pricing/src/*.pks examples/order_pricing/src/*.pkb examples/order_pricing/src/*.prc examples/order_pricing/test/*.pks examples/order_pricing/test/*.pkb
+npx plgauge deploy --config examples/order_pricing/plcov.json examples/order_pricing/src/*.sql examples/order_pricing/src/*.pks examples/order_pricing/src/*.pkb examples/order_pricing/src/*.prc examples/order_pricing/test/*.pks examples/order_pricing/test/*.pkb
 npm run demo -- --out examples/order_pricing/report
 ```
 
 ## Befehle
 
-Seit der Zusammenführung heißt der Befehl `pltest` (`npx pltest …` oder `bin/pltest …`); `run` ist der alte Name von `coverage`.
+Seit der Zusammenführung heißt der Befehl `plgauge` (`npx plgauge …` oder `bin/plgauge …`); `run` ist der alte Name von `coverage`.
 
 | Befehl | Zweck |
 |---|---|
-| `pltest coverage --config plcov.json [--out dir]` | Kompletter Lauf: Baseline, utPLSQL-Coverage, Instrumentieren, Testlauf, Wiederherstellen, Bericht |
-| `pltest coverage <projekt> --db oracle://…` | Dasselbe für ein Projekt mit `pltest.json`: genau dessen Einheiten und Tests |
-| `pltest instrument datei.sql [--no-sql]` | Zeigt offline, wie instrumentierter Code aussieht |
-| `pltest report coverage.json [--mutation run.json] [--out dir]` | Bericht neu erzeugen; mit Mutationsergebnissen der gemeinsame Bericht |
-| `pltest export coverage.json --format json\|cobertura\|sonar\|lcov\|junit [--src dir]` | Austauschformat oder CI-Formate; `--src` ordnet Objekte den Quelldateien zu |
-| `pltest merge a.json b.json … --out merged.json` | Läufe zusammenführen (z. B. Unit- und Integrationstests) |
-| `pltest check datei --min-stmt N --min-branch N --min-cond N --min-mcdc N` | Schwellen für die CI, Exit-Code 3 bei Unterschreitung (auch direkt bei `coverage`) |
+| `plgauge coverage --config plcov.json [--out dir]` | Kompletter Lauf: Baseline, utPLSQL-Coverage, Instrumentieren, Testlauf, Wiederherstellen, Bericht |
+| `plgauge coverage <projekt> --db oracle://…` | Dasselbe für ein Projekt mit `plgauge.json`: genau dessen Einheiten und Tests |
+| `plgauge instrument datei.sql [--no-sql]` | Zeigt offline, wie instrumentierter Code aussieht |
+| `plgauge report coverage.json [--mutation run.json] [--out dir]` | Bericht neu erzeugen; mit Mutationsergebnissen der gemeinsame Bericht |
+| `plgauge export coverage.json --format json\|cobertura\|sonar\|lcov\|junit [--src dir]` | Austauschformat oder CI-Formate; `--src` ordnet Objekte den Quelldateien zu |
+| `plgauge merge a.json b.json … --out merged.json` | Läufe zusammenführen (z. B. Unit- und Integrationstests) |
+| `plgauge check datei --min-stmt N --min-branch N --min-cond N --min-mcdc N` | Schwellen für die CI, Exit-Code 3 bei Unterschreitung (auch direkt bei `coverage`) |
 | `--diff origin/main` (bei `coverage`, `check`) | Schwellen nur auf den seit der Merge-Basis geänderten Zeilen |
-| `pltest corpus verzeichnis… [--db plcov.json]` | Robustheitstest des Parsers auf einem Korpus, optional mit Kompilierprüfung |
-| `pltest deploy --config plcov.json dateien…` | SQL*Plus-artige Skripte einspielen (für die Demo) |
-| `pltest restore --config plcov.json [--list]` | Code zurücksetzen, den ein abgebrochener Lauf verändert hinterlassen hat |
+| `plgauge corpus verzeichnis… [--db plcov.json]` | Robustheitstest des Parsers auf einem Korpus, optional mit Kompilierprüfung |
+| `plgauge deploy --config plcov.json dateien…` | SQL*Plus-artige Skripte einspielen (für die Demo) |
+| `plgauge restore --config plcov.json [--list]` | Code zurücksetzen, den ein abgebrochener Lauf verändert hinterlassen hat |
 
 `plcov.json`: `user`, `password` (oder Umgebungsvariable `PLCOV_PASSWORD`), `connectString`, `schema`, `tests` (utPLSQL-Pfade),
 optional `include` / `exclude` (Regex auf Objektnamen), `sqlProbes` (`"auto"` = ab 23ai), `perTest` (Standard `true`) und
@@ -99,7 +99,7 @@ Setup-Eintrag `#owner.package`. Im Bericht zeigt die Trefferzahl einer Zeile per
   - `branches` (mit Bereich der Bedingung)
   - `conditions` (Spaltenbereich, Tests getrennt nach WAHR, FALSCH und NULL)
   - `notMeasured`
-- **Ergänzt von pltest** (optional, ältere Leser ignorieren es): `statements` mit Zeilen- und Spaltenbereich und Tests (die
+- **Ergänzt von plgauge** (optional, ältere Leser ignorieren es): `statements` mit Zeilen- und Spaltenbereich und Tests (die
   Mutation wählt damit Tests aus), bei `branches` die Konstrukt-ID und `nf`, bei `conditions` die Trefferzahlen und MC/DC,
   pro Objekt `metrics` mit den gemessenen Quoten.
 
@@ -110,8 +110,8 @@ und pljson, dieselbe Auswahl wie bei plmut. Lizenzen bitte pro Datei prüfen, de
 
 ```bash
 corpus/fetch.sh
-npx pltest corpus corpus/.cache/*                        # offline: parsen, instrumentieren, Zeilenzahl prüfen
-npx pltest corpus corpus/.cache/* --db corpus/db.json    # zusätzlich: instrumentiert kompiliert, wo das Original kompiliert
+npx plgauge corpus corpus/.cache/*                        # offline: parsen, instrumentieren, Zeilenzahl prüfen
+npx plgauge corpus corpus/.cache/* --db corpus/db.json    # zusätzlich: instrumentiert kompiliert, wo das Original kompiliert
 ```
 
 Stand: 747 Dateien, **280/280 Bodies** offline instrumentiert (0,6 s), darunter zwei Latin-1-Dateien. In der Datenbank kompilieren
@@ -188,15 +188,15 @@ Laufzeit und Objekte liegen in `schema`.
 - Treffer aus anderen Sessions: Während des Messlaufs steht der Lauf in `plcov_runs`. Eine andere Session des
   Schema-Benutzers, die instrumentierten Code ausführt (ein Scheduler-Job, den ein Test startet), zählt unter dem Eintrag
   `#background` und schreibt ihre Treffer beim Abmelden (Trigger `cov$_logoff`, nur während des Laufs vorhanden – den eines abgebrochenen Laufs
-  entfernt der nächste Lauf oder `pltest restore` –, braucht `CREATE TRIGGER`) und alle 1000 Anweisungen. Der Lauf wartet bis zu einer Minute auf laufende Jobs. Sessions anderer
+  entfernt der nächste Lauf oder `plgauge restore` –, braucht `CREATE TRIGGER`) und alle 1000 Anweisungen. Der Lauf wartet bis zu einer Minute auf laufende Jobs. Sessions anderer
   Benutzer und Parallel-Query-Slaves, die weniger als 1000 Anweisungen ausführen, gehen weiterhin verloren.
 - Nicht gemessen: dynamisches SQL (die Anweisung `EXECUTE IMMEDIATE` selbst zählt), mit `wrap` verschlüsselter Code und
   Trigger-`WHEN`-Klauseln (Oracle erlaubt dort keine PL/SQL-Aufrufe; ob der Rumpf lief, zeigt seine erste Anweisung). Der
   Bericht listet solche Stellen unter „Nicht gemessen“.
-- Gemessen seit pltest: Compound-Trigger (jeder Zeitpunkt wie ein Block), einfache `CASE x WHEN …`-Ausdrücke (eine
+- Gemessen seit plgauge: Compound-Trigger (jeder Zeitpunkt wie ein Block), einfache `CASE x WHEN …`-Ausdrücke (eine
   Zweigsonde vor jedem Ergebnis: `THEN CASE WHEN cov$.bt(id) THEN ergebnis END`; die Sonde liefert immer WAHR, Typ und
   Auswertungsreihenfolge bleiben) und die `WHEN`/`WHILE`-Filter von FOR-Schleifen (21c) als Entscheidungen.
-- Der Parser (`@pltest/core`) liest Struktur, SQL und Ausdrücke; Unverstandenes wird als undurchsichtiger Bereich behandelt.
+- Der Parser (`@plgauge/core`) liest Struktur, SQL und Ausdrücke; Unverstandenes wird als undurchsichtiger Bereich behandelt.
   Kann er die Struktur eines Objekts nicht verstehen, wird es übersprungen und im Bericht markiert.
 - Rekursion innerhalb derselben Schleife zählt Iterationen ungenau (der Zähler gilt pro Schleife, nicht pro Aufruf: ein
   rekursiver Aufruf im Rumpf schließt den äußeren Zählerstand ab). Schleifenmetriken sind eine Näherung. Bei einer

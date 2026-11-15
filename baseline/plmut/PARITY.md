@@ -17,7 +17,7 @@ nicht zurück. Laufen ihre Tests im selben `ut_runner.run` vor `utplsql_pljson_e
 einen Aufruf teilen, hängt von den gemessenen Laufzeiten ab; deshalb schwankt das Urteil in beiden
 Fassungen. Zwei der sechs Fälle sind in beiden erkannt (Timeout gegen getötet).
 
-Dateien: `example-*.json`, `pljson-schema.json` (Go-Ausgaben); Vergleich mit `pltest mutate compare`.
+Dateien: `example-*.json`, `pljson-schema.json` (Go-Ausgaben); Vergleich mit `plgauge mutate compare`.
 
 ## Phase 3 und 4: eigener Parser statt Java-Finder
 

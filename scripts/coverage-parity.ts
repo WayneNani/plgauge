@@ -30,7 +30,7 @@ const hash = (r: { instrumented: string; map: unknown }) => {
   const map = { ...m, statements: m.statements.map(({ col: _c, endCol: _e, ...st }) => st) };
   return createHash('sha256').update(r.instrumented).update('\0').update(JSON.stringify(map)).digest('hex');
 };
-// the corpus of the freeze; later additions (A5) are checked with pltest corpus
+// the corpus of the freeze; later additions (A5) are checked with plgauge corpus
 const dirs = ['alexandria', 'console', 'logger', 'pljson', 'utplsql-3.1.14'].map((d) => join('corpus/.cache', d));
 const EXT = /\.(sql|pks|pkb|pkg|tps|tpb|typ|prc|fnc|trg|bdy|spc|plb|pls)$/i;
 const walk = (d: string, out: string[] = []): string[] => {

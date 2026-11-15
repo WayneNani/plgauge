@@ -11,5 +11,5 @@ sqlplus user/pw@db @install/create_console_objects.sql      # im console-Verzeic
 cd tests && sqlplus user/pw@db @compile_and_run_unit_tests.sql
 ```
 
-Lauf: `PLMUT_DB=oracle://console_eval:…@…/FREEPDB1,… npx pltest mutate run eval/console --json run.json`.
+Lauf: `PLMUT_DB=oracle://console_eval:…@…/FREEPDB1,… npx plgauge mutate run eval/console --json run.json`.
 Auswertung: `eval/console/EVAL.md`.

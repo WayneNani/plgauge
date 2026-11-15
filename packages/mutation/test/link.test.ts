@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { CoverageExport } from '@pltest/coverage';
-import { CoverageIndex, crossCheck, expand, findPoints, splitUnit, unitLineOf, type LinkedResult } from '@pltest/mutation';
+import type { CoverageExport } from '@plgauge/coverage';
+import { CoverageIndex, crossCheck, expand, findPoints, splitUnit, unitLineOf, type LinkedResult } from '@plgauge/mutation';
 
 const exp = (statements: { line: number; endLine: number; col?: number; endCol?: number; tests: number[] }[]): CoverageExport => ({
   format: 'plcov-coverage/1', generated: '', database: '', schema: 'S', coordinates: 'all_source',
@@ -21,7 +21,7 @@ const exp = (statements: { line: number; endLine: number; col?: number; endCol?:
 });
 
 test('link: ALL_SOURCE line 1 is the line of the unit keyword, not of CREATE', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'pltest-'));
+  const dir = mkdtempSync(join(tmpdir(), 'plgauge-'));
   const path = join(dir, 'p.sql');
   writeFileSync(path, `-- header\n\nCREATE OR REPLACE\n  PACKAGE BODY p AS\n  FUNCTION f(a NUMBER) RETURN NUMBER IS\n  BEGIN\n    RETURN a + 1;\n  END;\nEND;\n/\n`);
   const m = expand(findPoints([path])).find((x) => x.op === 'AOR')!;

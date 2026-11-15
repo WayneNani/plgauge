@@ -154,7 +154,7 @@ select 1 from dual;
 });
 
 test('withDisable puts DISABLE in front of WHEN or the trigger body', async () => {
-  const { withDisable } = await import('@pltest/core');
+  const { withDisable } = await import('@plgauge/core');
   assert.equal(withDisable(`trigger t before insert on x for each row when (new.n > 0) begin null; end;`),
     `trigger t before insert on x for each row DISABLE when (new.n > 0) begin null; end;`);
   assert.equal(withDisable(`trigger t after update of a on x referencing new as n for each row declare v number; begin null; end;`),
@@ -183,7 +183,7 @@ select 2 from dual
 });
 
 test('withDisable puts DISABLE in front of a label (Oracle refuses one there, but never inside the block)', async () => {
-  const { withDisable } = await import('@pltest/core');
+  const { withDisable } = await import('@plgauge/core');
   assert.equal(withDisable(`trigger t before insert on x for each row\n<<blk>>\nbegin null; end;`), `trigger t before insert on x for each row\nDISABLE <<blk>>\nbegin null; end;`);
 });
 

@@ -76,7 +76,7 @@ Ursprünglich zurückgestellt. Gründe:
 2. Die Operatoren der Stufe 1 liefern schon 89 % verwertbare Funde bei 3 % echten Äquivalenten. Mehr Operatoren hieße
    hier vor allem mehr Laufzeit.
 3. Ob sich Stufe 2 lohnt, hängt am Anteil von SQL im Code. Das entscheidet ein Lauf auf SQL-lastigem Code, idealerweise
-   eurem: `pltest mutate run <projekt>` und der Anteil `ctx = sql` im Bericht.
+   eurem: `plgauge mutate run <projekt>` und der Anteil `ctx = sql` im Bericht.
 
 Eine kleine Verbesserung für Stufe 1 hat die Stichprobe gezeigt: Die Heuristik „nie negativ“ erkennt `x > 0` gegen
 `x <> 0` nur bei direkten Ausdrücken wie `length(…)`, nicht bei einer Variable, der so ein Ausdruck zugewiesen wurde.
@@ -87,6 +87,6 @@ Das betrifft 1 von 100 Fällen und lohnt sich erst, wenn es auf anderem Code hä
 ```bash
 corpus/fetch.sh                                  # console nach corpus/.cache
 # console in der Datenbank installieren: eval/console/README.md
-PLMUT_DB=oracle://console_eval:…@…/FREEPDB1 npx pltest mutate run eval/console --json run.json --report run.html
+PLMUT_DB=oracle://console_eval:…@…/FREEPDB1 npx plgauge mutate run eval/console --json run.json --report run.html
 npx tsx scripts/eval-summary.ts run.json survivors.tsv
 ```

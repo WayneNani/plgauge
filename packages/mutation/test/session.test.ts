@@ -1,7 +1,7 @@
 /** TeamCity parsing and sampling (ported from plmut's tests_test.go). */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseDbUrl, parseTeamCity, sample } from '@pltest/mutation';
+import { parseDbUrl, parseTeamCity, sample } from '@plgauge/mutation';
 
 test('TeamCity messages are parsed with escapes', () => {
   const out = `##teamcity[testSuiteStarted timestamp='2026-11-13T10:00:00.000' name='Preise im Shop']

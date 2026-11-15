@@ -10,9 +10,9 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import oracledb from 'oracledb';
-import { journalEntries, loadObject, lockRun, replaceSource, RUN_LOCK } from '@pltest/core';
-import { CoverageIndex, crossCheck, parseDbUrl, projectCoverageConfig, runMutation, type Result } from '@pltest/mutation';
-import { runCoverage, toCoverageExport } from '@pltest/coverage';
+import { journalEntries, loadObject, lockRun, replaceSource, RUN_LOCK } from '@plgauge/core';
+import { CoverageIndex, crossCheck, parseDbUrl, projectCoverageConfig, runMutation, type Result } from '@plgauge/mutation';
+import { runCoverage, toCoverageExport } from '@plgauge/coverage';
 
 const db = process.env.PLMUT_DB?.split(',')[0];
 const dir = fileURLToPath(new URL('../../../examples/shop_pricing', import.meta.url));
@@ -78,13 +78,13 @@ for (const mode of ['naive', 'schema'] as const) {
 const lib = process.env.PLMUT_LIB_SCHEMA;
 test('several schemas: a unit of another schema is mutated in both modes', { skip: (!db || !lib) && 'PLMUT_DB / PLMUT_LIB_SCHEMA nicht gesetzt', timeout: 600_000 }, async () => {
   const L = lib!.toLowerCase();
-  const p = mkdtempSync(join(tmpdir(), 'pltest-multi-'));
+  const p = mkdtempSync(join(tmpdir(), 'plgauge-multi-'));
   mkdirSync(join(p, 'src'));
-  writeFileSync(join(p, 'src', 'calc.sql'), `CREATE OR REPLACE PACKAGE ${L}.pltest_mcalc AS
+  writeFileSync(join(p, 'src', 'calc.sql'), `CREATE OR REPLACE PACKAGE ${L}.plgauge_mcalc AS
   FUNCTION fee(n NUMBER) RETURN NUMBER;
 END;
 /
-CREATE OR REPLACE PACKAGE BODY ${L}.pltest_mcalc AS
+CREATE OR REPLACE PACKAGE BODY ${L}.plgauge_mcalc AS
   FUNCTION fee(n NUMBER) RETURN NUMBER IS
   BEGIN
     IF n > 100 THEN
@@ -95,7 +95,7 @@ CREATE OR REPLACE PACKAGE BODY ${L}.pltest_mcalc AS
 END;
 /
 `);
-  writeFileSync(join(p, 'src', 'test.sql'), `CREATE OR REPLACE PACKAGE pltest_mcalc_test AS
+  writeFileSync(join(p, 'src', 'test.sql'), `CREATE OR REPLACE PACKAGE plgauge_mcalc_test AS
   --%suite
 
   --%test
@@ -104,13 +104,13 @@ END;
   PROCEDURE small;
 END;
 /
-CREATE OR REPLACE PACKAGE BODY pltest_mcalc_test AS
-  PROCEDURE big IS BEGIN ut.expect(${L}.pltest_mcalc.fee(1000)).to_equal(20); END;
-  PROCEDURE small IS BEGIN ut.expect(${L}.pltest_mcalc.fee(50)).to_equal(2); END;
+CREATE OR REPLACE PACKAGE BODY plgauge_mcalc_test AS
+  PROCEDURE big IS BEGIN ut.expect(${L}.plgauge_mcalc.fee(1000)).to_equal(20); END;
+  PROCEDURE small IS BEGIN ut.expect(${L}.plgauge_mcalc.fee(50)).to_equal(2); END;
 END;
 /
 `);
-  writeFileSync(join(p, 'pltest.json'), JSON.stringify({ install: ['src/calc.sql', 'src/test.sql'], mutate: ['src/calc.sql'], tests: ['pltest_mcalc_test'] }));
+  writeFileSync(join(p, 'plgauge.json'), JSON.stringify({ install: ['src/calc.sql', 'src/test.sql'], mutate: ['src/calc.sql'], tests: ['plgauge_mcalc_test'] }));
   const verdict = (rs: Result[]) => rs.map((r) => `${r.op} ${r.original.trim()} → ${r.mutated.trim()}: ${r.status === 'NOT_COVERED' ? 'SURVIVED' : r.status}`).sort();
   const schema = await runMutation({ dir: p, dbUrls: [db!], mode: 'schema' });
   const naive = await runMutation({ dir: p, dbUrls: [db!], mode: 'naive', skipInstall: true });
@@ -122,19 +122,19 @@ END;
 
 // Cursor declarations (UNION ALL), cursor FOR loops (duplicated) and dynamic SQL (literal switched in place)
 test('cursors, cursor FOR loops and dynamic SQL: everything switched, same verdicts in both modes', { skip: !db && 'PLMUT_DB nicht gesetzt', timeout: 900_000 }, async () => {
-  const p = mkdtempSync(join(tmpdir(), 'pltest-qsql-'));
+  const p = mkdtempSync(join(tmpdir(), 'plgauge-qsql-'));
   mkdirSync(join(p, 'src'));
-  writeFileSync(join(p, 'src', 'q.sql'), `CREATE TABLE IF NOT EXISTS pltest_q_t (id NUMBER, v NUMBER)
+  writeFileSync(join(p, 'src', 'q.sql'), `CREATE TABLE IF NOT EXISTS plgauge_q_t (id NUMBER, v NUMBER)
 /
-CREATE OR REPLACE PACKAGE pltest_qsql AS
+CREATE OR REPLACE PACKAGE plgauge_qsql AS
   FUNCTION total(p_min NUMBER) RETURN NUMBER;
   FUNCTION cnt(p_min NUMBER) RETURN NUMBER;
   FUNCTION dyn(p_max NUMBER) RETURN NUMBER;
 END;
 /
-CREATE OR REPLACE PACKAGE BODY pltest_qsql AS
+CREATE OR REPLACE PACKAGE BODY plgauge_qsql AS
   FUNCTION total(p_min NUMBER) RETURN NUMBER IS
-    CURSOR c IS SELECT v * 2 AS w FROM pltest_q_t WHERE v > p_min;
+    CURSOR c IS SELECT v * 2 AS w FROM plgauge_q_t WHERE v > p_min;
     s NUMBER := 0;
   BEGIN
     FOR r IN c LOOP
@@ -145,13 +145,13 @@ CREATE OR REPLACE PACKAGE BODY pltest_qsql AS
   FUNCTION cnt(p_min NUMBER) RETURN NUMBER IS
     n NUMBER := 0;
   BEGIN
-    FOR r IN (SELECT id FROM pltest_q_t WHERE v >= p_min) LOOP
+    FOR r IN (SELECT id FROM plgauge_q_t WHERE v >= p_min) LOOP
       n := n + 1;
     END LOOP;
     RETURN n;
   END;
   FUNCTION dyn(p_max NUMBER) RETURN NUMBER IS
-    l_sql VARCHAR2(200) := 'select count(*) from pltest_q_t where v < :m';
+    l_sql VARCHAR2(200) := 'select count(*) from plgauge_q_t where v < :m';
     n NUMBER;
   BEGIN
     EXECUTE IMMEDIATE l_sql INTO n USING p_max;
@@ -160,7 +160,7 @@ CREATE OR REPLACE PACKAGE BODY pltest_qsql AS
 END;
 /
 `);
-  writeFileSync(join(p, 'src', 'test.sql'), `CREATE OR REPLACE PACKAGE pltest_qsql_test AS
+  writeFileSync(join(p, 'src', 'test.sql'), `CREATE OR REPLACE PACKAGE plgauge_qsql_test AS
   --%suite
 
   --%beforeeach
@@ -173,21 +173,21 @@ END;
   PROCEDURE dyn;
 END;
 /
-CREATE OR REPLACE PACKAGE BODY pltest_qsql_test AS
+CREATE OR REPLACE PACKAGE BODY plgauge_qsql_test AS
   PROCEDURE rows IS
   BEGIN
-    DELETE FROM pltest_q_t;
-    INSERT INTO pltest_q_t VALUES (1, 10);
-    INSERT INTO pltest_q_t VALUES (2, 20);
-    INSERT INTO pltest_q_t VALUES (3, 30);
+    DELETE FROM plgauge_q_t;
+    INSERT INTO plgauge_q_t VALUES (1, 10);
+    INSERT INTO plgauge_q_t VALUES (2, 20);
+    INSERT INTO plgauge_q_t VALUES (3, 30);
   END;
-  PROCEDURE total IS BEGIN ut.expect(pltest_qsql.total(15)).to_equal(100); END;
-  PROCEDURE cnt IS BEGIN ut.expect(pltest_qsql.cnt(20)).to_equal(2); END;
-  PROCEDURE dyn IS BEGIN ut.expect(pltest_qsql.dyn(20)).to_equal(1); END;
+  PROCEDURE total IS BEGIN ut.expect(plgauge_qsql.total(15)).to_equal(100); END;
+  PROCEDURE cnt IS BEGIN ut.expect(plgauge_qsql.cnt(20)).to_equal(2); END;
+  PROCEDURE dyn IS BEGIN ut.expect(plgauge_qsql.dyn(20)).to_equal(1); END;
 END;
 /
 `);
-  writeFileSync(join(p, 'pltest.json'), JSON.stringify({ install: ['src/q.sql', 'src/test.sql'], mutate: ['src/q.sql'], tests: ['pltest_qsql_test'] }));
+  writeFileSync(join(p, 'plgauge.json'), JSON.stringify({ install: ['src/q.sql', 'src/test.sql'], mutate: ['src/q.sql'], tests: ['plgauge_qsql_test'] }));
   const verdict = (rs: Result[]) => rs.map((r) => `${r.line} ${r.op} ${r.original.trim()} → ${r.mutated.trim()}: ${r.status === 'NOT_COVERED' ? 'SURVIVED' : r.status}`).sort();
   const log: string[] = [];
   const schema = await runMutation({ dir: p, dbUrls: [db!], mode: 'schema', log: (m) => log.push(m) });
@@ -220,7 +220,7 @@ test('a second run on the same schema stops at once instead of restoring the fir
   try {
     // the lock as a running run holds it
     await lockRun(conn, RUN_LOCK);
-    await assert.rejects(runMutation({ dir, dbUrls: [db!], mode: 'schema', skipInstall: true, sample: 1, seed: 1 }), /anderer pltest-Lauf/);
+    await assert.rejects(runMutation({ dir, dbUrls: [db!], mode: 'schema', skipInstall: true, sample: 1, seed: 1 }), /anderer plgauge-Lauf/);
   } finally {
     await conn.close();
   }
@@ -231,29 +231,29 @@ test('a second run on the same schema stops at once instead of restoring the fir
 
 // CREATE OR REPLACE VIEW drops INSTEAD OF triggers: such a view must not be touched
 test('a view with an INSTEAD OF trigger is not mutated and keeps its trigger', { skip: !db && 'PLMUT_DB nicht gesetzt', timeout: 600_000 }, async () => {
-  const p = mkdtempSync(join(tmpdir(), 'pltest-trg-'));
+  const p = mkdtempSync(join(tmpdir(), 'plgauge-trg-'));
   mkdirSync(join(p, 'src'));
-  writeFileSync(join(p, 'src', 'v.sql'), `CREATE TABLE IF NOT EXISTS pltest_trg_t (id NUMBER, s VARCHAR2(10))
+  writeFileSync(join(p, 'src', 'v.sql'), `CREATE TABLE IF NOT EXISTS plgauge_trg_t (id NUMBER, s VARCHAR2(10))
 /
-CREATE OR REPLACE VIEW pltest_trg_v AS SELECT id, s FROM pltest_trg_t WHERE id > 0
+CREATE OR REPLACE VIEW plgauge_trg_v AS SELECT id, s FROM plgauge_trg_t WHERE id > 0
 /
-CREATE OR REPLACE TRIGGER pltest_trg_io INSTEAD OF UPDATE ON pltest_trg_v FOR EACH ROW
-BEGIN UPDATE pltest_trg_t SET s = :new.s WHERE id = :old.id; END;
+CREATE OR REPLACE TRIGGER plgauge_trg_io INSTEAD OF UPDATE ON plgauge_trg_v FOR EACH ROW
+BEGIN UPDATE plgauge_trg_t SET s = :new.s WHERE id = :old.id; END;
 /
 `);
-  writeFileSync(join(p, 'src', 'test.sql'), `CREATE OR REPLACE PACKAGE pltest_trg_test AS
+  writeFileSync(join(p, 'src', 'test.sql'), `CREATE OR REPLACE PACKAGE plgauge_trg_test AS
   --%suite
 
   --%test
   PROCEDURE count_rows;
 END;
 /
-CREATE OR REPLACE PACKAGE BODY pltest_trg_test AS
-  PROCEDURE count_rows IS n NUMBER; BEGIN SELECT count(*) INTO n FROM pltest_trg_v; ut.expect(n).to_be_greater_or_equal(0); END;
+CREATE OR REPLACE PACKAGE BODY plgauge_trg_test AS
+  PROCEDURE count_rows IS n NUMBER; BEGIN SELECT count(*) INTO n FROM plgauge_trg_v; ut.expect(n).to_be_greater_or_equal(0); END;
 END;
 /
 `);
-  writeFileSync(join(p, 'pltest.json'), JSON.stringify({ install: ['src/v.sql', 'src/test.sql'], mutate: ['src/v.sql'], tests: ['pltest_trg_test'] }));
+  writeFileSync(join(p, 'plgauge.json'), JSON.stringify({ install: ['src/v.sql', 'src/test.sql'], mutate: ['src/v.sql'], tests: ['plgauge_trg_test'] }));
   const log: string[] = [];
   const rep = await runMutation({ dir: p, dbUrls: [db!], mode: 'schema', log: (m) => log.push(m) });
   // only the trigger's own code is mutated, not the view
@@ -261,7 +261,7 @@ END;
   assert.ok(log.some((l) => l.includes('INSTEAD-OF-Trigger')), log.join('\n'));
   const conn = await oracledb.getConnection(parseDbUrl(db!));
   try {
-    const n = (await conn.execute<[number]>(`select count(*) from user_triggers where trigger_name = 'PLTEST_TRG_IO'`)).rows![0][0];
+    const n = (await conn.execute<[number]>(`select count(*) from user_triggers where trigger_name = 'PLGAUGE_TRG_IO'`)).rows![0][0];
     assert.equal(n, 1);
   } finally {
     await conn.close();
@@ -270,44 +270,44 @@ END;
 
 // CREATE OR REPLACE drops a view's comments and enables a disabled trigger: both come back
 test('a mutated view keeps its comments, a mutated disabled trigger stays disabled', { skip: !db && 'PLMUT_DB nicht gesetzt', timeout: 600_000 }, async () => {
-  const p = mkdtempSync(join(tmpdir(), 'pltest-keep-'));
+  const p = mkdtempSync(join(tmpdir(), 'plgauge-keep-'));
   mkdirSync(join(p, 'src'));
-  writeFileSync(join(p, 'src', 'v.sql'), `CREATE TABLE IF NOT EXISTS pltest_keep_t (id NUMBER, s VARCHAR2(10))
+  writeFileSync(join(p, 'src', 'v.sql'), `CREATE TABLE IF NOT EXISTS plgauge_keep_t (id NUMBER, s VARCHAR2(10))
 /
-CREATE OR REPLACE VIEW pltest_keep_v AS SELECT id, s FROM pltest_keep_t WHERE id > 0
+CREATE OR REPLACE VIEW plgauge_keep_v AS SELECT id, s FROM plgauge_keep_t WHERE id > 0
 /
-COMMENT ON TABLE pltest_keep_v IS 'die View'
+COMMENT ON TABLE plgauge_keep_v IS 'die View'
 /
-COMMENT ON COLUMN pltest_keep_v.s IS 'die Spalte'
+COMMENT ON COLUMN plgauge_keep_v.s IS 'die Spalte'
 /
-CREATE OR REPLACE TRIGGER pltest_keep_trg BEFORE INSERT ON pltest_keep_t FOR EACH ROW
+CREATE OR REPLACE TRIGGER plgauge_keep_trg BEFORE INSERT ON plgauge_keep_t FOR EACH ROW
 BEGIN IF :new.id > 100 THEN :new.s := 'gross'; END IF; END;
 /
-ALTER TRIGGER pltest_keep_trg DISABLE
+ALTER TRIGGER plgauge_keep_trg DISABLE
 /
 `);
-  writeFileSync(join(p, 'src', 'test.sql'), `CREATE OR REPLACE PACKAGE pltest_keep_test AS
+  writeFileSync(join(p, 'src', 'test.sql'), `CREATE OR REPLACE PACKAGE plgauge_keep_test AS
   --%suite
 
   --%test
   PROCEDURE count_rows;
 END;
 /
-CREATE OR REPLACE PACKAGE BODY pltest_keep_test AS
-  PROCEDURE count_rows IS n NUMBER; BEGIN SELECT count(*) INTO n FROM pltest_keep_v; ut.expect(n).to_be_greater_or_equal(0); END;
+CREATE OR REPLACE PACKAGE BODY plgauge_keep_test AS
+  PROCEDURE count_rows IS n NUMBER; BEGIN SELECT count(*) INTO n FROM plgauge_keep_v; ut.expect(n).to_be_greater_or_equal(0); END;
 END;
 /
 `);
-  writeFileSync(join(p, 'pltest.json'), JSON.stringify({ install: ['src/v.sql', 'src/test.sql'], mutate: ['src/v.sql'], tests: ['pltest_keep_test'] }));
+  writeFileSync(join(p, 'plgauge.json'), JSON.stringify({ install: ['src/v.sql', 'src/test.sql'], mutate: ['src/v.sql'], tests: ['plgauge_keep_test'] }));
   for (const mode of ['schema', 'naive'] as const) {
     const rep = await runMutation({ dir: p, dbUrls: [db!], mode, skipInstall: mode === 'naive' });
     assert.ok(rep.results.some((r) => r.mutant.unitRef.type === 'VIEW') && rep.results.some((r) => r.mutant.unitRef.type === 'TRIGGER'), mode);
     const conn = await oracledb.getConnection(parseDbUrl(db!));
     try {
       const one = async (sql: string) => (await conn.execute<[string]>(sql)).rows?.[0]?.[0];
-      assert.equal(await one(`select comments from user_tab_comments where table_name = 'PLTEST_KEEP_V'`), 'die View', mode);
-      assert.equal(await one(`select comments from user_col_comments where table_name = 'PLTEST_KEEP_V' and column_name = 'S'`), 'die Spalte', mode);
-      assert.equal(await one(`select status from user_triggers where trigger_name = 'PLTEST_KEEP_TRG'`), 'DISABLED', mode);
+      assert.equal(await one(`select comments from user_tab_comments where table_name = 'PLGAUGE_KEEP_V'`), 'die View', mode);
+      assert.equal(await one(`select comments from user_col_comments where table_name = 'PLGAUGE_KEEP_V' and column_name = 'S'`), 'die Spalte', mode);
+      assert.equal(await one(`select status from user_triggers where trigger_name = 'PLGAUGE_KEEP_TRG'`), 'DISABLED', mode);
     } finally {
       await conn.close();
     }

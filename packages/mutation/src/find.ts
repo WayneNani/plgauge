@@ -11,7 +11,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { TextDecoder } from 'node:util';
-import { parse, preprocessBlocks, FOREIGN_HEAD, inlineForeign, scanLine, SQLPLUS_WORDS, tokenize, type Node, type ScanState, type Token } from '@pltest/core';
+import { parse, preprocessBlocks, FOREIGN_HEAD, inlineForeign, scanLine, SQLPLUS_WORDS, tokenize, type Node, type ScanState, type Token } from '@plgauge/core';
 import type { Loop, Point, SourceFile, Unit } from './mutant.js';
 
 export function findPoints(paths: string[]): SourceFile[] {

@@ -4,7 +4,7 @@
  * reading recorded hits and loop counts.
  */
 import oracledb from 'oracledb';
-import { utInfoContext } from '@pltest/core';
+import { utInfoContext } from '@plgauge/core';
 import { contextName, CTL_BODY, CTL_SPEC, CTX, MARKER_TABLE, RT_BODY, RT_SPEC } from './ddl.js';
 
 export interface ConnectConfig {
