@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { expand, findPoints, switchable } from '@pltest/mutation';
+import { expand, findPoints, mutatedUnit, switchable, withoutCreate } from '@pltest/mutation';
 
 function points(src: string, name = 'h.pkb') {
   const path = join(mkdtempSync(join(tmpdir(), 'pltest-')), name);
@@ -938,4 +938,38 @@ END k;
   const aor = f.points.filter((p) => p.op === 'AOR');
   assert.equal(aor.find((p) => p.orig.includes('10'))?.naiveOnly, 'static');
   assert.equal(aor.find((p) => p.orig.includes('3'))?.naiveOnly, undefined);
+});
+
+test('finder: a Java source with AS on its own line and an MLE call spec are skipped, later units keep their mutants', () => {
+  const f = points(`create or replace and compile java source named "Foo"
+as
+public class Foo {
+  // don't
+}
+/
+create or replace function js_f return varchar2 as mle language javascript {{ // don't
+  return 'x'; }};
+/
+create procedure if not exists p(a number) is begin if a > 1 then null; end if; end;
+/
+`, 'g.sql')[0];
+  assert.deepEqual(f.errors, []);
+  assert.deepEqual(f.units.map((u) => u.name.toLowerCase()), ['p']);
+  const m = expand([f]).find((x) => x.op === 'ROR')!;
+  assert.match(withoutCreate(mutatedUnit(m)), /^procedure p\(a number\)/);
+});
+
+test('finder: a constant used in a size expression, and the constants its value names, stay static', () => {
+  const f = points(`CREATE OR REPLACE PACKAGE BODY k AS
+  c_a CONSTANT PLS_INTEGER := 5 + 5;
+  c_len CONSTANT PLS_INTEGER := c_a * 2;
+  c_free CONSTANT PLS_INTEGER := 3 * 2;
+  PROCEDURE p IS v VARCHAR2(c_len + 1); BEGIN v := 'x'; END;
+END k;
+/
+`)[0];
+  const aor = f.points.filter((p) => p.op === 'AOR');
+  assert.equal(aor.find((p) => p.orig.includes('5 + 5'))?.naiveOnly, 'static');
+  assert.equal(aor.find((p) => p.orig.includes('c_a * 2'))?.naiveOnly, 'static');
+  assert.equal(aor.find((p) => p.orig.includes('3 * 2'))?.naiveOnly, undefined);
 });

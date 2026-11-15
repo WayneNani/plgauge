@@ -59,6 +59,7 @@ export function textReport(rep: Report): string {
     .filter((s) => c.get(s)).map((s) => `${s} ${c.get(s)}`);
   out.push('', `${rep.results.length} Mutanten: ${parts.join(', ')}${shaky.length ? ` (${shaky.length} mit unsicherem Urteil)` : ''}`);
   if (rep.aborted) out.push(`ABGEBROCHEN: ${rep.aborted}; die Ergebnisse sind unvollständig`);
+  if (rep.unrestored?.length) out.push(`FEHLER: Originale nicht wiederhergestellt (${rep.unrestored.join('; ')}): pltest restore`);
   out.push(`Mutation Score ${score(rep).toFixed(1)} % · ${rep.tests} Tests · Baseline ${fmt(rep.baselineMs)} · Laufzeit ${fmt(rep.elapsedMs)}`);
   for (const t of rep.flakyTests) out.push(`unzuverlässiger Test, nachträglich ausgeschlossen: ${t}`);
   if (rep.excludedTests > 0) out.push(`${rep.excludedTests} Tests ausgeschlossen, weil sie schon ohne Mutanten scheitern`);

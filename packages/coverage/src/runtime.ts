@@ -47,6 +47,17 @@ create or replace package cov$ authid definer is
   procedure b(p_b pls_integer);
   /* Branch probe inside an expression (simple CASE): counts like b and returns TRUE. */
   function bt(p_b pls_integer) return boolean;
+  /* The probes in SQL (conditions and CASE in queries): without the package-state purity of
+     DEFAULT below, so Oracle never runs a query with them in parallel slaves, whose package
+     state (the counters) is their own. */
+  function qd(p_d pls_integer, p_v boolean) return boolean;
+  function qc(p_d pls_integer, p_i pls_integer, p_v boolean) return boolean;
+  function qn(p_d pls_integer, p_i pls_integer, p_v boolean) return boolean;
+  function qbt(p_b pls_integer) return boolean;
+  pragma restrict_references(qd, wnds, rnds, trust);
+  pragma restrict_references(qc, wnds, rnds, trust);
+  pragma restrict_references(qn, wnds, rnds, trust);
+  pragma restrict_references(qbt, wnds, rnds, trust);
   procedure le(p_l pls_integer);
   procedure li(p_l pls_integer);
   procedure lx(p_l pls_integer);
@@ -225,6 +236,11 @@ create or replace package body cov$ is
     if g_pt and g_tid > 0 then g_pb(g_tid)(p_b) := 1; end if;
   exception when others then null;
   end;
+
+  function qd(p_d pls_integer, p_v boolean) return boolean is begin return d(p_d, p_v); end;
+  function qc(p_d pls_integer, p_i pls_integer, p_v boolean) return boolean is begin return c(p_d, p_i, p_v); end;
+  function qn(p_d pls_integer, p_i pls_integer, p_v boolean) return boolean is begin return n(p_d, p_i, p_v); end;
+  function qbt(p_b pls_integer) return boolean is begin return bt(p_b); end;
 
   function bt(p_b pls_integer) return boolean is
   begin

@@ -112,6 +112,8 @@ export interface Report {
   elapsedMs: number;
   /** The run stopped early (the run lock went to another run): results are partial. */
   aborted?: string;
+  /** Objects whose originals did not go back at the end (they stay in the journal). */
+  unrestored?: string[];
 }
 
 /** The project file: pltest.json, or plmut.json from before the merge. */
@@ -264,7 +266,7 @@ class Worker {
    */
   foreign = false;
   /** This worker held the lock once: failing to take it again later means someone else has it. */
-  private held = false;
+  held = false;
 
   private guard(): void {
     if (this.foreign) throw new Error(`Laufsperre${this.name} an einen anderen Lauf verloren`);
@@ -319,24 +321,28 @@ class Worker {
     }
   }
 
-  /** End of the run for a retired worker: whatever its journal still holds goes back. */
-  async finalRestore(): Promise<void> {
+  /**
+   * End of the run: whatever this worker's journal still holds (a retired worker, a restore that
+   * failed) goes back. Returns what stays changed: empty when the originals are all back.
+   */
+  async finalRestore(): Promise<string[]> {
     try {
       // only while the schema is still this run's (a lost lock: another run restored and owns it)
       await this.ensureLock();
-      if (this.foreign) return;
+      if (this.foreign) return [];
       const c = await oracledb.getConnection(this.db);
       try {
         const left = await journalEntries(c);
         if (left.length) {
-          this.logf(`Worker${this.name}: ${left.length} Objekte nach dem Ausscheiden wiederhergestellt`);
+          this.logf(`Worker${this.name}: ${left.length} Objekte aus dem Journal wiederhergestellt`);
           await this.restoreLeftovers(left);
         }
+        return [];
       } finally {
         await c.close().catch(() => {});
       }
     } catch (e) {
-      this.logf(`WARNUNG${this.name}: nach dem Ausscheiden nicht wiederhergestellt (${firstLine(e as Error)}), bitte pltest restore`);
+      return [`Worker${this.name}: ${firstLine(e as Error)}`];
     }
   }
 
@@ -424,6 +430,8 @@ class Worker {
   async restore(key: string, recompile = true): Promise<void> {
     const obj = this.changed.get(key);
     if (!obj) return;
+    // only under the lock (its session may have ended, another run may own the schema now)
+    await this.ensureLock();
     this.guard();
     let failure = '';
     await restoreAll(this.deploy, [obj], (m) => {
@@ -904,6 +912,8 @@ class Run {
           if (await w.reopen()) {
             w.testsRan = false;
             r = await fn(w, ms[i]);
+            // (read now: the reopen below warms up, and that runs tests)
+            const ranTests = w.testsRan;
             // on a fresh connection it broke the server process again: the mutant does it
             if (broken(r)) {
               if (!(await w.reopen())) {
@@ -913,7 +923,7 @@ class Run {
                 return;
               }
               // under the tests: they would fail; before them (compiling the mutant): no test saw it
-              if (w.testsRan) Object.assign(r, { status: 'KILLED', killedBy: '(Serverprozess abgestürzt)' });
+              if (ranTests) Object.assign(r, { status: 'KILLED', killedBy: '(Serverprozess abgestürzt)' });
               else r.detail = `Serverprozess beim Kompilieren abgestürzt: ${r.detail ?? ''}`;
             }
           } else {
@@ -1124,27 +1134,13 @@ export async function runMutation(opt: Options): Promise<Report> {
     if (f.errors.length) run.logf(`übersprungen, nicht parsbar: ${f.path}: ${f.errors.join('; ')}`);
   }
   run.logf(`${ms.length} Mutanten in ${files.length} Dateien${opt.diff ? ' (nur geänderte Zeilen)' : ''}, ${skipped} gleichwertige oder sinnlose Varianten ausgelassen`);
-  // one database object defined in two files (a unit file and an install-all script, say): both
-  // would compile into the same object, the second over the first; the first file's counts
-  const objectOf = new Map<string, string>();
-  const twice = new Set<string>();
-  for (const m of ms) {
-    const id = `${(objectOwner(m.unitRef.name) ?? '').toUpperCase()}|${objectName(m.unitRef.name).toUpperCase()}|${m.unitRef.type}`;
-    const first = objectOf.get(id);
-    if (first === undefined) objectOf.set(id, unitKey(m));
-    else if (first !== unitKey(m)) twice.add(unitKey(m));
-  }
-  if (twice.size) {
-    for (const k of twice) run.logf(`übersprungen, Objekt schon in einer anderen Datei definiert: ${k}`);
-    ms = ms.filter((m) => !twice.has(unitKey(m)));
-    run.total = ms.length;
-  }
   if (!ms.length) {
     run.logf('keine Mutanten: nichts zu tun');
     return { mode: opt.mode ?? 'schema', baselineMs: 0, limitMs: 0, tests: 0, excludedTests: 0, flakyTests: [], skippedVariants: skipped, results: [], elapsedMs: performance.now() - t0 };
   }
   if (!opt.dbUrls.length) throw new Error('keine Datenbank: --db oder PLMUT_DB setzen');
   opt.dbUrls.forEach((u, i) => run.workers.push(new Worker(u, opt.dbUrls.length > 1 ? ` w${i + 1}` : '', run)));
+  let report: Report | undefined;
   const onSig = () => {
     if (run.interrupted) {
       run.logf('Die Originale werden gerade wiederhergestellt, bitte warten (sonst: pltest restore)');
@@ -1162,6 +1158,22 @@ export async function runMutation(opt: Options): Promise<Report> {
     if (failedOpen) throw failedOpen.reason;
     if (run.workers.length > 1) run.logf(`${run.workers.length} Worker-Datenbanken`);
     run.checkpoint();
+    // one database object defined in two files (a unit file and an install-all script, say, or
+    // once with its schema and once without): both would compile into the same object, the
+    // second over the first; the first file's counts
+    const home = await run.primary.currentSchema();
+    const objectOf = new Map<string, string>();
+    const twice = new Set<string>();
+    for (const m of ms) {
+      const id = `${objectOwner(m.unitRef.name) ?? home}|${objectName(m.unitRef.name)}|${m.unitRef.type}`;
+      const first = objectOf.get(id);
+      if (first === undefined) objectOf.set(id, unitKey(m));
+      else if (first !== unitKey(m)) twice.add(unitKey(m));
+    }
+    if (twice.size) {
+      for (const k of twice) run.logf(`übersprungen, Objekt schon in einer anderen Datei definiert: ${k}`);
+      ms = ms.filter((m) => !twice.has(unitKey(m)));
+    }
     ms = await withoutTriggeredViews(run, ms);
     run.total = ms.length;
     const mode = opt.mode ?? 'schema';
@@ -1173,13 +1185,22 @@ export async function runMutation(opt: Options): Promise<Report> {
     rep.skippedVariants = skipped;
     rep.elapsedMs = performance.now() - t0;
     rep.results.sort((a, b) => a.id - b.id);
+    report = rep;
     return rep;
   } finally {
     // (a worker whose lock went to another run restores nothing: Worker.restoreAll)
     await run.restoreEverywhere().catch(() => {});
     // a retired worker, or one whose deploy connection died before the end, still has changed
     // code: its journal knows what (on a fresh connection)
-    await Promise.all(run.workers.filter((w) => !w.foreign && (w.retired || w.changed.size > 0)).map((w) => w.finalRestore()));
+    // every worker's journal, also after a restore that failed above: changed code that stays is
+    // reported always (also with -q) and in the report
+    // (a worker that never held the lock changed nothing: another run has the schema)
+    const left = (await Promise.all(run.workers.filter((w) => w.held && !w.foreign).map((w) => w.finalRestore()))).flat();
+    if (left.length) {
+      const msg = `FEHLER: Originale nicht wiederhergestellt (${left.join('; ')}); geänderter Code steht im Journal: pltest restore`;
+      (opt.log ?? console.error)(msg);
+      if (report) report.unrestored = left;
+    }
     await Promise.all(run.workers.map((w) => w.shutdown()));
     process.off('SIGINT', onSig);
   }

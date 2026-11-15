@@ -376,7 +376,7 @@ export async function restoreJournal(conn: oracledb.Connection, entries: Journal
  * what became invalid in their schemas (dependents of a view, say); without it they
  * recompile on first use.
  */
-export async function restoreAll(conn: oracledb.Connection, objs: SourceObject[], say: (m: string) => void, recompile = true): Promise<void> {
+export async function restoreAll(conn: oracledb.Connection, objs: SourceObject[], say: (m: string) => void, recompile = true): Promise<number> {
   const schemas = new Set<string>();
   let failed = 0;
   for (const obj of objs) {
@@ -413,6 +413,8 @@ export async function restoreAll(conn: oracledb.Connection, objs: SourceObject[]
     for (const [o, n] of mv.rows ?? []) await conn.execute(`alter materialized view ${q(o)}.${q(n)} compile`).catch(() => {});
   }
   say(`Originalcode von ${objs.length - failed} Objekten wiederhergestellt${failed ? `, ${failed} nicht (Journal-Eintrag bleibt)` : ''}`);
+  // how many hold changed code still (their entries stay)
+  return failed;
 }
 
 export interface CompileError {

@@ -78,6 +78,8 @@ export interface RunReport {
   baselineRuns?: number;
   objects: ObjectResult[];
   log: string[];
+  /** Objects whose originals did not go back at the end (their entries stay in the journal). */
+  unrestored?: number;
 }
 
 export async function runCoverage(cfg: RunConfig, log: (m: string) => void = console.error): Promise<RunReport> {
@@ -130,6 +132,12 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
   })().finally(() => {
     checking = undefined;
   }));
+  // the lock confirmed before a change at the end (restore, trigger drop): without it another run
+  // may own the schema, and this one leaves its changes to the journal
+  const confirmed = () => keepLock().then(() => true, (e: Error) => {
+    say(`WARNUNG: ${e.message}`);
+    return false;
+  });
   const ping = setInterval(() => keepLock().catch((e: Error) => say(`WARNUNG: ${e.message}`)), 60_000);
   ping.unref();
   const conn = await connect(cfg).catch(async (e) => {
@@ -218,9 +226,12 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       const errors = await replaceSource(conn, obj, res.instrumented, 'coverage');
       compileMs += performance.now() - t1;
       if (errors) {
-        say(`  ✗ ${obj.name}: instrumentierter Code kompiliert nicht (${errors}) – Original bleibt aktiv`);
-        await restoreAll(conn, [obj], (m) => (m.includes('✗') ? say(m) : undefined));
-        restore.pop();
+        say(`  ✗ ${obj.name}: instrumentierter Code kompiliert nicht (${errors})`);
+        // back at once; if that fails, the end of the run tries again (it stays in restore)
+        if (!(await restoreAll(conn, [obj], (m) => (m.includes('✗') ? say(m) : undefined)))) {
+          restore.pop();
+          say(`    Original wieder aktiv`);
+        }
         maps.push({ error: `Kompilierung: ${errors}`, obj });
         continue;
       }
@@ -247,20 +258,21 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       await waitForJobs(conn, say);
     } finally {
       await conn.execute(`begin cov$.stop_run(:r); end;`, { r: runId }).catch(() => {});
-      await conn.execute(`drop trigger cov$_logoff`).catch(() => {});
+      // (a run that took the lock meanwhile may have its own trigger there now)
+      if (await confirmed()) await conn.execute(`drop trigger cov$_logoff`).catch(() => {});
     }
     const hits = await loadHits(conn, runId);
     await conn.execute(`delete from plcov_hits where run_id = :r`, { r: runId });
     await conn.commit();
 
-    await keepLock().catch((e: Error) => say(`WARNUNG: ${e.message}`));
-    if (foreign) {
-      // that run restored this one's code at its start, maybe while the tests ran: no valid result
+    if (!(await confirmed())) {
+      // another run may have restored this one's code at its start, maybe while the tests ran
       restore.length = 0;
       throw new Error('Laufsperre während des Laufs verloren (ein anderer Lauf oder die alte Sitzung hält sie): die Messung ist ungültig, instrumentierter Code bleibt im Journal; pltest restore, sobald die Sperre frei ist');
     }
-    await restoreAll(conn, restore, say);
+    const unrestored = await restoreAll(conn, restore, say);
     restore.length = 0;
+    if (unrestored) say(`FEHLER: ${unrestored} Objekte nicht wiederhergestellt, ihr instrumentierter Code steht im Journal: pltest restore`);
 
     // Flaky: the result changed although our instrumentation was not involved (baseline runs and
     // the run with utPLSQL's own coverage). They are left out of the equivalence check.
@@ -318,13 +330,14 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       perTest,
       objects: objectsOut,
       log: messages,
+      ...(unrestored ? { unrestored } : {}),
     };
   } finally {
     clearInterval(ping);
     try {
       if (restore.length) {
-        await keepLock().catch((e: Error) => say(`WARNUNG: ${e.message}`));
-        if (!foreign) await restoreAll(conn, restore, say);
+        if (await confirmed()) await restoreAll(conn, restore, say);
+        else say(`FEHLER: ${restore.length} Objekte nicht wiederhergestellt (Laufsperre nicht bestätigt), ihr instrumentierter Code steht im Journal: pltest restore`);
       }
     } finally {
       await conn.close().catch(() => {});

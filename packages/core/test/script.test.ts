@@ -144,3 +144,11 @@ create table t2 (x number);
     'create table t2 (x number)',
   ]);
 });
+
+test('splitScript: an MLE call spec with JavaScript inline ends at the slash', () => {
+  assert.deepEqual(splitScript(`create or replace function js_f return varchar2 as mle language javascript {{ // don't
+  return 'x'; }};
+/
+select 1 from dual;
+`), ["create or replace function js_f return varchar2 as mle language javascript {{ // don't\n  return 'x'; }};", 'select 1 from dual']);
+});

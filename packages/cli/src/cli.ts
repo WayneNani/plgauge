@@ -124,6 +124,8 @@ async function main() {
         console.error('Testergebnisse mit Instrumentierung weichen ab');
         process.exitCode = 4;
       }
+      // changed code left in the schema: always a failure (set again after any gate below)
+      const unrestored = report.unrestored ?? 0;
       let exp = toCoverageExport(report);
       if (diffRef) {
         const files = project !== undefined ? mutateFiles(loadProject(project), project) : src ? sqlFiles(src) : [];
@@ -133,6 +135,10 @@ async function main() {
         console.error(`Geänderter Code (seit ${diffRef}): Anweisungen ${q.stmt.covered}/${q.stmt.total} · Branches ${q.branch.covered}/${q.branch.total} · Bedingungen ${q.cond.covered}/${q.cond.total}`);
       }
       enforce(checkQuotas(exp, th.cov));
+      if (unrestored) {
+        console.error(`FEHLER: ${unrestored} Objekte nicht wiederhergestellt: pltest restore`);
+        process.exitCode = 1;
+      }
       break;
     }
     case 'report': {
@@ -188,7 +194,11 @@ async function main() {
         const det = valid.filter((r: { status: string }) => ['KILLED', 'TIMEOUT', 'MEMORY'].includes(r.status)).length;
         const score = valid.length ? (100 * det) / valid.length : 100;
         console.error(`Mutation Score ${score.toFixed(1)} % (${det}/${valid.length})`);
-        if (th.score !== undefined && score + 1e-9 < th.score) enforce([`Mutation Score: ${score.toFixed(1)} % < ${th.score} %`]);
+        // an aborted run's partial score says nothing (as in mutate run)
+        if (j.aborted) {
+          console.error(`Lauf abgebrochen: ${j.aborted}`);
+          process.exitCode = 1;
+        } else if (th.score !== undefined && score + 1e-9 < th.score) enforce([`Mutation Score: ${score.toFixed(1)} % < ${th.score} %`]);
       } else {
         let exp = loadExport(file);
         if (diffRef) {
@@ -306,6 +316,8 @@ async function main() {
       const scored = rep.results.some((r) => ['KILLED', 'TIMEOUT', 'MEMORY', 'SURVIVED', 'NOT_COVERED'].includes(r.status));
       // an aborted run's partial score says nothing: its exit code (1) stands
       if (minScore !== undefined && scored && !rep.aborted && score(rep) + 1e-9 < minScore) enforce([`Mutation Score: ${score(rep).toFixed(1)} % < ${minScore} %`]);
+      // changed code left in the schema outranks the score gate
+      if (rep.unrestored?.length) process.exitCode = 1;
       break;
     }
     case 'crosscheck': {
@@ -322,55 +334,59 @@ async function main() {
     }
     case 'restore': {
       const configFile = opt('config');
-      const db = opt('db') ?? process.env.PLMUT_DB?.split(',')[0];
-      const cfg = configFile || !db ? loadConfig(configFile) : parseDbUrl(db);
+      // every database of a mutation run with several workers (each keeps its own journal)
+      const dbs = (opt('db') ?? process.env.PLMUT_DB ?? '').split(',').map((u) => u.trim()).filter(Boolean);
+      const cfgs = configFile || !dbs.length ? [loadConfig(configFile)] : dbs.map((u) => parseDbUrl(u));
       const listOnly = flag('list');
       // entries that cannot be restored at all (their table is gone, say) would block every run
       const forget = flag('forget');
-      if (!(cfg as { user?: string }).user) throw new Error('keine Datenbankangaben: --db oder eine Coverage-Konfiguration angeben');
-      // journal and lock live where the runs keep them: the coverage config's runtime schema
-      const c2 = cfg as { schema?: string; schemas?: string[]; runtimeSchema?: string; user: string };
-      const home = (c2.schemas?.length ? c2.runtimeSchema ?? c2.user : c2.schema ?? c2.user).toUpperCase();
-      const conn = await connect(cfg);
-      try {
-        await conn.execute(`alter session set current_schema = ${dbIdent(home)}`);
-        await ensureJournal(conn);
-        const entries = await journalEntries(conn);
-        // a coverage run that died during its instrumented test run left its logoff trigger
-        const logoff = (await conn.execute<[number]>(`select count(*) from all_triggers where owner = :o and trigger_name = 'COV$_LOGOFF'`, { o: home })).rows?.[0]?.[0] ?? 0;
-        if (!entries.length && !logoff) {
-          console.error('Journal leer: kein Objekt ist verändert.');
-          break;
-        }
-        for (const e of entries) console.error(`  ${e.type} ${e.owner}.${e.name} (${e.tool}, seit ${e.createdAt.toISOString()})`);
-        if (logoff) console.error(`  TRIGGER ${home}.COV$_LOGOFF (Coverage-Laufzeit eines abgebrochenen Laufs)`);
-        if (!listOnly) {
-          const lock = await connect(cfg);
-          try {
-            await lock.execute(`alter session set current_schema = ${dbIdent(home)}`);
-            // a running run (of either tool) holds the lock: its objects are not leftovers
-            await lockRun(lock, RUN_LOCK);
-            if (logoff) {
-              await conn.execute(`drop trigger ${dbIdent(home)}.cov$_logoff`).then(
-                () => console.error('Logoff-Trigger der Coverage entfernt'),
-                (e: Error) => { if (!e.message.includes('ORA-04080')) console.error(`  ✗ Logoff-Trigger nicht entfernt: ${e.message.split('\n')[0]}`); });
-            }
-            // read again under the lock: a run that finished meanwhile left other entries
-            await restoreJournal(conn, await journalEntries(conn), (m) => console.error(m));
-            const still = await journalEntries(conn);
-            if (still.length && forget) {
-              for (const e of still) await journalForget(conn, e.object);
-              console.error(`${still.length} Einträge ohne Wiederherstellung aus dem Journal gelöscht: ${still.map((e) => e.name).join(', ')}`);
-            } else if (still.length) {
-              console.error(`${still.length} Einträge ließen sich nicht wiederherstellen; --forget löscht sie aus dem Journal`);
-              process.exitCode = 1;
-            }
-          } finally {
-            await lock.close().catch(() => {});
+      for (const cfg of cfgs) {
+        if (!(cfg as { user?: string }).user) throw new Error('keine Datenbankangaben: --db oder eine Coverage-Konfiguration angeben');
+        if (cfgs.length > 1) console.error(`${(cfg as { user: string }).user}@${(cfg as { connectString?: string }).connectString ?? ''}:`);
+        // journal and lock live where the runs keep them: the coverage config's runtime schema
+        const c2 = cfg as { schema?: string; schemas?: string[]; runtimeSchema?: string; user: string };
+        const home = (c2.schemas?.length ? c2.runtimeSchema ?? c2.user : c2.schema ?? c2.user).toUpperCase();
+        const conn = await connect(cfg);
+        try {
+          await conn.execute(`alter session set current_schema = ${dbIdent(home)}`);
+          await ensureJournal(conn);
+          const entries = await journalEntries(conn);
+          // a coverage run that died during its instrumented test run left its logoff trigger
+          const logoff = (await conn.execute<[number]>(`select count(*) from all_triggers where owner = :o and trigger_name = 'COV$_LOGOFF'`, { o: home })).rows?.[0]?.[0] ?? 0;
+          if (!entries.length && !logoff) {
+            console.error('Journal leer: kein Objekt ist verändert.');
+            continue;
           }
+          for (const e of entries) console.error(`  ${e.type} ${e.owner}.${e.name} (${e.tool}, seit ${e.createdAt.toISOString()})`);
+          if (logoff) console.error(`  TRIGGER ${home}.COV$_LOGOFF (Coverage-Laufzeit eines abgebrochenen Laufs)`);
+          if (!listOnly) {
+            const lock = await connect(cfg);
+            try {
+              await lock.execute(`alter session set current_schema = ${dbIdent(home)}`);
+              // a running run (of either tool) holds the lock: its objects are not leftovers
+              await lockRun(lock, RUN_LOCK);
+              if (logoff) {
+                await conn.execute(`drop trigger ${dbIdent(home)}.cov$_logoff`).then(
+                  () => console.error('Logoff-Trigger der Coverage entfernt'),
+                  (e: Error) => { if (!e.message.includes('ORA-04080')) console.error(`  ✗ Logoff-Trigger nicht entfernt: ${e.message.split('\n')[0]}`); });
+              }
+              // read again under the lock: a run that finished meanwhile left other entries
+              await restoreJournal(conn, await journalEntries(conn), (m) => console.error(m));
+              const still = await journalEntries(conn);
+              if (still.length && forget) {
+                for (const e of still) await journalForget(conn, e.object);
+                console.error(`${still.length} Einträge ohne Wiederherstellung aus dem Journal gelöscht: ${still.map((e) => e.name).join(', ')}`);
+              } else if (still.length) {
+                console.error(`${still.length} Einträge ließen sich nicht wiederherstellen; --forget löscht sie aus dem Journal`);
+                process.exitCode = 1;
+              }
+            } finally {
+              await lock.close().catch(() => {});
+            }
+          }
+        } finally {
+          await conn.close();
         }
-      } finally {
-        await conn.close();
       }
       break;
     }

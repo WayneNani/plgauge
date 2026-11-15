@@ -448,6 +448,9 @@ class Instrumenter {
 
   // -------------------------------------------------------------- decisions
 
+  /** The context of the condition being wrapped: in SQL the probes are the q… variants. */
+  private probeCtx: 'plsql' | 'sql' = 'plsql';
+
   /** Wraps a condition with decision and condition probes. */
   private decision(kind: DecisionKind, cond: Node, ctx: 'plsql' | 'sql'): Decision | null {
     const a = cond.a;
@@ -457,9 +460,16 @@ class Instrumenter {
     const id = this.ids.dec++;
     const vectors = ctx === 'plsql';
     const rt = this.rt;
-    this.ins(this.t[a].start, vectors ? `${rt}.d(${id},${rt}.o(${id}) and (` : `${rt}.d(${id},`);
+    this.ins(this.t[a].start, vectors ? `${rt}.d(${id},${rt}.o(${id}) and (` : `${rt}.qd(${id},`);
     const conds: Condition[] = [];
-    const tree = cond.k === 'opaque' ? this.tokenOr(a, b, id, conds, true) : this.condTree(cond, id, conds, true);
+    const outer = this.probeCtx;
+    this.probeCtx = ctx;
+    let tree: CondNode;
+    try {
+      tree = cond.k === 'opaque' ? this.tokenOr(a, b, id, conds, true) : this.condTree(cond, id, conds, true);
+    } finally {
+      this.probeCtx = outer;
+    }
     this.ins(this.t[b - 1].end, vectors ? '))' : ')');
     const d: Decision = {
       id, kind, ctx, span: this.span(a, b - 1), text: this.text(a, b - 1), conds, tree,
@@ -497,7 +507,7 @@ class Instrumenter {
   private atom(j: number, k: number, d: number, conds: Condition[], pos: boolean): CondNode {
     const i = conds.length + 1;
     conds.push({ i, text: this.text(j, k - 1), span: this.span(j, k - 1) });
-    this.ins(this.t[j].start, `${this.rt}.${pos ? 'c' : 'n'}(${d},${i},`);
+    this.ins(this.t[j].start, `${this.rt}.${this.probeCtx === 'sql' ? 'q' : ''}${pos ? 'c' : 'n'}(${d},${i},`);
     this.ins(this.t[k - 1].end, ')');
     return { t: 'cond', i };
   }
@@ -702,6 +712,7 @@ class Instrumenter {
   private simpleCaseExpr(n: Node, ctx: 'plsql' | 'sql', clause: string) {
     const c = this.newConstruct('case-expr', ctx, this.t[n.a]);
     const rt = this.rt;
+    const bt = ctx === 'sql' ? 'qbt' : 'bt';
     // A CASE whose results are all NULL does not compile (PLS-00617): a probe around a NULL
     // result, and the probe of the implicit ELSE, get a dead ELSE with the shortest real
     // result of this CASE for the type. It never runs, the probe is always TRUE. Tokens only:
@@ -715,7 +726,7 @@ class Instrumenter {
       : 'null';
     const probe = (res: Node) => {
       const id = this.ids.branch++;
-      this.ins(this.t[res.a].start, `case when ${rt}.bt(${id}) then `);
+      this.ins(this.t[res.a].start, `case when ${rt}.${bt}(${id}) then `);
       this.scanRegion(res.a, res.b, ctx, clause, [res]);
       this.ins(this.t[res.b - 1].end, isNull(res) ? ` else ${copy} end` : ' end');
       return id;
@@ -738,7 +749,7 @@ class Instrumenter {
     }
     const endTok = this.t[n.b - 1];
     const id = this.ids.branch++;
-    this.ins(endTok.start, `else case when ${rt}.bt(${id}) then null else ${copy} end `);
+    this.ins(endTok.start, `else case when ${rt}.${bt}(${id}) then null else ${copy} end `);
     c.branches.push({ label: 'ELSE (implizit → NULL)', line: endTok.line, col: endTok.col, nf: false, probe: id });
   }
 

@@ -11,7 +11,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { TextDecoder } from 'node:util';
-import { parse, preprocessBlocks, inlineForeign, scanLine, tokenize, type Node, type ScanState, type Token } from '@pltest/core';
+import { parse, preprocessBlocks, FOREIGN_HEAD, inlineForeign, scanLine, tokenize, type Node, type ScanState, type Token } from '@pltest/core';
 import type { Loop, Point, SourceFile, Unit } from './mutant.js';
 
 export function findPoints(paths: string[]): SourceFile[] {
@@ -40,8 +40,33 @@ const UNIT_OPEN = /^\s*CREATE(\s+OR(\s+REPLACE)?)?(\s+(NON)?EDITIONABLE)?\s*$/i;
 
 /** name used as a size or precision: (name), (name, …), (name CHAR|BYTE), (…, name). */
 function sizeUse(src: string, name: string): boolean {
-  const n = name.replace(/[$#]/g, (c) => `\\${c}`);
-  return new RegExp(`[(,]\\s*(\\w+\\.)?${n}\\s*([),]|CHAR\\b|BYTE\\b)`, 'i').test(src);
+  return new RegExp(`\\b(N?VARCHAR2?|N?CHAR|CHARACTER|NUMBER|NUMERIC|DEC(IMAL)?|FLOAT|RAW|UROWID|STRING|TIMESTAMP|INTERVAL\\s+(DAY|YEAR)|SECOND|VARRAY|VARYING\\s+ARRAY)\\s*\\(([^()]|\\([^()]*\\))*?${word(name)}`, 'i').test(src);
+}
+
+/** name as a whole word of PL/SQL ($ and # belong to names). */
+const word = (name: string) => `(?<![\\w$#])${name.replace(/[$#]/g, (c) => `\\${c}`)}(?![\\w$#])`;
+
+/**
+ * Constants whose value must stay static: those that give a size (sizeUse), and the constants
+ * their values name in turn (c_b CONSTANT … := c_a + 1). Read from the text (strings and
+ * comments included: one too many only runs one by one).
+ */
+function fixedConstants(src: string): Set<string> {
+  const values = new Map<string, string>();
+  for (const m of src.matchAll(/([A-Za-z][\w$#]*)\s+CONSTANT\b[^;]*?(?::=|\bDEFAULT\b)([^;]*);/gi)) values.set(m[1].toUpperCase(), m[2]);
+  const fixed = new Set([...values.keys()].filter((n) => sizeUse(src, n)));
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const f of [...fixed]) {
+      for (const n of values.keys()) {
+        if (!fixed.has(n) && new RegExp(word(n), 'i').test(values.get(f)!)) {
+          fixed.add(n);
+          grew = true;
+        }
+      }
+    }
+  }
+  return fixed;
 }
 
 const utf8Len = (c: number) => (c < 0x80 ? 1 : c < 0x800 ? 2 : 3);
@@ -101,7 +126,10 @@ export function blankSqlPlus(s: string): string {
         continue;
       }
       if (UNIT_START.test(head)) state = 'unit';
-      else if (!UNIT_OPEN.test(head)) state = 'sql';
+      // (a Java/MLE source stays open until its AS, or until its ";" in the BFILE/CLOB form)
+      else if (FOREIGN_HEAD.test(head)) {
+        if (!st.quote && /;\s*$/.test(r.code)) state = 'between';
+      } else if (!UNIT_OPEN.test(head)) state = 'sql';
     }
     // (a block comment may follow the semicolon: its content is not in the code)
     if (state === 'sql' && !st.quote && /;\s*$/.test(r.code)) state = 'between';
@@ -261,6 +289,8 @@ const AGGREGATE_SWAP: Record<string, string> = { MIN: 'MAX', MAX: 'MIN', SUM: 'A
 
 class Finder {
   private src: string;
+  /** Constants whose value must stay static (fixedConstants), read on first use. */
+  private fixed?: Set<string>;
   private blocks: [number, number][];
   private byteAt: Uint32Array;
   private t: Token[] = [];
@@ -411,7 +441,8 @@ class Finder {
         // a constant whose name gives a size (VARCHAR2(c_len)) must stay static: a switch in its
         // value (it reads plmut$a) would make every such use fail to compile (PLS-00491)
         const name = this.t[n.a + 1]?.up === 'CONSTANT' ? this.norm(n.a) : undefined;
-        const fixed = !!name && sizeUse(this.src, name);
+        this.fixed ??= fixedConstants(this.src);
+        const fixed = !!name && this.fixed.has(name.toUpperCase());
         for (const k of n.kids) this.walk(k, n, fixed ? { ...env, naiveOnly: env.naiveOnly ?? 'static' } : env);
         return;
       }

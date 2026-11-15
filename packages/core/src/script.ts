@@ -8,7 +8,9 @@ const PLSQL_START = /^\s*(CREATE\s+(OR\s+REPLACE\s+)?((NON)?EDITIONABLE\s+)?(PAC
  * declaration, not a column named FUNCTION: START WITH function IS NULL).
  */
 const WITH_PLSQL = /\bWITH\s+(FUNCTION|PROCEDURE)\s+(?!(IS|AS|IN|NOT|LIKE|BETWEEN|RETURN)\b)("[^"]*"|[A-Za-z][\w$#.]*)\s*(\(|RETURN\b|IS\b|AS\b)/i;
-const FOREIGN_HEAD = /^\s*CREATE\s+(OR\s+REPLACE\s+)?(AND\s+(RE)?(COMPILE|RESOLVE)\s+)?((NO)?FORCE\s+)?((NON)?EDITIONABLE\s+)?(MLE\s+MODULE|JAVA\s+SOURCE)\b/i;
+const MLE_INLINE = /^\s*CREATE\b[^;]*?\b(FUNCTION|PROCEDURE)\b[\s\S]*?\b(AS|IS)\s+MLE\s+LANGUAGE\b/i;
+/** An MLE module or Java source (its code may follow AS; whether it does is inlineForeign's). */
+export const FOREIGN_HEAD = /^\s*CREATE\s+(OR\s+REPLACE\s+)?(AND\s+(RE)?(COMPILE|RESOLVE)\s+)?((NO)?FORCE\s+)?((NON)?EDITIONABLE\s+)?(MLE\s+MODULE|JAVA\s+SOURCE)\b/i;
 
 /**
  * An MLE module or Java source with its code inline (… AS code, AS outside parentheses; the
@@ -16,6 +18,8 @@ const FOREIGN_HEAD = /^\s*CREATE\s+(OR\s+REPLACE\s+)?(AND\s+(RE)?(COMPILE|RESOLV
  * rules mean nothing (don't, '\''). code: the statement's code so far (scanLine).
  */
 export function inlineForeign(code: string): boolean {
+  // a call spec with JavaScript inline: … AS MLE LANGUAGE JAVASCRIPT {{ code }}
+  if (MLE_INLINE.test(code)) return true;
   const m = FOREIGN_HEAD.exec(code);
   if (!m) return false;
   let depth = 0;
