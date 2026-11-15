@@ -34,7 +34,7 @@ export function findInFile(path: string, buf: Buffer): SourceFile {
 /** SQL*Plus commands (at the start of a statement; SET TRANSACTION, ROLE and CONSTRAINTS are SQL). */
 const SQLPLUS = /^\s*(SHOW|SHO|SET(?!\s+(TRANSACTION|ROLE|CONSTRAINTS?)\b)|PROMPT|PRO|REM|REMARK|WHENEVER|SPOOL|DEFINE|DEF|UNDEFINE|COLUMN|COL|TTITLE|BTITLE|PAUSE|CLEAR|EXEC|EXECUTE|CONNECT|CONN|DISCONNECT|EXIT|QUIT|LIST|VAR|VARIABLE|HOST|START|PRINT|ACCEPT|TIMING|BREAK|COMPUTE|STORE|GET|SAVE|EDIT|INPUT|RUN|DESC|DESCRIBE)(\s|;|$).*|^\s*[@$!].*/i;
 /** The start of a PL/SQL unit (ends with "/"); other CREATE statements end with ";". */
-const UNIT_START = /^\s*(CREATE\s+(OR\s+REPLACE\s+)?((NON)?EDITIONABLE\s+)?(PACKAGE|PROCEDURE|FUNCTION|TRIGGER|TYPE)\b|DECLARE\b|BEGIN\b)/i;
+const UNIT_START = /^\s*(<<|CREATE\s+(OR\s+REPLACE\s+)?((NON)?EDITIONABLE\s+)?(PACKAGE|PROCEDURE|FUNCTION|TRIGGER|TYPE)\b|DECLARE\b|BEGIN\b)/i;
 /** Code that may still turn into a unit's start (CREATE OR REPLACE on a line of its own). */
 const UNIT_OPEN = /^\s*CREATE(\s+OR(\s+REPLACE)?)?(\s+(NON)?EDITIONABLE)?\s*$/i;
 
@@ -284,6 +284,8 @@ interface Sink {
   /** The enclosing subprogram (or unit): a variable must be declared in it (see varLiterals). */
   scope: Node;
   naiveOnly?: Env['naiveOnly'];
+  /** EXECUTE IMMEDIATE … INTO (not BULK): a single row, whatever the order. */
+  single?: boolean;
 }
 
 /** The bind placeholders of a statement (:name, :1, :"x"), sorted. */
@@ -739,7 +741,9 @@ class Finder {
       b--;
     }
     if (a < 0 || b !== a + 1) return; // a single token: a literal or a variable
-    if (['string', 'ident', 'qident'].includes(this.t[a].kind)) this.sinks.push({ tok: a, sub: env.sub, scope: this.scopeNode, naiveOnly: env.naiveOnly });
+    const words = this.t.slice(b, n.b).map((t) => t.up);
+    const single = n.op === 'exec' && words.includes('INTO') && !words.includes('BULK');
+    if (['string', 'ident', 'qident'].includes(this.t[a].kind)) this.sinks.push({ tok: a, sub: env.sub, scope: this.scopeNode, naiveOnly: env.naiveOnly, single });
   }
 
   /**
@@ -750,21 +754,23 @@ class Finder {
    * variant is its own statement, parsed when executed, so no plan suffers.
    */
   private dynamicSql() {
-    const lits = new Map<number, { sub: string; max?: number; naiveOnly?: Env['naiveOnly'] }>();
+    const lits = new Map<number, { sub: string; max?: number; naiveOnly?: Env['naiveOnly']; single?: boolean }>();
     const sinks = new Set(this.sinks.map((s) => s.tok));
     for (const s of this.sinks) {
       if (this.t[s.tok].kind === 'string') {
-        lits.set(s.tok, { sub: s.sub, naiveOnly: s.naiveOnly });
+        lits.set(s.tok, { sub: s.sub, naiveOnly: s.naiveOnly, single: s.single });
         continue;
       }
       const v = this.varLiterals(this.norm(s.tok)!, s.scope, sinks);
       if (!v) continue;
       for (const k of v.lits) {
         const max = Math.min(lits.get(k)?.max ?? Infinity, v.max ?? Infinity);
-        lits.set(k, { sub: s.sub, max: Number.isFinite(max) ? max : undefined, naiveOnly: s.naiveOnly });
+        // (a literal that also reaches a statement without INTO: its order counts there)
+        const single = s.single && (lits.has(k) ? lits.get(k)!.single : true);
+        lits.set(k, { sub: s.sub, max: Number.isFinite(max) ? max : undefined, naiveOnly: s.naiveOnly, single });
       }
     }
-    for (const [k, l] of [...lits].sort((x, y) => x[0] - y[0])) this.literal(k, l.sub, l.max, l.naiveOnly);
+    for (const [k, l] of [...lits].sort((x, y) => x[0] - y[0])) this.literal(k, l.sub, l.max, l.naiveOnly, l.single);
   }
 
   /** An identifier as Oracle compares it (quoted ones exactly), else undefined. */
@@ -883,7 +889,7 @@ class Finder {
   }
 
   /** max: the variable's declared length; bytes if positive, characters if negative (see varLiterals). */
-  private literal(k: number, sub: string, max?: number, naiveOnly?: Env['naiveOnly']) {
+  private literal(k: number, sub: string, max?: number, naiveOnly?: Env['naiveOnly'], single = false) {
     const tok = this.t[k];
     if (this.inConditional(tok.start)) return;
     const s = this.src.slice(tok.start, tok.end);
@@ -926,8 +932,15 @@ class Finder {
     const at = (byte: number) => map[buf.subarray(from, byte).toString('utf8').length];
     const escape = (m: string) => (q ? m : m.replaceAll("'", "''"));
     this.skipped += inner.skipped;
+    // fetched INTO a single row without a row limit or a subquery (whose order could pick the row):
+    // its ORDER BY changes nothing, as in a static SELECT … INTO
+    const orderFree = single && !/\b(FETCH\s+(FIRST|NEXT)|ROWNUM)\b|\(\s*(SELECT|WITH)\b/i.test(content);
     for (const p of inner.points) {
       if (p.start < from || p.end > to || p.kind === 'insert' || p.kind === 'stmt') continue;
+      if (orderFree && p.op === 'ORD') {
+        this.skipped += p.mutants.length;
+        continue;
+      }
       const a = at(p.start);
       const b = at(p.end);
       const ca = buf.subarray(from, p.start).toString('utf8').length;

@@ -160,6 +160,34 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     await lock.close().catch(() => {});
     throw e;
   });
+  // Ctrl-C, a CI cancel: a test run is broken off (never a compile), the run stops at the next
+  // step, and the finally below puts the originals back; a second signal must not kill that
+  let interrupted = false;
+  let testing = false;
+  const onSig = () => {
+    if (interrupted) {
+      say('Die Originale werden gerade wiederhergestellt, bitte warten (sonst: pltest restore)');
+      return;
+    }
+    interrupted = true;
+    say('Abbruch angefordert, stelle Originale wieder her …');
+    if (testing) conn.break().catch(() => {});
+  };
+  const checkpoint = () => {
+    if (interrupted) throw new Error('Abbruch angefordert, Originale wiederhergestellt');
+  };
+  const testRun = async (paths: string[], cov: string[] | null) => {
+    checkpoint();
+    testing = true;
+    try {
+      return await runTests(conn, paths, cov);
+    } finally {
+      testing = false;
+      checkpoint();
+    }
+  };
+  process.on('SIGINT', onSig);
+  process.on('SIGTERM', onSig);
   const restore: SourceObject[] = [];
   let nls = 'BYTE';
   try {
@@ -200,23 +228,23 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       await conn.execute(`grant execute on ${dbIdent(rtOwner)}.cov$ to ${dbIdent(owner)}`);
     }
 
-    await runTests(conn, cfg.tests, null); // warm-up: utPLSQL builds its annotation cache on the first run
+    await testRun(cfg.tests, null); // warm-up: utPLSQL builds its annotation cache on the first run
     say('1/4 Testlauf ohne Coverage …');
     const repeat = Math.max(1, cfg.baselineRuns ?? 2);
     // Every run starts with fresh package state, like the instrumented run after compiling:
     // tests that depend on state left by earlier tests then behave the same in all runs.
     const fresh = () => conn.execute('begin dbms_session.reset_package; end;');
     await fresh();
-    let baseline = await runTests(conn, cfg.tests, null);
+    let baseline = await testRun(cfg.tests, null);
     const observed: TestCase[][] = [baseline.run.tests];
     for (let k = 1; k < repeat; k++) {
       await fresh();
-      baseline = await runTests(conn, cfg.tests, null);
+      baseline = await testRun(cfg.tests, null);
       observed.push(baseline.run.tests);
     }
     say('2/4 Testlauf mit utPLSQL-Coverage (DBMS_PROFILER) …');
     await fresh();
-    const utCov = await runTests(conn, cfg.tests, schemas);
+    const utCov = await testRun(cfg.tests, schemas);
 
     say('3/4 Instrumentieren und kompilieren …');
     const ids = newIds();
@@ -231,6 +259,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     let instrumentMs = 0;
     let compileMs = 0;
     for (const obj of objects) {
+      checkpoint();
       const t0 = performance.now();
       let res;
       try {
@@ -275,7 +304,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     // run with the session's own, as in the baseline
     await conn.execute(`alter session set nls_length_semantics = ${nls === 'CHAR' ? 'CHAR' : 'BYTE'}`);
     try {
-      instrumentedRun = await runTests(conn, cfg.tests, null);
+      instrumentedRun = await testRun(cfg.tests, null);
       // a test that reset all package state took the counters with it
       const intact = (await conn.execute<[number]>(`select cov$.intact from dual`)).rows?.[0]?.[0];
       if (intact !== 1) say('WARNUNG: Der Zustand von cov$ wurde während der Tests zurückgesetzt (DBMS_SESSION.RESET_PACKAGE in einem Test?): die Coverage dieses Laufs ist unvollständig');
@@ -384,6 +413,8 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     } finally {
       if (fin !== conn) await fin.close().catch(() => {});
       await conn.close().catch(() => {});
+      process.off('SIGINT', onSig);
+      process.off('SIGTERM', onSig);
       // (a check in flight may still swap the connection; after this none takes the lock again)
       down = true;
       await checking?.catch(() => {});

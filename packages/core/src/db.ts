@@ -308,10 +308,10 @@ export function withDisable(source: string): string | undefined {
   return undefined;
 }
 
-async function compileHere(conn: oracledb.Connection, obj: SourceObject, source: string, inline = true): Promise<CompileOutcome> {
+async function compileHere(conn: oracledb.Connection, obj: SourceObject, source: string): Promise<CompileOutcome> {
   const st = obj.settings;
-  const plain = source;
-  const disabled = inline && obj.type === 'TRIGGER' && st.trigger_status === 'DISABLED' ? withDisable(source) : undefined;
+  // (a trigger with compile errors stays disabled this way: never compiled again without it)
+  const disabled = obj.type === 'TRIGGER' && st.trigger_status === 'DISABLED' ? withDisable(source) : undefined;
   if (disabled) source = disabled;
   if (st.plsql_optimize_level) await conn.execute(`alter session set plsql_optimize_level = ${Number(st.plsql_optimize_level)}`);
   if (st.plsql_code_type) await conn.execute(`alter session set plsql_code_type = '${st.plsql_code_type.replace(/'/g, '')}'`);
@@ -337,9 +337,6 @@ async function compileHere(conn: oracledb.Connection, obj: SourceObject, source:
     `select line, text from all_errors where owner = :o and name = :n and type = :t and attribute = 'ERROR' order by sequence`,
     { o: obj.owner, n: obj.name, t: obj.type },
   );
-  // errors with the DISABLE put in (a header withDisable read wrong): once more as written, the
-  // status by ALTER; errors that stay are the code's own
-  if (err.rows?.length && disabled) return compileHere(conn, obj, plain, false);
   if (err.rows?.length) return { error: err.rows.slice(0, 3).map((r) => `Zeile ${r[0]}: ${r[1].trim()}`).join('; '), warning };
   return { error: null, warning };
 }

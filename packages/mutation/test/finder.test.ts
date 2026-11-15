@@ -1033,3 +1033,10 @@ END ct;
 test('withoutCreate drops IF NOT EXISTS after NO FORCE', () => {
   assert.equal(withoutCreate('create no force view if not exists v as select 1 a from dual'), 'no force view v as select 1 a from dual');
 });
+
+test('finder: no ORD mutant for a dynamic single-row EXECUTE IMMEDIATE … INTO without row limit', () => {
+  const got = mutants(body(`EXECUTE IMMEDIATE 'select count(*) from t where a = 1 order by 1' INTO x;
+    OPEN cur FOR 'select a from t order by b';`), ['ORD']);
+  assert.ok(!got.some((g) => g.includes('order by 1') || g.startsWith('ORD: 1 ')), got.join('\n'));
+  assert.ok(got.some((g) => g.includes('b DESC')), got.join('\n'));
+});

@@ -2,7 +2,9 @@
 
 /** SQL*Plus commands between statements (SET TRANSACTION, ROLE and CONSTRAINTS are SQL). */
 const SQLPLUS = /^\s*(PROMPT|PRO|SET(?!\s+(TRANSACTION|ROLE|CONSTRAINTS?)\b)|SPOOL|WHENEVER|DEFINE|DEF|UNDEFINE|SHOW|SHO|EXIT|QUIT|REM|REMARK|COLUMN|COL|TTITLE|BTITLE|PAUSE|CLEAR|VAR|VARIABLE|PRINT|ACCEPT|TIMING|BREAK|COMPUTE|HOST|LIST|CONNECT|CONN|DISCONNECT|START|RUN|GET|DESC|DESCRIBE)(\s|;|$)|^\s*[@$!]/i;
-const PLSQL_START = /^\s*(CREATE\s+(OR\s+REPLACE\s+)?((NON)?EDITIONABLE\s+)?(PACKAGE|PROCEDURE|FUNCTION|TRIGGER|TYPE)\b|DECLARE\b|BEGIN\b)/i;
+/** The first word of a SQL statement or PL/SQL block (what SQL*Plus takes as one, not as SP2-0734). */
+const SQL_START = /^\s*(<<|\(|(SELECT|INSERT|UPDATE|DELETE|MERGE|CREATE|ALTER|DROP|TRUNCATE|GRANT|REVOKE|COMMENT|COMMIT|ROLLBACK|SAVEPOINT|LOCK|WITH|EXPLAIN|CALL|ANALYZE|AUDIT|NOAUDIT|RENAME|PURGE|FLASHBACK|SET|DECLARE|BEGIN|VALUES|ASSOCIATE|DISASSOCIATE|ADMINISTER|TABLE)\b)/i;
+const PLSQL_START = /^\s*(<<|CREATE\s+(OR\s+REPLACE\s+)?((NON)?EDITIONABLE\s+)?(PACKAGE|PROCEDURE|FUNCTION|TRIGGER|TYPE)\b|DECLARE\b|BEGIN\b)/i;
 /**
  * Other statements SQL*Plus ends only at "/": with PL/SQL in a WITH clause (a query, a view; a
  * declaration, not a column named FUNCTION: START WITH function IS NULL).
@@ -118,7 +120,8 @@ export function splitScript(text: string): string[] {
   let cont = false;
   let foreign = false; // in an inline Java/MLE source: only the "/" line ends it
   let parked = false; // SQL cut off by a blank line: run only if "/" follows
-  let blankLines = false; // SET SQLBLANKLINES ON: blank lines belong to the statement // a SQL*Plus command continues on the next line
+  let blankLines = false; // SET SQLBLANKLINES ON: blank lines belong to the statement
+  let dropped = false; // after SQL a blank line ended: lines that start no statement are rejected // a SQL*Plus command continues on the next line
   const flush = () => {
     // a statement of comments only, or a lone semicolon, is none (ORA-00900)
     if (code.replace(/;\s*$/, '').trim()) out.push(buf.join('\n').replace(/\s+$/, ''));
@@ -185,9 +188,17 @@ export function splitScript(text: string): string[] {
       // SQL*Plus (SQLBLANKLINES OFF) ended the statement at the blank line without running it
       buf = [];
       code = '';
+      dropped = true;
+    }
+    // the rest of it: SQL*Plus reads each line as a new command and rejects those that start none
+    if (dropped && !st.comment && !st.quote) {
+      // (blank and comment lines change nothing: the next line is a new command still)
+      if (!line.trim() || /^\s*--/.test(line)) continue;
+      if (SQLPLUS.test(line) || SQL_START.test(line) || /^\s*(\/\*|EXEC(UTE)?\s)/i.test(line)) dropped = false;
+      else continue;
     }
     // a blank line in unfinished SQL (not PL/SQL, not in a string or comment) ends its entry
-    if (!blankLines && !line.trim() && code.trim() && !st.comment && !st.quote && !PLSQL_START.test(code) && !WITH_PLSQL.test(code)) {
+    if (!blankLines && !line.trim() && code.trim() && !st.comment && !st.quote && !PLSQL_START.test(code) && !WITH_PLSQL.test(code) && !FOREIGN_HEAD.test(code)) {
       parked = true;
       continue;
     }

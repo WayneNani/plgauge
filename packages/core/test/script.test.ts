@@ -200,3 +200,30 @@ select 1 from dual
 select 2 from dual;
 `), ['create table t (\n  a number,\n\n  b number\n)', 'select 2 from dual']);
 });
+
+test('splitScript: a labelled block is PL/SQL up to its slash; the rest of SQL cut off by a blank line is rejected as SQL*Plus does', () => {
+  assert.deepEqual(splitScript(`<<main>>
+declare
+  l_x number;
+
+  col number := 1;
+begin
+  select count(*) into l_x from dual;
+end main;
+/
+create table t (
+  a number,
+
+  b number
+);
+insert into t values (1);
+create or replace and compile java source named "X"
+
+as public class X {}
+/
+`), [
+    '<<main>>\ndeclare\n  l_x number;\n\n  col number := 1;\nbegin\n  select count(*) into l_x from dual;\nend main;',
+    'insert into t values (1)',
+    'create or replace and compile java source named "X"\n\nas public class X {}',
+  ]);
+});

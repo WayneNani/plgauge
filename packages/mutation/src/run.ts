@@ -1156,6 +1156,7 @@ export async function runMutation(opt: Options): Promise<Report> {
   };
   // kept until the originals are back: a second Ctrl-C must not kill the restore
   process.on('SIGINT', onSig);
+  process.on('SIGTERM', onSig);
   try {
     // all settled before anything fails: a worker still opening would otherwise keep its lock and connections
     const opened = await Promise.allSettled(run.workers.map((w) => w.open()));
@@ -1210,6 +1211,7 @@ export async function runMutation(opt: Options): Promise<Report> {
     }
     await Promise.all(run.workers.map((w) => w.shutdown()));
     process.off('SIGINT', onSig);
+    process.off('SIGTERM', onSig);
   }
 }
 
