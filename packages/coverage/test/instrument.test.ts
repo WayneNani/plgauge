@@ -197,3 +197,10 @@ test('instrument: a GOTO target keeps its statement probe; a loop label stays on
   assert.match(r.instrumented, /<<done>>\s*cov\$\.s\(\d+\);\s*NULL;/i);
   assert.match(r.instrumented, /cov\$\.s\(\d+\);(cov\$\.le\(\d+\);)?\s*<<outer>>\s*LOOP/i);
 });
+
+test('instrument: a labelled block or CASE statement keeps its label (qualified names, END label)', () => {
+  const r = run(proc(`  <<blk>> DECLARE x NUMBER := 2; BEGIN dbms_output.put_line(blk.x); END blk;
+  <<l2>> CASE a WHEN 1 THEN NULL; ELSE NULL; END CASE l2;`));
+  assert.match(r.instrumented, /cov\$\.s\(\d+\);\s*<<blk>>\s*DECLARE/i);
+  assert.match(r.instrumented, /cov\$\.s\(\d+\);\s*<<l2>>\s*CASE/i);
+});

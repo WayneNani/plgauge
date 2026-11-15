@@ -398,6 +398,9 @@ class Worker {
 
   /** Compiles a unit's new text; returns the compile errors (empty = valid). */
   async compileUnit(key: string, type: string, name: string, text: string) {
+    // the lock checked before every change (its session may have ended since the last ping, and
+    // another run may have taken it): changes only under the lock
+    await this.ensureLock();
     this.guard();
     const obj = await this.object(key, type, name);
     this.changed.set(key, obj);
@@ -538,7 +541,11 @@ class Worker {
     }
   }
 
+  /** Set when tests started (dispatch: a crash before them is no kill). */
+  testsRan = false;
+
   async runTests(paths: string[], limitMs = this.limitMs): Promise<RunResult> {
+    this.testsRan = true;
     this.guard();
     const r = await runTests(this.test, this.monitor, paths, limitMs);
     if (r.killed || (!r.timedOut && lostConnection(r.err))) await this.reconnectTest();
@@ -754,7 +761,8 @@ class Worker {
     const cmd0 = this.run.opt.resetCmd;
     // the database belongs to another run now: never reset it
     if (!cmd0 || this.foreign) return;
-    const port = new URL(this.url).port;
+    // (the URL may leave the port out: Oracle's default, as parseDbUrl takes it)
+    const port = new URL(this.url).port || '1521';
     const cmd = cmd0.replaceAll('{port}', port);
     this.logf(`Worker${this.name} wird zurückgesetzt: ${cmd}`);
     const t0 = Date.now();
@@ -821,6 +829,14 @@ class Run {
   repairs = 0;
   /** Views that go into the schema exactly as written (see buildSchema). */
   plain = new Set<string>();
+  /** Units the schema could not put in place at all (not even with errors): left out of it. */
+  unplaced = new Set<string>();
+  /** Ctrl-C: the dispatch loops stop, the phases before them end at the next checkpoint. */
+  interrupted = false;
+  checkpoint(): void {
+    if (this.interrupted) throw new Error('Abbruch angefordert (Strg-C), Originale wiederhergestellt');
+    if (this.abort) throw new Error(this.abort);
+  }
   /** Tests that commit on their own (found by the baseline when the tests commit at all). */
   committers = new Set<string>();
   /** Set when the run must stop (the run lock was lost); runMutation fails with it. */
@@ -876,10 +892,12 @@ class Run {
       while (!stop() && !w.retired) {
         const i = again.length ? again.shift()! : next++;
         if (i >= ms.length) return;
+        w.testsRan = false;
         let r = await fn(w, ms[i]);
         if (broken(r) || !(await w.alive())) {
           this.logf(`Worker${w.name}: Verbindung verloren (${r.detail ?? 'Verwaltungsverbindung'}), baue neu auf …`);
           if (await w.reopen()) {
+            w.testsRan = false;
             r = await fn(w, ms[i]);
             // on a fresh connection it broke the server process again: the mutant does it
             if (broken(r)) {
@@ -889,7 +907,9 @@ class Run {
                 this.logf(`Worker${w.name} scheidet aus, die anderen übernehmen seine Mutanten`);
                 return;
               }
-              Object.assign(r, { status: 'KILLED', killedBy: '(Serverprozess abgestürzt)' });
+              // under the tests: they would fail; before them (compiling the mutant): no test saw it
+              if (w.testsRan) Object.assign(r, { status: 'KILLED', killedBy: '(Serverprozess abgestürzt)' });
+              else r.detail = `Serverprozess beim Kompilieren abgestürzt: ${r.detail ?? ''}`;
             }
           } else {
             w.retired = true;
@@ -941,6 +961,7 @@ class Run {
     const failedNames = new Map<string, string>();
     let last: TestResult[] = [];
     for (let i = 0; i < 2; i++) {
+      this.checkpoint();
       await resetPackages(w.test);
       const r = await w.runTests(this.cfg.tests, 10 * 60_000);
       if (r.err) throw new Error(`Baseline: ${firstLine(r.err)}`);
@@ -960,6 +981,7 @@ class Run {
     if (this.testsCommit && !this.committers.size) {
       // which of them commit: each alone, once
       for (const t of ok) {
+        this.checkpoint();
         await resetPackages(w.test);
         if ((await w.runTests([t.name], 10 * 60_000)).committed) this.committers.add(t.name);
       }
@@ -1103,13 +1125,12 @@ export async function runMutation(opt: Options): Promise<Report> {
   }
   if (!opt.dbUrls.length) throw new Error('keine Datenbank: --db oder PLMUT_DB setzen');
   opt.dbUrls.forEach((u, i) => run.workers.push(new Worker(u, opt.dbUrls.length > 1 ? ` w${i + 1}` : '', run)));
-  let interrupted = false;
   const onSig = () => {
-    if (interrupted) {
+    if (run.interrupted) {
       run.logf('Die Originale werden gerade wiederhergestellt, bitte warten (sonst: pltest restore)');
       return;
     }
-    interrupted = true;
+    run.interrupted = true;
     run.logf('Abbruch angefordert, stelle Originale wieder her …');
   };
   // kept until the originals are back: a second Ctrl-C must not kill the restore
@@ -1120,13 +1141,14 @@ export async function runMutation(opt: Options): Promise<Report> {
     const failedOpen = opened.find((o): o is PromiseRejectedResult => o.status === 'rejected');
     if (failedOpen) throw failedOpen.reason;
     if (run.workers.length > 1) run.logf(`${run.workers.length} Worker-Datenbanken`);
+    run.checkpoint();
     ms = await withoutTriggeredViews(run, ms);
     run.total = ms.length;
     const mode = opt.mode ?? 'schema';
-    const stop = () => interrupted || !!run.abort;
+    const stop = () => run.interrupted || !!run.abort;
     const rep = mode === 'naive' ? await runNaive(run, ms, stop) : await runSchema(run, ms, stop);
     if (run.abort) rep.aborted = run.abort;
-    else if (interrupted) rep.aborted = 'Abbruch angefordert (Strg-C)';
+    else if (run.interrupted) rep.aborted = 'Abbruch angefordert (Strg-C)';
     rep.mode = mode;
     rep.skippedVariants = skipped;
     rep.elapsedMs = performance.now() - t0;
@@ -1167,6 +1189,7 @@ async function naiveList(run: Run, ms: Mutant[], stop: () => boolean): Promise<R
 
 async function runNaive(run: Run, ms: Mutant[], stop: () => boolean): Promise<Report> {
   const base = await run.baseline();
+  run.checkpoint();
   const rep = emptyReport(run, base.ms, base.tests.length);
   run.logf(`Baseline: ${base.tests.length} Tests in ${Math.round(base.ms)}ms, Zeitgrenze ${Math.round(run.primary.limitMs)}ms`);
   rep.results = await naiveList(run, ms, stop);
@@ -1188,11 +1211,16 @@ async function runSchema(run: Run, ms: Mutant[], stop: () => boolean): Promise<R
   const t0 = performance.now();
   await installControl(w.deploy);
   const plans = await capBranches(run, ms, naive);
+  run.checkpoint();
   const broken = new Set<string>();
   let rounds = await compileSchema(run, ms, dropped, naive, broken);
+  run.checkpoint();
   rounds += await isolateViews(run, ms, dropped, naive, broken);
+  run.checkpoint();
   rounds += await checkPlans(run, ms, dropped, naive, broken, plans);
-  const units = buildSchema(ms, new Set(dropped.keys()), naive, await w.currentSchema(), broken, run.plain);
+  run.checkpoint();
+  // (a unit left out stays original on every worker)
+  const units = buildSchema(ms, new Set(dropped.keys()), naive, await w.currentSchema(), broken, run.plain).filter((u) => !run.unplaced.has(u.key));
   w.schema = units;
   // all settled before anything fails: restoring while another worker still compiles would miss units
   const settled = async (ps: Promise<unknown>[]) => {
@@ -1206,13 +1234,17 @@ async function runSchema(run: Run, ms: Mutant[], stop: () => boolean): Promise<R
   run.logf(`Schema kompiliert in ${Math.round(performance.now() - t0)}ms (${rounds} Runden), ${dropped.size} Mutanten verworfen, ${naive.size} Stellen ohne Schema`);
 
   // the first execution parses the branches (cursors and views with many: seconds); the time limit must not include it
+  run.checkpoint();
   await settled(run.workers.map((h) => h.warmUp()));
+  run.checkpoint();
   await activate(w.test, 0);
   const base = await run.baseline();
+  run.checkpoint();
   const rep = emptyReport(run, base.ms, base.tests.length);
   run.logf(`Baseline mit Schema: ${base.tests.length} Tests in ${Math.round(base.ms)}ms, Zeitgrenze ${Math.round(w.limitMs)}ms`);
 
   const covering = await record(run, base.tests);
+  run.checkpoint();
   run.covering = covering;
   run.recorded = new Set(units.flatMap((u) => u.recorded));
   rep.tests = w.passing.length;
@@ -1418,6 +1450,7 @@ async function checkPlans(run: Run, ms: Mutant[], dropped: Map<number, string>, 
   // as written; from the third pass on (compile errors changed a view again, a dependent view
   // went back) at once. Every pass from then on makes one more view plain or ends: it ends.
   for (let pass = 0; ; pass++) {
+    run.checkpoint();
     const views = buildSchema(ms, new Set(dropped.keys()), naive, await w.currentSchema(), broken, run.plain)
       .filter((u) => u.type === 'VIEW' && u.text !== u.original && plans.has(u.key));
     if (!pass) checked = views.length;
@@ -1521,10 +1554,19 @@ async function compileSchema(run: Run, ms: Mutant[], dropped: Map<number, string
   for (let round = 1; ; round++) {
     let bad = false;
     const before = state();
-    for (const su of buildSchema(ms, new Set(dropped.keys()), naive, await w.currentSchema(), broken, run.plain).filter(only)) {
-      // not compiled at all (a lock, say): the unit's mutants run one by one, the run goes on
+    run.checkpoint();
+    for (const su of buildSchema(ms, new Set(dropped.keys()), naive, await w.currentSchema(), broken, run.plain).filter((u) => only(u) && !run.unplaced.has(u.key))) {
+      // not compiled at all (a lock, a privilege): the unit stays out of the schema, its mutants
+      // run one by one, the run goes on
+      let failure = '';
       const errs = await w.compileUnit(su.key, su.type, su.owner ? `"${su.owner}"."${su.name}"` : su.name, su.text)
-        .catch((e: Error) => [{ line: 0, position: 0, text: firstLine(e) }]);
+        .catch((e: Error) => ((failure = firstLine(e)), []));
+      if (failure) {
+        run.unplaced.add(su.key);
+        for (const m of ms) if (unitKey(m) === su.key) naive.add(m.point);
+        run.logf(`${su.key}: nicht kompilierbar (${failure}), ohne Schema, Mutanten einzeln`);
+        continue;
+      }
       if (!errs.length) continue;
       bad = true;
       for (const e of errs) {

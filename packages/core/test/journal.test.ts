@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import oracledb from 'oracledb';
-import { ensureJournal, journalEntries, loadObject, replaceSource, restoreAll } from '@pltest/core';
+import { ensureJournal, journalEntries, loadObject, replaceSource, restoreAll, restoreJournal, viewFromDictionary, viewQuery } from '@pltest/core';
 
 const db = process.env.PLCOV_DB;
 const m = db ? /^([^/]+)\/([^@]+)@(.+)$/.exec(db) : null;
@@ -43,4 +43,101 @@ test('fingerprint ignores whitespace, CREATE keywords and characters a character
   assert.equal(fingerprint(a), fingerprint(`function f return varchar2 is\n begin return 'a ¿ b'; end;`));
   assert.equal(fingerprint(a), fingerprint(`function f return varchar2 is begin return 'a ? b'; end;`));
   assert.notEqual(fingerprint(a), fingerprint(`function f return varchar2 is begin return 'a c'; end;`));
+});
+
+test('viewQuery: the query after the first AS outside parentheses and quotes', () => {
+  assert.equal(viewQuery(`FORCE EDITIONABLE VIEW "O"."AS" ("AS", "B", CONSTRAINT "C" CHECK (a as b) DISABLE) DEFAULT COLLATION "USING_NLS_COMP" AS\n  select 1 as a from dual`), '\n  select 1 as a from dual');
+  assert.equal(viewQuery(`VIEW v /* as */ -- as\n AS select 1 a from dual`), ' select 1 a from dual');
+});
+
+const withConn = async (f: (conn: oracledb.Connection, owner: string) => Promise<void>) => {
+  const conn = await oracledb.getConnection({ user: m![1], password: m![2], connectString: m![3] });
+  try {
+    await ensureJournal(conn);
+    await f(conn, m![1].toUpperCase());
+  } finally {
+    await conn.close();
+  }
+};
+const quiet = (out: string[]) => (s: string) => out.push(s);
+
+test('a dead run\'s view is restored, a view changed since keeps the newer text', { skip: !m && 'PLCOV_DB not set' }, async () => {
+  await withConn(async (conn, owner) => {
+    const text = async () => (await conn.execute<[string]>(`select text from user_views where view_name = 'PLTEST_JV'`)).rows![0][0];
+    const mine = async () => (await journalEntries(conn)).filter((e) => e.name === 'PLTEST_JV');
+    try {
+      await conn.execute(`create or replace view pltest_jv as select 1 a from dual with read only`);
+      const obj = await loadObject(conn, owner, 'PLTEST_JV', 'VIEW');
+      // dies with the mutant in place: restored
+      assert.equal(await replaceSource(conn, obj, obj.original.replace('select 1 a', 'select 2 a'), 'test'), null);
+      const out: string[] = [];
+      await restoreJournal(conn, await mine(), quiet(out));
+      assert.match(await text(), /select 1 a/, out.join('\n'));
+      assert.deepEqual(await mine(), []);
+      // dies, then someone puts a newer view there: it stays
+      assert.equal(await replaceSource(conn, obj, obj.original.replace('select 1 a', 'select 2 a'), 'test'), null);
+      await conn.execute(`create or replace view pltest_jv as select 3 a from dual`);
+      out.length = 0;
+      await restoreJournal(conn, await mine(), quiet(out));
+      assert.match(await text(), /select 3 a/);
+      assert.match(out.join('\n'), /geändert/);
+      assert.deepEqual(await mine(), []);
+    } finally {
+      await conn.execute(`drop view pltest_jv`).catch(() => {});
+    }
+  });
+});
+
+test('a unit dropped after the dead run is not created again', { skip: !m && 'PLCOV_DB not set' }, async () => {
+  await withConn(async (conn, owner) => {
+    await conn.execute(`create or replace function pltest_journal_gone return number is begin return 1; end;`);
+    const obj = await loadObject(conn, owner, 'PLTEST_JOURNAL_GONE', 'FUNCTION');
+    await replaceSource(conn, obj, 'function pltest_journal_gone return number is begin return 2; end;', 'test');
+    await conn.execute(`drop function pltest_journal_gone`);
+    const out: string[] = [];
+    await restoreJournal(conn, (await journalEntries(conn)).filter((e) => e.name === 'PLTEST_JOURNAL_GONE'), quiet(out));
+    assert.match(out.join('\n'), /existiert nicht mehr/);
+    const n = (await conn.execute<[number]>(`select count(*) from user_objects where object_name = 'PLTEST_JOURNAL_GONE'`)).rows![0][0];
+    assert.equal(n, 0);
+    assert.equal((await journalEntries(conn)).filter((e) => e.name === 'PLTEST_JOURNAL_GONE').length, 0);
+  });
+});
+
+test('a unit keeps its PLSQL_WARNINGS through change and restore', { skip: !m && 'PLCOV_DB not set' }, async () => {
+  await withConn(async (conn, owner) => {
+    const warnings = async () => (await conn.execute<[string]>(`select plsql_warnings from user_plsql_object_settings where name = 'PLTEST_JOURNAL_WARN'`)).rows![0][0];
+    try {
+      await conn.execute(`alter session set plsql_warnings = 'ENABLE:ALL'`);
+      await conn.execute(`create or replace function pltest_journal_warn return number is begin return 1; end;`);
+      await conn.execute(`alter session set plsql_warnings = 'DISABLE:ALL'`);
+      const obj = await loadObject(conn, owner, 'PLTEST_JOURNAL_WARN', 'FUNCTION');
+      await replaceSource(conn, obj, 'function pltest_journal_warn return number is begin return 2; end;', 'test');
+      assert.equal(await warnings(), 'ENABLE:ALL');
+      await restoreAll(conn, [obj], () => {});
+      assert.equal(await warnings(), 'ENABLE:ALL');
+    } finally {
+      await conn.execute(`drop function pltest_journal_warn`).catch(() => {});
+    }
+  });
+});
+
+test('viewFromDictionary rebuilds read-only, check-option and invoker-rights views as they were', { skip: !m && 'PLCOV_DB not set' }, async () => {
+  await withConn(async (conn, owner) => {
+    const views = {
+      PLTEST_JV1: `select 1 a from dual with read only`,
+      PLTEST_JV2: `select dummy from dual where dummy = 'X' with check option`,
+    };
+    try {
+      for (const [n, q] of Object.entries(views)) await conn.execute(`create or replace view ${n} as ${q}`);
+      await conn.execute(`create or replace view pltest_jv3 bequeath current_user as select 1 a from dual`);
+      for (const n of [...Object.keys(views), 'PLTEST_JV3']) {
+        const before = (await conn.execute<[string, string]>(`select text, bequeath from user_views where view_name = :n`, { n })).rows![0];
+        await conn.execute(`create or replace ${await viewFromDictionary(conn, owner, n)}`);
+        const after = (await conn.execute<[string, string]>(`select text, bequeath from user_views where view_name = :n`, { n })).rows![0];
+        assert.deepEqual(after, before, n);
+      }
+    } finally {
+      for (const n of [...Object.keys(views), 'PLTEST_JV3']) await conn.execute(`drop view ${n}`).catch(() => {});
+    }
+  });
 });

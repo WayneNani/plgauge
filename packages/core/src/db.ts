@@ -8,7 +8,7 @@
  */
 import oracledb from 'oracledb';
 import { createHash } from 'node:crypto';
-import { fingerprint, journalForget, journalNote, journalRemember, journalUnnote, type JournalEntry } from './journal.js';
+import { codeFingerprint, fingerprint, journalForget, journalNote, journalRemember, journalUnnote, type JournalEntry } from './journal.js';
 
 export interface ConnectConfig {
   user: string;
@@ -139,8 +139,8 @@ export async function loadObject(conn: oracledb.Connection, owner: string, name:
   );
   const lob = (pp.outBinds as { x: oracledb.Lob | null }).x;
   const processed = lob ? String(await lob.getData()) : original;
-  const st = await conn.execute<[number, string, string, string, string]>(
-    `select plsql_optimize_level, plsql_code_type, plsql_ccflags, nls_length_semantics, plscope_settings
+  const st = await conn.execute<[number, string, string, string, string, string | null]>(
+    `select plsql_optimize_level, plsql_code_type, plsql_ccflags, nls_length_semantics, plscope_settings, plsql_warnings
        from all_plsql_object_settings where owner = :o and name = :n and type = :t`, { o: owner, n: name, t: type },
   );
   const s = st.rows?.[0];
@@ -151,7 +151,7 @@ export async function loadObject(conn: oracledb.Connection, owner: string, name:
   return {
     owner, name, type, original, processed,
     settings: {
-      ...(s ? { plsql_optimize_level: String(s[0]), plsql_code_type: s[1], plsql_ccflags: s[2] ?? '', nls_length_semantics: s[3], plscope_settings: s[4] ?? '' } : {}),
+      ...(s ? { plsql_optimize_level: String(s[0]), plsql_code_type: s[1], plsql_ccflags: s[2] ?? '', nls_length_semantics: s[3], plscope_settings: s[4] ?? '', ...(s[5] ? { plsql_warnings: s[5] } : {}) } : {}),
       ...(status === 'DISABLED' ? { trigger_status: 'DISABLED' } : {}),
     },
   };
@@ -187,15 +187,19 @@ export async function viewFromDictionary(conn: oracledb.Connection, owner: strin
             (select count(*) from all_tab_cols where owner = :o and table_name = :n and hidden_column = 'YES' and user_generated = 'YES')
        from dual`, { o: owner, n: name });
   const [cons0, invisible] = extra.rows?.[0] ?? [0, 0];
-  if (row[1] === 'Y' || row[2] || row[3] === 'DEFINER' || row[4] === 'Y' || cons0 > 0 || invisible > 0) {
-    throw new Error(`View ${owner}.${name} lässt sich ohne DBMS_METADATA nicht originalgetreu nachbauen (Editioning-, Objekt-, Duality- oder BEQUEATH-DEFINER-View, benannte Constraints oder unsichtbare Spalten)`);
+  if (row[1] === 'Y' || row[2] || row[4] === 'Y' || cons0 > 0 || invisible > 0) {
+    throw new Error(`View ${owner}.${name} lässt sich ohne DBMS_METADATA nicht originalgetreu nachbauen (Editioning-, Objekt- oder Duality-View, benannte Constraints oder unsichtbare Spalten)`);
   }
   const cols = await conn.execute<[string]>(`select column_name from all_tab_columns where owner = :o and table_name = :n order by column_id`, { o: owner, n: name });
   const cons = await conn.execute<[string]>(`select constraint_type from all_constraints where owner = :o and table_name = :n and constraint_type in ('O', 'V')`, { o: owner, n: name });
   const q = (x: string) => `"${x.replace(/"/g, '""')}"`;
   const types = new Set((cons.rows ?? []).map((r) => r[0]));
-  const tail = types.has('O') ? ' WITH READ ONLY' : types.has('V') ? ' WITH CHECK OPTION' : '';
-  return `FORCE VIEW ${q(owner)}.${q(name)} (${(cols.rows ?? []).map((r) => q(r[0])).join(', ')}) AS ${text.trim()}${tail}`;
+  // the text ends with WITH READ ONLY / CHECK OPTION as written (23ai); added only if not
+  const written = /\bwith\s+(read\s+only|check\s+option)\s*$/i.test(text.trim());
+  const tail = written ? '' : types.has('O') ? ' WITH READ ONLY' : types.has('V') ? ' WITH CHECK OPTION' : '';
+  // BEQUEATH DEFINER is the default
+  const bequeath = row[3] === 'CURRENT_USER' ? ' BEQUEATH CURRENT_USER' : '';
+  return `FORCE VIEW ${q(owner)}.${q(name)} (${(cols.rows ?? []).map((r) => q(r[0])).join(', ')})${bequeath} AS ${text.trim()}${tail}`;
 }
 
 /**
@@ -247,9 +251,15 @@ async function keepProperties(conn: oracledb.Connection, obj: SourceObject): Pro
   }
   if (obj.type === 'VIEW' && obj.settings.comments) {
     const c = JSON.parse(obj.settings.comments) as { table: string | null; cols: Record<string, string> };
-    if (c.table) await conn.execute(`comment on table ${full} is ${lit(c.table)}`).catch(() => {});
-    // a column the mutant's text no longer has cannot take its comment
-    for (const [col, text] of Object.entries(c.cols)) await conn.execute(`comment on column ${full}.${q(col)} is ${lit(text)}`).catch(() => {});
+    let failure: string | undefined;
+    const comment = (sql: string) => conn.execute(sql).then(() => {}, (e: Error) => {
+      // a column the mutant's text no longer has cannot take its comment (ORA-00904); anything
+      // else (a missing COMMENT ANY TABLE for another schema's view) loses it: reported
+      if (!e.message.includes('ORA-00904')) failure ??= e.message.split('\n')[0];
+    });
+    if (c.table) await comment(`comment on table ${full} is ${lit(c.table)}`);
+    for (const [col, text] of Object.entries(c.cols)) await comment(`comment on column ${full}.${q(col)} is ${lit(text)}`);
+    if (failure) return `Kommentare der View ${obj.name} nicht wiederhergestellt: ${failure}`;
   }
   return undefined;
 }
@@ -262,6 +272,8 @@ async function compileHere(conn: oracledb.Connection, obj: SourceObject, source:
   if (st.nls_length_semantics) await conn.execute(`alter session set nls_length_semantics = ${st.nls_length_semantics === 'CHAR' ? 'CHAR' : 'BYTE'}`);
   // PL/Scope data of the unit stays as it was (code that inspects PL/Scope, e.g. plscope-utils)
   if (st.plscope_settings) await conn.execute(`alter session set plscope_settings = '${st.plscope_settings.replace(/'/g, '')}'`);
+  // the unit's compiler warnings (a CI that checks them sees the same after the run)
+  if (st.plsql_warnings) await conn.execute(`alter session set plsql_warnings = '${st.plsql_warnings.replace(/'/g, '')}'`);
   const prefix = 'create or replace ';
   try {
     await conn.execute(prefix + source.replace(/\s*$/, ''));
@@ -295,19 +307,28 @@ export async function replaceSourceDetailed(conn: oracledb.Connection, obj: Sour
   // noted before the compile: if the run dies during it, the unit holds this text or the one it
   // holds now (read from the database, not assumed from the last note: a compile that failed
   // before its DDL changed nothing)
-  const now = await currentSource(conn, obj).catch(() => undefined);
-  await journalNote(conn, obj, source, now === undefined ? undefined : fingerprint(now));
+  const now = await currentCode(conn, obj).catch(() => undefined);
+  await journalNote(conn, obj, source, now?.sha);
   const out = await compileDetailed(conn, obj, source);
   // rejected at once (a lock, a privilege, a view statement): the object still holds the text before
   if (out.error && !/^Zeile \d+:/.test(out.error)) await journalUnnote(conn, obj);
   return out;
 }
 
-/** The source of a unit as the database holds it now (undefined for a view or a missing unit). */
-async function currentSource(conn: oracledb.Connection, obj: SourceObject): Promise<string | undefined> {
-  if (obj.type === 'VIEW') return undefined;
+/**
+ * The code of an object as the database holds it now (a view: its query) and its fingerprint,
+ * comparable to codeFingerprint's; undefined for a missing object.
+ */
+async function currentCode(conn: oracledb.Connection, obj: Pick<SourceObject, 'owner' | 'name' | 'type'>): Promise<{ text: string; sha: string } | undefined> {
+  if (obj.type === 'VIEW') {
+    const v = await conn.execute<[string]>(`select text from all_views where owner = :o and view_name = :n`, { o: obj.owner, n: obj.name });
+    const text = v.rows?.[0]?.[0];
+    return text === undefined ? undefined : { text, sha: fingerprint(text) };
+  }
   const r = await conn.execute<[string]>(`select text from all_source where owner = :o and name = :n and type = :t order by line`, { o: obj.owner, n: obj.name, t: obj.type });
-  return r.rows?.length ? r.rows.map((x) => x[0]).join('') : undefined;
+  if (!r.rows?.length) return undefined;
+  const text = r.rows.map((x) => x[0]).join('');
+  return { text, sha: fingerprint(text) };
 }
 
 /**
@@ -319,10 +340,17 @@ export async function restoreJournal(conn: oracledb.Connection, entries: Journal
   const todo: SourceObject[] = [];
   for (const e of entries) {
     if (e.currentSha) {
-      const cur = await currentSource(conn, e.object).catch(() => undefined);
+      // (not readable: restored as before; the compile reports what is wrong)
+      const cur = await currentCode(conn, e.object).catch(() => null);
+      if (cur === undefined) {
+        // pltest never drops an object: someone did since, on purpose
+        say(`  ✗ ${e.owner}.${e.name} existiert nicht mehr: Journal-Eintrag verworfen, nicht neu angelegt`);
+        await journalForget(conn, e.object);
+        continue;
+      }
       // pltest's: the text it was about to compile, the one before, or the original itself
-      const ours = new Set([e.currentSha, e.prevSha, fingerprint(e.object.original)]);
-      if (cur !== undefined && !ours.has(fingerprint(cur)) && !/plmut_ctl\.|plmut\$a|cov\$\./i.test(cur)) {
+      const ours = new Set([e.currentSha, e.prevSha, codeFingerprint(e.object.type, e.object.original)]);
+      if (cur && !ours.has(cur.sha) && !/plmut_ctl\.|plmut\$a|cov\$\./i.test(cur.text)) {
         say(`  ✗ ${e.owner}.${e.name} wurde nach dem abgebrochenen Lauf geändert: Journal-Eintrag verworfen, die neuere Fassung bleibt`);
         await journalForget(conn, e.object);
         continue;

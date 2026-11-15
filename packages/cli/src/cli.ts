@@ -304,7 +304,8 @@ async function main() {
       if (reportOut) writeFileSync(reportOut, reportOut.endsWith('.html') ? htmlReport(rep, dir) : mutationTestingReport(rep, dir));
       // nothing to score (no mutants in the diff, say): nothing fails the gate, as in pltest check
       const scored = rep.results.some((r) => ['KILLED', 'TIMEOUT', 'MEMORY', 'SURVIVED', 'NOT_COVERED'].includes(r.status));
-      if (minScore !== undefined && scored && score(rep) + 1e-9 < minScore) enforce([`Mutation Score: ${score(rep).toFixed(1)} % < ${minScore} %`]);
+      // an aborted run's partial score says nothing: its exit code (1) stands
+      if (minScore !== undefined && scored && !rep.aborted && score(rep) + 1e-9 < minScore) enforce([`Mutation Score: ${score(rep).toFixed(1)} % < ${minScore} %`]);
       break;
     }
     case 'crosscheck': {
@@ -335,17 +336,25 @@ async function main() {
         await conn.execute(`alter session set current_schema = ${dbIdent(home)}`);
         await ensureJournal(conn);
         const entries = await journalEntries(conn);
-        if (!entries.length) {
+        // a coverage run that died during its instrumented test run left its logoff trigger
+        const logoff = (await conn.execute<[number]>(`select count(*) from all_triggers where owner = :o and trigger_name = 'COV$_LOGOFF'`, { o: home })).rows?.[0]?.[0] ?? 0;
+        if (!entries.length && !logoff) {
           console.error('Journal leer: kein Objekt ist verändert.');
           break;
         }
         for (const e of entries) console.error(`  ${e.type} ${e.owner}.${e.name} (${e.tool}, seit ${e.createdAt.toISOString()})`);
+        if (logoff) console.error(`  TRIGGER ${home}.COV$_LOGOFF (Coverage-Laufzeit eines abgebrochenen Laufs)`);
         if (!listOnly) {
           const lock = await connect(cfg);
           try {
             await lock.execute(`alter session set current_schema = ${dbIdent(home)}`);
             // a running run (of either tool) holds the lock: its objects are not leftovers
             await lockRun(lock, RUN_LOCK);
+            if (logoff) {
+              await conn.execute(`drop trigger ${dbIdent(home)}.cov$_logoff`).then(
+                () => console.error('Logoff-Trigger der Coverage entfernt'),
+                (e: Error) => { if (!e.message.includes('ORA-04080')) console.error(`  ✗ Logoff-Trigger nicht entfernt: ${e.message.split('\n')[0]}`); });
+            }
             // read again under the lock: a run that finished meanwhile left other entries
             await restoreJournal(conn, await journalEntries(conn), (m) => console.error(m));
             const still = await journalEntries(conn);

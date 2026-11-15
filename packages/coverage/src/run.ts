@@ -89,15 +89,43 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
   const rtOwner = (multi ? cfg.runtimeSchema ?? cfg.user : schema).toUpperCase();
   // the run lock (shared with mutation runs) on a connection of its own, held to the end; in the
   // schema of the journal (rtOwner), where a mutation run of that schema takes it too
-  const lock = await connect(cfg);
-  try {
-    await lock.execute(`alter session set current_schema = ${dbIdent(rtOwner)}`);
-    await lockRun(lock, RUN_LOCK);
-  } catch (e) {
+  const takeLock = async () => {
+    const c = await connect(cfg);
+    // a silently dropped connection must not hang the check until TCP gives up
+    c.callTimeout = 15_000;
+    try {
+      await c.execute(`alter session set current_schema = ${dbIdent(rtOwner)}`);
+      await lockRun(c, RUN_LOCK);
+      return c;
+    } catch (e) {
+      await c.close().catch(() => {});
+      throw e;
+    }
+  };
+  let lock = await takeLock();
+  // the lock went to another run: it restored this run's journal at its start and works on the
+  // schema now; this run changes nothing there any more, not even to restore
+  let foreign = false;
+  let checking: Promise<void> | undefined;
+  // the lock's session still there (an idle one may be ended: IDLE_TIME, a firewall), else taken
+  // again; before every change and every minute
+  const keepLock = () => (checking ??= (async () => {
+    if (foreign) throw new Error('Laufsperre an einen anderen Lauf verloren');
+    if (await lock.execute('select 1 from dual').then(() => true, () => false)) return;
     await lock.close().catch(() => {});
-    throw e;
-  }
+    try {
+      lock = await takeLock();
+    } catch (e) {
+      if ((e as Error).message.includes('anderer pltest-Lauf')) foreign = true;
+      throw new Error(`Laufsperre verloren: ${(e as Error).message.split('\n')[0]}`);
+    }
+  })().finally(() => {
+    checking = undefined;
+  }));
+  const ping = setInterval(() => keepLock().catch((e: Error) => say(`WARNUNG: ${e.message}`)), 60_000);
+  ping.unref();
   const conn = await connect(cfg).catch(async (e) => {
+    clearInterval(ping);
     await lock.close().catch(() => {});
     throw e;
   });
@@ -131,8 +159,10 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     for (const path of cfg.installScripts ?? []) await runScript(conn, splitScript(readFileSync(path, 'utf8')), path);
     if (cfg.installScripts?.length) say(`${cfg.installScripts.length} Skripte installiert`);
     await installRuntime(conn);
+    // left by a run that died during its instrumented test run
+    await conn.execute(`drop trigger cov$_logoff`).catch(() => {});
     const objects: SourceObject[] = [];
-    for (const s of schemas) objects.push(...(await loadObjects(conn, s, { include: cfg.include, exclude: cfg.exclude, skip: ['COV$'] })));
+    for (const s of schemas) objects.push(...(await loadObjects(conn, s, { include: cfg.include, exclude: cfg.exclude, skip: ['COV$', 'COV$_LOGOFF'] })));
     say(`${objects.length} Objekte gefunden: ${objects.map((o) => (multi ? `${o.owner}.${o.name}` : o.name)).join(', ')}`);
     for (const owner of new Set(objects.map((o) => o.owner).filter((o) => o !== rtOwner))) {
       // instrumented code of other schemas calls the runtime qualified
@@ -175,6 +205,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
         instrumentMs += performance.now() - t0;
       }
       const t1 = performance.now();
+      await keepLock();
       restore.push(obj);
       const errors = await replaceSource(conn, obj, res.instrumented, 'coverage');
       compileMs += performance.now() - t1;
@@ -214,7 +245,8 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     await conn.execute(`delete from plcov_hits where run_id = :r`, { r: runId });
     await conn.commit();
 
-    await restoreAll(conn, restore, say);
+    await keepLock().catch((e: Error) => say(`WARNUNG: ${e.message}`));
+    if (!foreign) await restoreAll(conn, restore, say);
     restore.length = 0;
 
     // Flaky: the result changed although our instrumentation was not involved (baseline runs and
@@ -275,8 +307,12 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       log: messages,
     };
   } finally {
+    clearInterval(ping);
     try {
-      if (restore.length) await restoreAll(conn, restore, say);
+      if (restore.length) {
+        await keepLock().catch((e: Error) => say(`WARNUNG: ${e.message}`));
+        if (!foreign) await restoreAll(conn, restore, say);
+      }
     } finally {
       await conn.close().catch(() => {});
       await lock.close().catch(() => {});

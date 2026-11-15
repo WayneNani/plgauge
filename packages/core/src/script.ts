@@ -3,6 +3,11 @@
 /** SQL*Plus commands between statements (SET TRANSACTION, ROLE and CONSTRAINTS are SQL). */
 const SQLPLUS = /^\s*(PROMPT|PRO|SET(?!\s+(TRANSACTION|ROLE|CONSTRAINTS?)\b)|SPOOL|WHENEVER|DEFINE|DEF|UNDEFINE|SHOW|SHO|EXIT|QUIT|REM|REMARK|COLUMN|COL|TTITLE|BTITLE|PAUSE|CLEAR|VAR|VARIABLE|PRINT|ACCEPT|TIMING|BREAK|COMPUTE|HOST|LIST|CONNECT|CONN|DISCONNECT|START|RUN|GET|DESC|DESCRIBE)(\s|;|$)|^\s*[@$!]/i;
 const PLSQL_START = /^\s*(CREATE\s+(OR\s+REPLACE\s+)?((NON)?EDITIONABLE\s+)?(PACKAGE|PROCEDURE|FUNCTION|TRIGGER|TYPE)\b|DECLARE\b|BEGIN\b)/i;
+/**
+ * Other statements SQL*Plus ends only at "/": with PL/SQL in a WITH clause (a query, a view), and
+ * MLE modules and Java sources with their code inline (AS …; the BFILE forms end at ";").
+ */
+const SLASH_ONLY = /^\s*CREATE\s+(OR\s+REPLACE\s+)?(AND\s+(RE)?(COMPILE|RESOLVE)\s+)?((NO)?FORCE\s+)?((NON)?EDITIONABLE\s+)?(MLE\s+MODULE|JAVA\s+SOURCE)\b[\s\S]*?\bAS\b|\bWITH\s+(FUNCTION|PROCEDURE)\b/i;
 
 /** Where a line ends: in a block comment, in a string or quoted name (its closing text), or in code. */
 export interface ScanState {
@@ -158,7 +163,7 @@ export function splitScript(text: string): string[] {
     buf.push(line);
     code += r.code + '\n';
     // PL/SQL is known once its first code is (CREATE OR REPLACE may stand on a line of its own)
-    const plsql = PLSQL_START.test(code);
+    const plsql = PLSQL_START.test(code) || SLASH_ONLY.test(code);
     // (a block comment may follow the semicolon: its content is not in the code)
     if (!plsql && !st.quote && /;\s*$/.test(r.code) && code.trim()) {
       // the statement without its semicolon (a trailing comment stays, a block comment up to its end)

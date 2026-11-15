@@ -37,6 +37,8 @@ create table plcov_hits (
 export const RUNTIME_SPEC = `
 create or replace package cov$ authid definer is
   /* plcov runtime: probe functions called by instrumented code. */
+  -- callable from code under PRAGMA RESTRICT_REFERENCES (PLS-00452 otherwise)
+  pragma restrict_references(default, rnds, wnds, rnps, wnps, trust);
   function o(p_d pls_integer) return boolean;
   function c(p_d pls_integer, p_i pls_integer, p_v boolean) return boolean;
   function n(p_d pls_integer, p_i pls_integer, p_v boolean) return boolean;
@@ -361,10 +363,21 @@ create or replace package body cov$ is
   exception when others then null;
   end;
 
+  -- autonomous: a query of the session's own would replace SQL%ROWCOUNT and SQL%FOUND of the
+  -- instrumented code's last statement (the first probe may come between it and their read)
+  function registered_run return varchar2 is
+    pragma autonomous_transaction;
+    l_run plcov_runs.run_id%type;
+  begin
+    select max(run_id) into l_run from plcov_runs;
+    commit;
+    return l_run;
+  end;
+
 begin
   -- a session that loads cov$ while a run is registered is not the runner: record for it
   begin
-    select max(run_id) into g_bg_run from plcov_runs;
+    g_bg_run := registered_run;
     if g_bg_run is not null then
       g_bg := true;
       g_pt := true;

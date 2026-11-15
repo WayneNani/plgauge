@@ -267,9 +267,10 @@ class Instrumenter {
       this.pendingInsert = null;
     }
     if (s.k !== 'stmt') return null;
-    // a labelled statement: the probe after the label, where a GOTO lands (a loop keeps it in
-    // front: its label must stay on the loop, EXIT and END LOOP name it)
-    if (s.at2 !== undefined && s.at2 !== s.a && s.op !== 'loop' && insertPos === this.t[s.at2].start) insertPos = this.t[s.a].start;
+    // a labelled statement: the probe after the label, where a GOTO lands (a loop, a block and a
+    // CASE statement keep it in front: the label is theirs, END and EXIT name it, a block's
+    // declarations are qualified with it)
+    if (s.at2 !== undefined && s.at2 !== s.a && s.op !== 'loop' && s.op !== 'block' && s.op !== 'case' && insertPos === this.t[s.at2].start) insertPos = this.t[s.a].start;
     const first = this.t[s.a];
     const nf = this.nf;
     this.nfPending = false;

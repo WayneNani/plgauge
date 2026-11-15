@@ -187,8 +187,8 @@ Laufzeit und Objekte liegen in `schema`.
 
 - Treffer aus anderen Sessions: Während des Messlaufs steht der Lauf in `plcov_runs`. Eine andere Session des
   Schema-Benutzers, die instrumentierten Code ausführt (ein Scheduler-Job, den ein Test startet), zählt unter dem Eintrag
-  `#background` und schreibt ihre Treffer beim Abmelden (Trigger `cov$_logoff`, nur während des Laufs vorhanden, braucht
-  `CREATE TRIGGER`) und alle 1000 Anweisungen. Der Lauf wartet bis zu einer Minute auf laufende Jobs. Sessions anderer
+  `#background` und schreibt ihre Treffer beim Abmelden (Trigger `cov$_logoff`, nur während des Laufs vorhanden – den eines abgebrochenen Laufs
+  entfernt der nächste Lauf oder `pltest restore` –, braucht `CREATE TRIGGER`) und alle 1000 Anweisungen. Der Lauf wartet bis zu einer Minute auf laufende Jobs. Sessions anderer
   Benutzer und Parallel-Query-Slaves, die weniger als 1000 Anweisungen ausführen, gehen weiterhin verloren.
 - Nicht gemessen: dynamisches SQL (die Anweisung `EXECUTE IMMEDIATE` selbst zählt), mit `wrap` verschlüsselter Code und
   Trigger-`WHEN`-Klauseln (Oracle erlaubt dort keine PL/SQL-Aufrufe; ob der Rumpf lief, zeigt seine erste Anweisung). Der

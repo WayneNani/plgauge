@@ -102,3 +102,28 @@ test('splitScript: a blank line ends a continued SQL*Plus command, the next stat
 select 1 from dual;
 `), ['select 1 from dual']);
 });
+
+test('splitScript: WITH FUNCTION queries and views, inline MLE modules and Java sources end at the slash', () => {
+  assert.deepEqual(splitScript(`with function f return number is begin return 1; end;
+select f() from dual
+/
+create or replace view v as
+with function f return number is begin return 1; end;
+select f() x from dual
+/
+create or replace mle module m language javascript as
+export function f() { return 1; }
+/
+create or replace and compile java source named "J" as public class J { static String f() { return "x"; } }
+/
+create mle module m2 language javascript using bfile(d, 'm.js');
+select 1 from dual;
+`), [
+    'with function f return number is begin return 1; end;\nselect f() from dual',
+    'create or replace view v as\nwith function f return number is begin return 1; end;\nselect f() x from dual',
+    'create or replace mle module m language javascript as\nexport function f() { return 1; }',
+    'create or replace and compile java source named "J" as public class J { static String f() { return "x"; } }',
+    "create mle module m2 language javascript using bfile(d, 'm.js')",
+    'select 1 from dual',
+  ]);
+});

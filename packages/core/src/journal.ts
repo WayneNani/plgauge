@@ -56,6 +56,43 @@ export function fingerprint(source: string): string {
 }
 
 /**
+ * A view statement's query (what ALL_VIEWS.TEXT holds): the text after the first AS outside
+ * parentheses, quotes and comments of "[FORCE] VIEW name (columns) … AS query".
+ */
+export function viewQuery(statement: string): string {
+  let depth = 0;
+  for (let i = 0; i < statement.length; i++) {
+    const c = statement[i];
+    if (c === '"' || c === "'") {
+      const e = statement.indexOf(c, i + 1);
+      if (e < 0) break;
+      i = e;
+    } else if (c === '-' && statement[i + 1] === '-') {
+      const e = statement.indexOf('\n', i);
+      if (e < 0) break;
+      i = e;
+    } else if (c === '/' && statement[i + 1] === '*') {
+      const e = statement.indexOf('*/', i + 2);
+      if (e < 0) break;
+      i = e + 1;
+    } else if (c === '(') depth++;
+    else if (c === ')') depth--;
+    else if (depth === 0 && /[aA]/.test(c) && /[sS]/.test(statement[i + 1] ?? '') && !/[\w$#]/.test(statement[i - 1] ?? '') && !/[\w$#]/.test(statement[i + 2] ?? '')) {
+      return statement.slice(i + 2);
+    }
+  }
+  return statement;
+}
+
+/**
+ * The fingerprint of code pltest compiles into an object (for a view: of its query, which is
+ * all the dictionary keeps of the statement).
+ */
+export function codeFingerprint(type: string, source: string): string {
+  return fingerprint(type === 'VIEW' ? viewQuery(source) : source);
+}
+
+/**
  * Notes what pltest is about to compile into an object (before it does: a run that dies during
  * the compile leaves either this text or the one before, prev_sha), so a later restore can tell
  * its code from newer work.
@@ -65,7 +102,7 @@ export async function journalNote(conn: oracledb.Connection, obj: Pick<SourceObj
   // previous note stands in for it
   const note = () => conn.execute(
     `update pltest_journal set prev_sha = nvl(:p, current_sha), current_sha = :h where owner = :o and name = :n and type = :t`,
-    { p: before ?? null, h: fingerprint(source), o: obj.owner, n: obj.name, t: obj.type });
+    { p: before ?? null, h: codeFingerprint(obj.type, source), o: obj.owner, n: obj.name, t: obj.type });
   try {
     await note();
   } catch (e) {
@@ -86,7 +123,7 @@ export async function journalRemember(conn: oracledb.Connection, obj: SourceObje
      using (select :o owner, :n name, :t type from dual) x
         on (j.owner = x.owner and j.name = x.name and j.type = x.type)
       when not matched then insert (owner, name, type, source, props, tool, current_sha) values (:o, :n, :t, :src, :st, :tool, :h)`,
-    { o: obj.owner, n: obj.name, t: obj.type, src: { val: obj.original, type: oracledb.DB_TYPE_CLOB }, st: { val: JSON.stringify(obj.settings), type: oracledb.DB_TYPE_CLOB }, tool, h: fingerprint(obj.original) },
+    { o: obj.owner, n: obj.name, t: obj.type, src: { val: obj.original, type: oracledb.DB_TYPE_CLOB }, st: { val: JSON.stringify(obj.settings), type: oracledb.DB_TYPE_CLOB }, tool, h: codeFingerprint(obj.type, obj.original) },
   );
   try {
     await merge();
