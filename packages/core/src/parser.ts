@@ -124,6 +124,9 @@ export function parse(src: string, opts: { views?: boolean } = {}): ParsedSource
 export function parseUnit(src: string): { tokens: Token[]; unit: Node } {
   const p = new Parser(src);
   const unit = p.unitAt();
+  // tokens left after the unit (but a "/"): it ended early, measuring only its beginning would mislead
+  const rest = p.t.slice(unit.b).filter((t) => t.text !== '/' && t.text !== ';');
+  if (rest.length) throw new ParseFailure(`Einheit endet vor dem Text (${rest[0].text})`, rest[0].line, rest[0].col);
   return { tokens: p.t, unit };
 }
 
@@ -475,7 +478,8 @@ class Parser {
         this.i = c + 1;
         continue;
       }
-      if (this.at('AS') && this.up(1) === 'RESULT') {
+      // RETURN SELF AS RESULT (a constructor); not AS result NUMBER (a local named result)
+      if (this.at('AS') && this.up(1) === 'RESULT' && this.t[this.i - 1]?.up === 'SELF') {
         this.i += 2;
         continue;
       }
@@ -487,7 +491,11 @@ class Parser {
       this.i++;
     }
     this.i++;
-    if (this.at('LANGUAGE', 'EXTERNAL', 'MLE')) {
+    // a call spec; not a first local variable named language, external or mle
+    const spec = (this.at('LANGUAGE') && ['C', 'JAVA', 'JAVASCRIPT'].includes(this.up(1)))
+      || (this.at('EXTERNAL') && ['NAME', 'LIBRARY', 'WITH', 'PARAMETERS', ';'].includes(this.up(1)))
+      || (this.at('MLE') && ['MODULE', 'LANGUAGE'].includes(this.up(1)));
+    if (spec) {
       this.i = this.need(this.i, new Set([';'])) + 1;
       return node('subprog', a, this.i, kids, { op: kind, name, at: nameTok });
     }

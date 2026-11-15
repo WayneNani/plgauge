@@ -454,7 +454,7 @@ export async function restoreJournal(conn: oracledb.Connection, entries: Journal
     }
     // noted before its compile and not settled, or by an older version (other fingerprints): no
     // comparison possible, the original goes back
-    const comparable = e.currentSha && e.pending === 0;
+    const comparable = e.currentSha?.startsWith('x') && e.pending === 0;
     if (comparable) {
       // pltest's: the text it was about to compile, the one before, or the original itself
       const ours = new Set([e.currentSha, e.prevSha, codeFingerprint(e.object.type, e.object.original)]);

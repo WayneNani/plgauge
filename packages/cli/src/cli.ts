@@ -363,10 +363,11 @@ async function main() {
           const c2 = cfg as { schema?: string; schemas?: string[]; runtimeSchema?: string; user: string };
           const conn = await connect(cfg);
           try {
+            const session = (await conn.execute<[string]>(`select sys_context('USERENV', 'CURRENT_SCHEMA') from dual`)).rows![0][0];
             // a mutation run (a database URL) works in its session's CURRENT_SCHEMA, which a logon
             // trigger may set; a coverage run in its runtime schema
             const home = fromUrls
-              ? own ? c2.user.toUpperCase() : (await conn.execute<[string]>(`select sys_context('USERENV', 'CURRENT_SCHEMA') from dual`)).rows![0][0]
+              ? own ? c2.user.toUpperCase() : session
               : (c2.schemas?.length ? c2.runtimeSchema ?? c2.user : c2.schema ?? c2.user).toUpperCase();
             const where = `${(cfg as { connectString?: string }).connectString ?? ''}|${home}`;
             if (seen.has(where)) continue;
@@ -382,7 +383,7 @@ async function main() {
               console.error('Journal leer: kein Objekt ist verändert.');
               // a coverage run of another schema keeps its journal there (pltest restore --config …)
               if (fromUrls) {
-                const other = await conn.execute<[string]>(`select owner from all_tables where table_name = 'PLTEST_JOURNAL' and owner not in (user, :h)`, { h: home }).catch(() => ({ rows: [] as [string][] }));
+                const other = await conn.execute<[string]>(`select owner from all_tables where table_name = 'PLTEST_JOURNAL' and owner not in (user, :h, :s)`, { h: home, s: session }).catch(() => ({ rows: [] as [string][] }));
                 for (const [o] of other.rows ?? []) console.error(`  Hinweis: auch Schema ${o} hat ein Journal (ein Coverage-Lauf dort: pltest restore --config …)`);
               }
               continue;

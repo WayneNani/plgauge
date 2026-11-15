@@ -37,12 +37,13 @@ test('the journal restores code left changed by a killed run', { skip: !m && 'PL
   }
 });
 
-test('fingerprint ignores whitespace, CREATE keywords and characters a character set may not hold', async () => {
+test('fingerprint ignores whitespace and CREATE keywords, nothing else (marked x)', async () => {
   const { fingerprint } = await import('@pltest/core');
-  const a = `CREATE OR REPLACE EDITIONABLE function f return varchar2 is begin return 'a → b'; end;`;
-  assert.equal(fingerprint(a), fingerprint(`function f return varchar2 is\n begin return 'a ¿ b'; end;`));
-  assert.equal(fingerprint(a), fingerprint(`function f return varchar2 is begin return 'a ? b'; end;`));
-  assert.notEqual(fingerprint(a), fingerprint(`function f return varchar2 is begin return 'a c'; end;`));
+  const a = `CREATE OR REPLACE EDITIONABLE function f return varchar2 is begin return 'Grüße'; end;`;
+  assert.equal(fingerprint(a), fingerprint(`function f return varchar2 is\n begin return 'Grüße'; end;`));
+  assert.notEqual(fingerprint(a), fingerprint(`function f return varchar2 is begin return 'Gräße'; end;`));
+  assert.notEqual(fingerprint(a), fingerprint(`function f return varchar2 is begin return 'Gr?ße'; end;`));
+  assert.match(fingerprint(a), /^x[0-9a-f]{63}$/);
 });
 
 test('viewQuery: the query after the first AS outside parentheses and quotes', () => {

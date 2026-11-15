@@ -183,6 +183,8 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       return await runTests(conn, paths, cov);
     } finally {
       testing = false;
+      // a test may have switched CURRENT_SCHEMA: journal, cov$ and the trigger are in rtOwner
+      await conn.execute(`alter session set current_schema = ${dbIdent(rtOwner)}`).catch(() => {});
       checkpoint();
     }
   };

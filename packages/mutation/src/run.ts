@@ -378,7 +378,9 @@ class Worker {
     const q = (x: string) => `"${x.replace(/"/g, '""')}"`;
     const out: string[] = [];
     for (const u of units) {
-      if ((await status(u)) === 'VALID') continue;
+      const before = await status(u);
+      // VALID, or gone again (a helper the script drops after use)
+      if (before === 'VALID' || before === undefined) continue;
       const [kind, body] = u.type.endsWith(' BODY') ? [u.type.replace(' BODY', ''), ' BODY'] : [u.type, ''];
       await this.deploy.execute(`alter ${kind} ${q(u.owner)}.${q(u.name)} compile${body} reuse settings`).catch(() => {});
       if ((await status(u)) !== 'VALID') out.push(`${u.type} ${u.name}`);

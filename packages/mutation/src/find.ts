@@ -1672,7 +1672,10 @@ class Finder {
       if (kw !== 'WHERE' && kw !== 'HAVING') continue;
       let x = c;
       while (x.k === 'paren' && x.kids.length === 1) x = x.kids[0];
-      if (x.k === 'lit' || (x.k === 'cmp' && x.kids.every((k) => isLiteral(this.text(k).trim())))) continue;
+      // always true (1 = 1, a TRUE literal): TRUE changes nothing; 1 = 0 is another matter
+      const same = x.k === 'cmp' && x.op === '=' && x.kids.length === 2 && x.kids.every((k) => isLiteral(this.text(k).trim()))
+        && this.text(x.kids[0]).trim().toUpperCase() === this.text(x.kids[1]).trim().toUpperCase();
+      if ((x.k === 'lit' && /^TRUE$/i.test(this.text(x).trim())) || same) continue;
       // (in FORALL, pointSpan keeps a mutant only if a bulk bind is left: PLS-00435)
       const s = this.sb(x.a);
       const e = this.eb(x.b - 1);

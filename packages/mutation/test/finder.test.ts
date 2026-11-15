@@ -1118,3 +1118,16 @@ test('finder: JOI reads the WHERE of its own UNION branch; WHR TRUE is no duplic
   assert.ok(got.some((g) => g.includes('LEFT JOIN') && g.startsWith('JOI')), got.join('\n'));
   assert.equal(got.filter((g) => /→ TRUE$/.test(g) && g.includes('(t.x=a)OR(t.y=b)')).length, 1, got.join('\n'));
 });
+
+test('finder: WHERE 1 = 0 gets its WHR TRUE, WHERE 1 = 1 none; a local named result does not end the unit', () => {
+  const got = mutants(body(`OPEN cur FOR SELECT 1 FROM dual WHERE 1 = 0;
+    OPEN cur FOR SELECT 2 FROM dual WHERE 1 = 1;`), ['WHR']);
+  assert.equal(got.length, 1, got.join('\n'));
+  const f = points(`CREATE OR REPLACE PACKAGE BODY pk AS
+  FUNCTION a(x NUMBER) RETURN BOOLEAN AS result BOOLEAN; BEGIN result := x > 1; RETURN result; END;
+  PROCEDURE b(y NUMBER) IS BEGIN IF y > 2 THEN NULL; END IF; END;
+END pk;
+/
+`)[0];
+  assert.ok(f.points.some((p) => p.sub?.toLowerCase() === 'b'), JSON.stringify(f.points.map((p) => p.sub)));
+});

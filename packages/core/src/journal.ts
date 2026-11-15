@@ -47,13 +47,15 @@ export async function journalUnnote(conn: oracledb.Connection, obj: Pick<SourceO
 }
 
 /**
- * A source's fingerprint, independent of whitespace, of the CREATE … keywords Oracle does not
- * keep, and of characters a database character set may not hold (they come back as ? or ¿):
- * printable ASCII only.
+ * A source's fingerprint, independent of whitespace (a view's DDL and its dictionary text lay
+ * out differently) and of the CREATE … keywords Oracle does not keep; every other character
+ * counts (the fingerprints a restore compares all come from the same database's dictionary).
+ * Marked "x" (no hex digit): fingerprints of older versions, which ignored more, are told apart
+ * and never compared.
  */
 export function fingerprint(source: string): string {
-  const s = source.replace(/^\s*(CREATE\s+(OR\s+REPLACE\s+)?)?((NON)?EDITIONABLE\s+)?/i, '').replace(/[^\x21-\x3e\x40-\x7e]/g, '');
-  return createHash('sha256').update(s, 'utf8').digest('hex');
+  const s = source.replace(/^\s*(CREATE\s+(OR\s+REPLACE\s+)?)?((NON)?EDITIONABLE\s+)?/i, '').replace(/\s+/g, '');
+  return 'x' + createHash('sha256').update(s, 'utf8').digest('hex').slice(0, 63);
 }
 
 /**
