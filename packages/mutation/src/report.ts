@@ -4,7 +4,7 @@
  * page with the mutation-testing-elements viewer. `compare` puts two runs side by side.
  */
 import { readFileSync } from 'node:fs';
-import { relative, resolve, basename } from 'node:path';
+import { relative, basename } from 'node:path';
 import type { Report, Result, Status } from './run.js';
 
 export function counts(rep: Report): Map<Status, number> {
@@ -94,7 +94,6 @@ export function mutationTestingReport(rep: Report, root: string): string {
   return JSON.stringify({
     schemaVersion: '2',
     thresholds: { high: 80, low: 60 },
-    projectRoot: resolve(root),
     files,
     framework: { name: 'plgauge mutate', version: '0.1' },
   }, null, 2);

@@ -1,91 +1,91 @@
 {
  "format": "plgauge-coverage/1",
- "generated": "2026-11-13T19:41:45.644Z",
+ "generated": "2026-11-15T12:43:31.148Z",
  "database": "Oracle AI Database 26ai Free Release 23.26.3.0.0 - Develop, Learn, and Run for Free",
- "schema": "DEMO",
+ "schema": "APP",
  "coordinates": "all_source",
  "tests": [
   {
-   "path": "demo.test_order_pricing.archive_in_batches",
+   "path": "app.test_order_pricing.archive_in_batches",
    "setup": false,
    "status": "passed",
-   "ms": 1.833,
-   "baselineRuns": 1
+   "ms": 1.048,
+   "baselineRuns": 2
   },
   {
-   "path": "demo.test_order_pricing.bulk_discount",
+   "path": "app.test_order_pricing.bulk_discount",
    "setup": false,
    "status": "passed",
-   "ms": 4.421,
-   "baselineRuns": 1
+   "ms": 3.1,
+   "baselineRuns": 2
   },
   {
-   "path": "demo.test_order_pricing.coupon_discount",
+   "path": "app.test_order_pricing.coupon_discount",
    "setup": false,
    "status": "passed",
-   "ms": 0.81,
-   "baselineRuns": 1
+   "ms": 0.598,
+   "baselineRuns": 2
   },
   {
-   "path": "demo.test_order_pricing.no_discount",
+   "path": "app.test_order_pricing.no_discount",
    "setup": false,
    "status": "passed",
-   "ms": 0.883,
-   "baselineRuns": 1
+   "ms": 0.577,
+   "baselineRuns": 2
   },
   {
-   "path": "demo.test_order_pricing.pricing_load",
+   "path": "app.test_order_pricing.pricing_load",
    "setup": false,
    "status": "passed",
-   "ms": 113.288,
-   "baselineRuns": 1
+   "ms": 138.368,
+   "baselineRuns": 2
   },
   {
-   "path": "demo.test_order_pricing.risk_high",
+   "path": "app.test_order_pricing.risk_high",
    "setup": false,
    "status": "passed",
-   "ms": 6.811,
-   "baselineRuns": 1
+   "ms": 5.792,
+   "baselineRuns": 2
   },
   {
-   "path": "demo.test_order_pricing.risk_unknown",
+   "path": "app.test_order_pricing.risk_unknown",
    "setup": false,
    "status": "passed",
-   "ms": 0.838,
-   "baselineRuns": 1
+   "ms": 0.668,
+   "baselineRuns": 2
   },
   {
-   "path": "demo.test_order_pricing.shipping_de",
+   "path": "app.test_order_pricing.shipping_de",
    "setup": false,
    "status": "passed",
-   "ms": 0.867,
-   "baselineRuns": 1
+   "ms": 0.599,
+   "baselineRuns": 2
   },
   {
-   "path": "demo.test_order_pricing.shipping_unknown_country",
+   "path": "app.test_order_pricing.shipping_unknown_country",
    "setup": false,
    "status": "passed",
-   "ms": 0.891,
-   "baselineRuns": 1
+   "ms": 0.576,
+   "baselineRuns": 2
   },
   {
-   "path": "demo.test_order_pricing.vip_large_order",
+   "path": "app.test_order_pricing.vip_large_order",
    "setup": false,
    "status": "passed",
-   "ms": 0.985,
-   "baselineRuns": 1
+   "ms": 0.869,
+   "baselineRuns": 2
   },
   {
-   "path": "#demo.test_order_pricing",
+   "path": "#app.test_order_pricing",
    "setup": true,
    "status": "unknown",
    "ms": 0,
-   "baselineRuns": 1
+   "baselineRuns": 2
   }
  ],
  "objects": [
   {
-   "owner": "DEMO",
+   "owner": "APP",
    "name": "ARCHIVE_ORDERS",
    "type": "PROCEDURE",
    "sourceSha256": "3714d23326d6f4e5835fc2935c7b7be8bd6c991be0a656a192fc22a6afd3d06a",
@@ -137,6 +137,68 @@
      "tests": []
     }
    },
+   "statements": [
+    {
+     "line": 5,
+     "endLine": 5,
+     "col": 5,
+     "endCol": 33,
+     "hits": 2,
+     "tests": [
+      0
+     ]
+    },
+    {
+     "line": 8,
+     "endLine": 13,
+     "col": 3,
+     "endCol": 12,
+     "hits": 1,
+     "tests": [
+      0
+     ]
+    },
+    {
+     "line": 9,
+     "endLine": 9,
+     "col": 5,
+     "endCol": 71,
+     "hits": 2,
+     "tests": [
+      0
+     ]
+    },
+    {
+     "line": 10,
+     "endLine": 10,
+     "col": 5,
+     "endCol": 28,
+     "hits": 2,
+     "tests": [
+      0
+     ]
+    },
+    {
+     "line": 11,
+     "endLine": 11,
+     "col": 5,
+     "endCol": 31,
+     "hits": 2,
+     "tests": [
+      0
+     ]
+    },
+    {
+     "line": 12,
+     "endLine": 12,
+     "col": 5,
+     "endCol": 32,
+     "hits": 2,
+     "tests": [
+      0
+     ]
+    }
+   ],
    "branches": [
     {
      "line": 12,
@@ -152,7 +214,9 @@
       "col": 15,
       "endLine": 12,
       "endCol": 31
-     }
+     },
+     "construct": 1,
+     "nf": false
     },
     {
      "line": 12,
@@ -168,7 +232,9 @@
       "col": 15,
       "endLine": 12,
       "endCol": 31
-     }
+     },
+     "construct": 1,
+     "nf": false
     },
     {
      "line": 15,
@@ -176,7 +242,9 @@
      "label": "WHEN others",
      "kind": "handlers",
      "hits": 0,
-     "tests": []
+     "tests": [],
+     "construct": 2,
+     "nf": true
     }
    ],
    "conditions": [
@@ -199,13 +267,40 @@
        0
       ],
       "N": []
-     }
+     },
+     "t": 1,
+     "f": 1,
+     "n": 0,
+     "mcdc": "yes",
+     "nf": false
     }
    ],
-   "notMeasured": []
+   "notMeasured": [],
+   "metrics": {
+    "stmt": {
+     "covered": 6,
+     "total": 6
+    },
+    "branch": {
+     "covered": 2,
+     "total": 2
+    },
+    "cond": {
+     "covered": 2,
+     "total": 2
+    },
+    "mcdc": {
+     "covered": 1,
+     "total": 1
+    },
+    "loop": {
+     "covered": 1,
+     "total": 2
+    }
+   }
   },
   {
-   "owner": "DEMO",
+   "owner": "APP",
    "name": "ORDER_PRICING",
    "type": "PACKAGE BODY",
    "sourceSha256": "b749485e485bac62a4944f4e59263931a8abf6a7b1d7c6d96057e650a740cf51",
@@ -330,6 +425,205 @@
      ]
     }
    },
+   "statements": [
+    {
+     "line": 6,
+     "endLine": 10,
+     "col": 5,
+     "endCol": 12,
+     "hits": 20003,
+     "tests": [
+      2,
+      3,
+      4,
+      9
+     ]
+    },
+    {
+     "line": 7,
+     "endLine": 7,
+     "col": 7,
+     "endCol": 19,
+     "hits": 20001,
+     "tests": [
+      4,
+      9
+     ]
+    },
+    {
+     "line": 9,
+     "endLine": 9,
+     "col": 7,
+     "endCol": 18,
+     "hits": 1,
+     "tests": [
+      2
+     ]
+    },
+    {
+     "line": 11,
+     "endLine": 11,
+     "col": 5,
+     "endCol": 18,
+     "hits": 20003,
+     "tests": [
+      2,
+      3,
+      4,
+      9
+     ]
+    },
+    {
+     "line": 17,
+     "endLine": 21,
+     "col": 5,
+     "endCol": 14,
+     "hits": 3,
+     "tests": [
+      7,
+      8,
+      10
+     ]
+    },
+    {
+     "line": 18,
+     "endLine": 18,
+     "col": 22,
+     "endCol": 36,
+     "hits": 2,
+     "tests": [
+      7,
+      10
+     ]
+    },
+    {
+     "line": 19,
+     "endLine": 19,
+     "col": 22,
+     "endCol": 36,
+     "hits": 0,
+     "tests": []
+    },
+    {
+     "line": 20,
+     "endLine": 20,
+     "col": 22,
+     "endCol": 37,
+     "hits": 0,
+     "tests": []
+    },
+    {
+     "line": 22,
+     "endLine": 22,
+     "col": 5,
+     "endCol": 57,
+     "hits": 2,
+     "tests": [
+      7,
+      10
+     ]
+    },
+    {
+     "line": 22,
+     "endLine": 22,
+     "col": 30,
+     "endCol": 49,
+     "hits": 0,
+     "tests": []
+    },
+    {
+     "line": 23,
+     "endLine": 23,
+     "col": 5,
+     "endCol": 18,
+     "hits": 2,
+     "tests": [
+      7,
+      10
+     ]
+    },
+    {
+     "line": 26,
+     "endLine": 26,
+     "col": 7,
+     "endCol": 20,
+     "hits": 1,
+     "tests": [
+      8
+     ]
+    },
+    {
+     "line": 32,
+     "endLine": 39,
+     "col": 5,
+     "endCol": 33,
+     "hits": 2,
+     "tests": [
+      5,
+      6
+     ]
+    },
+    {
+     "line": 40,
+     "endLine": 40,
+     "col": 5,
+     "endCol": 20,
+     "hits": 1,
+     "tests": [
+      5
+     ]
+    },
+    {
+     "line": 43,
+     "endLine": 43,
+     "col": 7,
+     "endCol": 24,
+     "hits": 1,
+     "tests": [
+      6
+     ]
+    },
+    {
+     "line": 49,
+     "endLine": 52,
+     "col": 5,
+     "endCol": 14,
+     "hits": 1,
+     "tests": [
+      1
+     ]
+    },
+    {
+     "line": 50,
+     "endLine": 50,
+     "col": 7,
+     "endCol": 49,
+     "hits": 2,
+     "tests": [
+      1
+     ]
+    },
+    {
+     "line": 51,
+     "endLine": 51,
+     "col": 7,
+     "endCol": 33,
+     "hits": 2,
+     "tests": [
+      1
+     ]
+    },
+    {
+     "line": 53,
+     "endLine": 55,
+     "col": 5,
+     "endCol": 28,
+     "hits": 1,
+     "tests": [
+      1
+     ]
+    }
+   ],
    "branches": [
     {
      "line": 6,
@@ -346,7 +640,9 @@
       "col": 8,
       "endLine": 6,
       "endCol": 33
-     }
+     },
+     "construct": 3,
+     "nf": false
     },
     {
      "line": 8,
@@ -362,7 +658,9 @@
       "col": 11,
       "endLine": 8,
       "endCol": 64
-     }
+     },
+     "construct": 3,
+     "nf": false
     },
     {
      "line": 10,
@@ -378,7 +676,9 @@
       "col": 11,
       "endLine": 8,
       "endCol": 64
-     }
+     },
+     "construct": 3,
+     "nf": false
     },
     {
      "line": 18,
@@ -389,7 +689,9 @@
      "tests": [
       7,
       10
-     ]
+     ],
+     "construct": 4,
+     "nf": false
     },
     {
      "line": 19,
@@ -397,7 +699,9 @@
      "label": "WHEN 'AT'",
      "kind": "case",
      "hits": 0,
-     "tests": []
+     "tests": [],
+     "construct": 4,
+     "nf": false
     },
     {
      "line": 20,
@@ -405,7 +709,9 @@
      "label": "WHEN 'CH'",
      "kind": "case",
      "hits": 0,
-     "tests": []
+     "tests": [],
+     "construct": 4,
+     "nf": false
     },
     {
      "line": 21,
@@ -415,7 +721,9 @@
      "hits": 1,
      "tests": [
       8
-     ]
+     ],
+     "construct": 4,
+     "nf": false
     },
     {
      "line": 22,
@@ -429,7 +737,9 @@
       "col": 8,
       "endLine": 22,
       "endCol": 24
-     }
+     },
+     "construct": 5,
+     "nf": false
     },
     {
      "line": 22,
@@ -446,7 +756,9 @@
       "col": 8,
       "endLine": 22,
       "endCol": 24
-     }
+     },
+     "construct": 5,
+     "nf": false
     },
     {
      "line": 25,
@@ -456,7 +768,9 @@
      "hits": 1,
      "tests": [
       8
-     ]
+     ],
+     "construct": 6,
+     "nf": false
     },
     {
      "line": 33,
@@ -472,7 +786,9 @@
       "col": 19,
       "endLine": 33,
       "endCol": 61
-     }
+     },
+     "construct": 7,
+     "nf": false
     },
     {
      "line": 34,
@@ -486,7 +802,9 @@
       "col": 19,
       "endLine": 34,
       "endCol": 38
-     }
+     },
+     "construct": 7,
+     "nf": false
     },
     {
      "line": 35,
@@ -500,7 +818,9 @@
       "col": 19,
       "endLine": 34,
       "endCol": 38
-     }
+     },
+     "construct": 7,
+     "nf": false
     },
     {
      "line": 42,
@@ -510,7 +830,9 @@
      "hits": 1,
      "tests": [
       6
-     ]
+     ],
+     "construct": 8,
+     "nf": false
     },
     {
      "line": 51,
@@ -524,7 +846,9 @@
       "col": 17,
       "endLine": 51,
       "endCol": 32
-     }
+     },
+     "construct": 9,
+     "nf": false
     },
     {
      "line": 51,
@@ -540,7 +864,9 @@
       "col": 17,
       "endLine": 51,
       "endCol": 32
-     }
+     },
+     "construct": 9,
+     "nf": false
     },
     {
      "line": 54,
@@ -556,7 +882,9 @@
       "col": 33,
       "endLine": 54,
       "endCol": 48
-     }
+     },
+     "construct": 10,
+     "nf": false
     },
     {
      "line": 54,
@@ -570,7 +898,9 @@
       "col": 33,
       "endLine": 54,
       "endCol": 48
-     }
+     },
+     "construct": 10,
+     "nf": false
     }
    ],
    "conditions": [
@@ -595,7 +925,12 @@
        3
       ],
       "N": []
-     }
+     },
+     "t": 20001,
+     "f": 2,
+     "n": 0,
+     "mcdc": "yes",
+     "nf": false
     },
     {
      "decision": 2,
@@ -615,7 +950,12 @@
       ],
       "F": [],
       "N": []
-     }
+     },
+     "t": 20001,
+     "f": 0,
+     "n": 0,
+     "mcdc": "no",
+     "nf": false
     },
     {
      "decision": 3,
@@ -636,7 +976,12 @@
        3
       ],
       "N": []
-     }
+     },
+     "t": 1,
+     "f": 1,
+     "n": 0,
+     "mcdc": "yes",
+     "nf": false
     },
     {
      "decision": 3,
@@ -655,7 +1000,12 @@
        3
       ],
       "N": []
-     }
+     },
+     "t": 0,
+     "f": 1,
+     "n": 0,
+     "mcdc": "no",
+     "nf": false
     },
     {
      "decision": 4,
@@ -675,7 +1025,12 @@
        10
       ],
       "N": []
-     }
+     },
+     "t": 0,
+     "f": 2,
+     "n": 0,
+     "mcdc": "no",
+     "nf": false
     },
     {
      "decision": 5,
@@ -694,7 +1049,12 @@
       ],
       "F": [],
       "N": []
-     }
+     },
+     "t": 1,
+     "f": 0,
+     "n": 0,
+     "mcdc": "na",
+     "nf": false
     },
     {
      "decision": 5,
@@ -711,7 +1071,12 @@
       "T": [],
       "F": [],
       "N": []
-     }
+     },
+     "t": 0,
+     "f": 0,
+     "n": 0,
+     "mcdc": "na",
+     "nf": false
     },
     {
      "decision": 6,
@@ -728,7 +1093,12 @@
       "T": [],
       "F": [],
       "N": []
-     }
+     },
+     "t": 0,
+     "f": 0,
+     "n": 0,
+     "mcdc": "na",
+     "nf": false
     },
     {
      "decision": 7,
@@ -747,7 +1117,12 @@
        1
       ],
       "N": []
-     }
+     },
+     "t": 0,
+     "f": 2,
+     "n": 0,
+     "mcdc": "no",
+     "nf": false
     },
     {
      "decision": 8,
@@ -766,10 +1141,37 @@
       ],
       "F": [],
       "N": []
-     }
+     },
+     "t": 1,
+     "f": 0,
+     "n": 0,
+     "mcdc": "na",
+     "nf": false
     }
    ],
-   "notMeasured": []
+   "notMeasured": [],
+   "metrics": {
+    "stmt": {
+     "covered": 16,
+     "total": 19
+    },
+    "branch": {
+     "covered": 11,
+     "total": 18
+    },
+    "cond": {
+     "covered": 10,
+     "total": 20
+    },
+    "mcdc": {
+     "covered": 2,
+     "total": 6
+    },
+    "loop": {
+     "covered": 1,
+     "total": 3
+    }
+   }
   }
  ]
 }

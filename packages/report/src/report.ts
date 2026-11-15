@@ -331,7 +331,7 @@ aside.findings { background: var(--surface); border: 1px solid var(--line); bord
 
 <div class="wrap">
   <div class="top">
-    <div class="brand">pl<span>cov</span></div>
+    <div class="brand">pl<span>gauge</span></div>
     <div class="meta">
       <span>Schema <b>${esc(r.schema)}</b></span>
       <span>${esc(r.database.replace(/ - Develop.*$/, ''))}</span>

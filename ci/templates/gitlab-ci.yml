@@ -2,7 +2,7 @@
 # Copy into .gitlab-ci.yml of a project with plgauge.json. Needs a runner with Docker-in-Docker.
 # Coverage appears in merge requests (Cobertura), test results as JUnit.
 variables:
-  PLGAUGE_REPO: https://git.example.com/tools/plgauge.git   # adapt
+  PLGAUGE_REPO: https://github.com/WayneNani/plgauge.git
   PLGAUGE_REF: main
   DOCKER_HOST: tcp://docker:2375
   DOCKER_TLS_CERTDIR: ""

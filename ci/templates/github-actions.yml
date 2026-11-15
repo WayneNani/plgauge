@@ -1,13 +1,13 @@
 # GitHub Actions: PL/SQL tests with coverage and mutation testing (plgauge).
 # Copy to .github/workflows/plsql.yml of a project with plgauge.json, adapt the thresholds.
-# plgauge comes from your own Git server or a vendored copy, see PLGAUGE_REPO below.
+# plgauge is cloned from GitHub (PLGAUGE_REPO below); point it to a fork or mirror if you like.
 name: PL/SQL
 on:
   push:
   pull_request:
 
 env:
-  PLGAUGE_REPO: https://git.example.com/tools/plgauge.git   # adapt
+  PLGAUGE_REPO: https://github.com/WayneNani/plgauge.git
   PLGAUGE_REF: main
 
 jobs:
