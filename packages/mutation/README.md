@@ -169,7 +169,7 @@ Für die CI: `--diff origin/main` (nur Mutanten auf Zeilen, die sich seit der Me
 ausgeführt haben).
 Projektdatei `pltest.json` (oder `plmut.json`): `install` (Skripte, gelesen wie von SQL*Plus mit Standardeinstellungen:
 `/` und `RUN` führen die letzte Anweisung aus, auch ein zweites Mal; eine Leerzeile oder `.` beendet die Eingabe von SQL
-ohne Ausführung, außer bei `SET SQLBLANKLINES ON`; `EXIT` beendet das Skript), `mutate` (Globs der Dateien),
+ohne Ausführung, außer bei `SET SQLBLANKLINES ON`; `EXIT` beendet das Skript; Substitutionsvariablen – `&x`, `DEFINE` – werden nicht ersetzt), `mutate` (Globs der Dateien),
 `tests` (utPLSQL-Pfade).
 
 Mehrere Schemas: Eine Einheit, die mit Schema geschrieben ist (`CREATE OR REPLACE PACKAGE BODY app_util.calc …`), wird in

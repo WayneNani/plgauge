@@ -352,12 +352,17 @@ class Worker {
 
   private async invalidUnits(stmts: string[]): Promise<string[]> {
     const out: string[] = [];
+    // (a script may switch CURRENT_SCHEMA: unqualified names after that are there)
+    let schema = await this.currentSchema();
     for (const st of stmts) {
-      const m = /^\s*create\s+(?:or\s+replace\s+)?(?:(?:non)?editionable\s+)?(package\s+body|package|type\s+body|procedure|function|trigger)\s+("?[\w$#."]+"?)/i.exec(st);
+      const sw = /^\s*alter\s+session\s+set\s+current_schema\s*=\s*("[^"]+"|[\w$#À-\uffff]+)/i.exec(st);
+      if (sw) schema = sw[1].startsWith('"') ? sw[1].slice(1, -1) : sw[1].toUpperCase();
+      const m = /^\s*create\s+(?:or\s+replace\s+)?(?:(?:non)?editionable\s+)?(package\s+body|package|type\s+body|procedure|function|trigger)\s+(?:if\s+not\s+exists\s+)?((?:"[^"]+"|[\w$#À-\uffff]+)(?:\s*\.\s*(?:"[^"]+"|[\w$#À-\uffff]+))?)/i.exec(st);
       if (!m) continue;
       const type = m[1].toUpperCase().replace(/\s+/g, ' ');
-      const name = objectName(m[2]);
-      const owner = objectOwner(m[2]) ?? (await this.currentSchema());
+      const full = m[2].replace(/\s*\.\s*(?=(?:"[^"]+"|[\w$#À-\uffff]+)$)/, '.');
+      const name = objectName(full);
+      const owner = objectOwner(full) ?? schema;
       const r = await this.deploy.execute<[string]>(`select status from all_objects where owner = :o and object_name = :n and object_type = :t`, { o: owner, n: name, t: type });
       if (r.rows?.[0]?.[0] !== 'VALID') out.push(`${type} ${name}`);
     }
@@ -1091,13 +1096,17 @@ class Run {
  */
 async function withoutTriggeredViews(run: Run, ms: Mutant[]): Promise<Mutant[]> {
   if (!ms.some((m) => m.unitRef.type === 'VIEW')) return ms;
-  const w = run.primary;
-  const me = await w.currentSchema();
-  // DBA_TRIGGERS sees all; ALL_TRIGGERS another schema's triggers only with CREATE ANY TRIGGER
-  const dba = await w.deploy.execute<[string, string]>(`select table_owner, table_name from dba_triggers where base_object_type = 'VIEW'`).catch(() => undefined);
-  const r = dba ?? await w.deploy.execute<[string, string]>(`select table_owner, table_name from all_triggers where base_object_type = 'VIEW'`);
-  const complete = !!dba || ((await w.deploy.execute<[number]>(`select count(*) from session_privs where privilege = 'CREATE ANY TRIGGER'`)).rows?.[0]?.[0] ?? 0) > 0;
-  const triggered = new Set((r.rows ?? []).map(([o, n]) => `${o}.${n}`));
+  const me = await run.primary.currentSchema();
+  // on every worker database (they may differ beyond the install): DBA_TRIGGERS sees all,
+  // ALL_TRIGGERS another schema's triggers only with CREATE ANY TRIGGER
+  const triggered = new Set<string>();
+  let complete = true;
+  for (const w of run.workers) {
+    const dba = await w.deploy.execute<[string, string]>(`select table_owner, table_name from dba_triggers where base_object_type = 'VIEW'`).catch(() => undefined);
+    const r = dba ?? await w.deploy.execute<[string, string]>(`select table_owner, table_name from all_triggers where base_object_type = 'VIEW'`);
+    for (const [o, n] of r.rows ?? []) triggered.add(`${o}.${n}`);
+    if (!dba && !(((await w.deploy.execute<[number]>(`select count(*) from session_privs where privilege = 'CREATE ANY TRIGGER'`)).rows?.[0]?.[0] ?? 0) > 0)) complete = false;
+  }
   const owner = (m: Mutant) => objectOwner(m.unitRef.name) ?? me;
   const out = ms.filter((m) => m.unitRef.type !== 'VIEW' || (!triggered.has(`${owner(m)}.${objectName(m.unitRef.name)}`) && (complete || owner(m) === me)));
   const left = new Set(ms.filter((m) => !out.includes(m)).map((m) => unitKey(m)));
@@ -1156,10 +1165,11 @@ async function confirmVerdicts(run: Run, results: Result[], stop: () => boolean)
 }
 
 /** "TYPE|NAME" of the unit a script statement creates (leading comments skipped), or ''. */
-function createdUnit(stmt: string): string {
+export function createdUnit(stmt: string): string {
   const s = stmt.replace(/^(\s*(--[^\n]*(\n|$)|\/\*[\s\S]*?\*\/))*\s*/, '');
-  const m = /^CREATE\s+(OR\s+REPLACE\s+)?((NO\s+)?FORCE\s+|(NON)?EDITIONABLE\s+|EDITIONING\s+)*(PACKAGE\s+BODY|TYPE\s+BODY|PROCEDURE|FUNCTION|TRIGGER|VIEW)\s+(IF\s+NOT\s+EXISTS\s+)?((?:"[^"]+"|[\w$#]+)(?:\s*\.\s*(?:"[^"]+"|[\w$#]+))?)/i.exec(s);
-  return m ? `${m[5].replace(/\s+/g, ' ').toUpperCase()}|${objectName(m[7].replace(/\s+/g, ''))}` : '';
+  // (names as the lexer reads them: letters beyond ASCII too, quoted ones with their spaces)
+  const m = /^CREATE\s+(OR\s+REPLACE\s+)?((NO\s+)?FORCE\s+|(NON)?EDITIONABLE\s+|EDITIONING\s+)*(PACKAGE\s+BODY|TYPE\s+BODY|PROCEDURE|FUNCTION|TRIGGER|VIEW)\s+(IF\s+NOT\s+EXISTS\s+)?((?:"[^"]+"|[\w$#À-\uffff]+)(?:\s*\.\s*(?:"[^"]+"|[\w$#À-\uffff]+))?)/i.exec(s);
+  return m ? `${m[5].replace(/\s+/g, ' ').toUpperCase()}|${objectName(m[7].replace(/\s*\.\s*(?=(?:"[^"]+"|[\w$#À-\uffff]+)$)/, '.'))}` : '';
 }
 
 /** Executes a complete run. */
@@ -1327,7 +1337,10 @@ async function runSchema(run: Run, ms: Mutant[], stop: () => boolean): Promise<R
   rounds += await checkPlans(run, ms, dropped, naive, broken, plans);
   run.checkpoint();
   // (a unit left out stays original on every worker)
-  const units = buildSchema(ms, new Set(dropped.keys()), naive, await w.currentSchema(), broken, run.plain).filter((u) => !run.unplaced.has(u.key));
+  const built = buildSchema(ms, new Set(dropped.keys()), naive, await w.currentSchema(), broken, run.plain);
+  const units = built.filter((u) => !run.unplaced.has(u.key));
+  // loop guard ids run over all units, the ones left out too
+  const loopCount = built.reduce((n, u) => n + u.loops, 0);
   w.schema = units;
   // all settled before anything fails: restoring while another worker still compiles would miss units
   const settled = async (ps: Promise<unknown>[]) => {
@@ -1351,7 +1364,7 @@ async function runSchema(run: Run, ms: Mutant[], stop: () => boolean): Promise<R
   run.logf(`Baseline mit Schema: ${base.tests.length} Tests in ${Math.round(base.ms)}ms, Zeitgrenze ${Math.round(w.limitMs)}ms`);
 
   // (with the recorded view points, which run one by one on the recording's reach)
-  const covering = await record(run, base.tests, units.flatMap((u) => [...u.mutants.map((m) => m.id), ...u.recorded]), units.reduce((n, u) => n + u.loops, 0));
+  const covering = await record(run, base.tests, units.flatMap((u) => [...u.mutants.map((m) => m.id), ...u.recorded]), loopCount);
   run.checkpoint();
   run.covering = covering;
   run.recorded = new Set(units.flatMap((u) => u.recorded));

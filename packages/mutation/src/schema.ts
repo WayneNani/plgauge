@@ -223,7 +223,8 @@ export function buildSchema(ms: Mutant[], dropped: Set<number> = new Set(), naiv
     if (u.decl >= 0) {
       r.active = 'plmut$a';
       r.write(f.src.subarray(u.start, u.decl).toString('utf8'));
-      r.write(`\n  plmut$a CONSTANT PLS_INTEGER := ${ctl}.active;`);
+      // on the same line: line numbers ($$PLSQL_LINE, error backtraces) stay those of the original
+      r.write(` plmut$a CONSTANT PLS_INTEGER := ${ctl}.active;`);
       start = u.decl;
     }
     r.rangeWith(start, u.end, roots);

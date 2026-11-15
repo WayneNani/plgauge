@@ -380,6 +380,11 @@ async function main() {
             const logoff = (await conn.execute<[number]>(`select count(*) from all_triggers where owner = :o and trigger_name = 'COV$_LOGOFF'`, { o: home })).rows?.[0]?.[0] ?? 0;
             if (!entries.length && !logoff) {
               console.error('Journal leer: kein Objekt ist verändert.');
+              // a coverage run of another schema keeps its journal there (pltest restore --config …)
+              if (fromUrls && own) {
+                const other = await conn.execute<[string]>(`select owner from all_tables where table_name = 'PLTEST_JOURNAL' and owner not in (user, sys_context('USERENV', 'CURRENT_SCHEMA'))`).catch(() => ({ rows: [] as [string][] }));
+                for (const [o] of other.rows ?? []) console.error(`  Hinweis: auch Schema ${o} hat ein Journal (ein Coverage-Lauf dort: pltest restore --config …)`);
+              }
               continue;
             }
             for (const e of entries) console.error(`  ${e.type} ${e.owner}.${e.name} (${e.tool}, seit ${e.createdAt.toISOString()})`);

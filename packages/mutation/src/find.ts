@@ -459,7 +459,8 @@ class Finder {
         const cached = header.some((t) => t.up === 'RESULT_CACHE');
         // a SQL macro's body runs only when a statement that calls it is hard-parsed: a switch never
         // gets there once the cursors exist
-        const macro = header.some((t) => t.up === 'SQL_MACRO');
+        // (so is the DESCRIBE of a polymorphic table function: it returns DBMS_TF.DESCRIBE_T)
+        const macro = header.some((t) => t.up === 'SQL_MACRO' || t.up === 'DESCRIBE_T');
         const inner: Env = { sub, ctx: 'plsql', guard: false, naiveOnly: cached ? 'cache' : macro ? 'macro' : env.naiveOnly };
         const outer = this.scopeNode;
         this.scopeNode = n;
@@ -1277,7 +1278,12 @@ class Finder {
       // n MOD m becomes n * m, as for the function MOD(n, m)
       const swapped = op.text === '+' ? '-' : op.text === '-' ? '+' : op.text === '*' ? '/' : '*';
       const o = op.start - this.t[a].start;
-      this.pointSpan('AOR', 'value', a, last, span, env, env.ctx, '', [span.slice(0, o) + swapped + span.slice(o + op.text.length)]);
+      let m = span.slice(0, o) + swapped + span.slice(o + op.text.length);
+      // a+-d must not become a--d (a comment): spaces where the swap would join a comment marker
+      if (/--|\/\*|\*\//.test(m.slice(Math.max(0, o - 1), o + 2)) && !/--|\/\*|\*\//.test(span.slice(Math.max(0, o - 1), o + op.text.length + 1))) {
+        m = span.slice(0, o) + ` ${swapped} ` + span.slice(o + op.text.length);
+      }
+      this.pointSpan('AOR', 'value', a, last, span, env, env.ctx, '', [m]);
     }
   }
 

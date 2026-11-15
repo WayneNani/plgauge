@@ -1086,3 +1086,20 @@ END mm;
   // the SET list ends before FROM: dropping an assignment keeps the join
   assert.ok(col.length && col.every((t) => !/FROM/.test(t)), col.join('\n'));
 });
+
+test('createdUnit reads names beyond ASCII and quoted names with spaces', async () => {
+  const { createdUnit } = await import('../src/run.ts');
+  assert.equal(createdUnit('-- c\nCREATE OR REPLACE PROCEDURE berechne_größe IS BEGIN NULL; END;'), 'PROCEDURE|BERECHNE_GRÖSSE');
+  assert.equal(createdUnit('create or replace package body app . "My Pkg" as end;'), 'PACKAGE BODY|My Pkg');
+});
+
+test('finder: AOR never joins a comment marker (a+-d), DESCRIBE of a PTF runs one by one', () => {
+  const got = mutants(body(`x := a+-b;`), ['AOR']);
+  assert.ok(got.some((g) => g.includes('a - -b')) && !got.some((g) => g.includes('--')), got.join('\n'));
+  const f = points(`CREATE OR REPLACE PACKAGE BODY ptf AS
+  FUNCTION describe(tab IN OUT DBMS_TF.TABLE_T, n NUMBER) RETURN DBMS_TF.DESCRIBE_T IS BEGIN IF n > 1 THEN NULL; END IF; RETURN NULL; END;
+END ptf;
+/
+`)[0];
+  assert.ok(f.points.length && f.points.every((p) => p.naiveOnly === 'macro'), JSON.stringify(f.points.map((p) => [p.op, p.naiveOnly])));
+});
