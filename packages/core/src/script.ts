@@ -4,10 +4,30 @@
 const SQLPLUS = /^\s*(PROMPT|PRO|SET(?!\s+(TRANSACTION|ROLE|CONSTRAINTS?)\b)|SPOOL|WHENEVER|DEFINE|DEF|UNDEFINE|SHOW|SHO|EXIT|QUIT|REM|REMARK|COLUMN|COL|TTITLE|BTITLE|PAUSE|CLEAR|VAR|VARIABLE|PRINT|ACCEPT|TIMING|BREAK|COMPUTE|HOST|LIST|CONNECT|CONN|DISCONNECT|START|RUN|GET|DESC|DESCRIBE)(\s|;|$)|^\s*[@$!]/i;
 const PLSQL_START = /^\s*(CREATE\s+(OR\s+REPLACE\s+)?((NON)?EDITIONABLE\s+)?(PACKAGE|PROCEDURE|FUNCTION|TRIGGER|TYPE)\b|DECLARE\b|BEGIN\b)/i;
 /**
- * Other statements SQL*Plus ends only at "/": with PL/SQL in a WITH clause (a query, a view), and
- * MLE modules and Java sources with their code inline (AS …; the BFILE forms end at ";").
+ * Other statements SQL*Plus ends only at "/": with PL/SQL in a WITH clause (a query, a view; a
+ * declaration, not a column named FUNCTION: START WITH function IS NULL).
  */
-const SLASH_ONLY = /^\s*CREATE\s+(OR\s+REPLACE\s+)?(AND\s+(RE)?(COMPILE|RESOLVE)\s+)?((NO)?FORCE\s+)?((NON)?EDITIONABLE\s+)?(MLE\s+MODULE|JAVA\s+SOURCE)\b[\s\S]*?\bAS\b|\bWITH\s+(FUNCTION|PROCEDURE)\b/i;
+const WITH_PLSQL = /\bWITH\s+(FUNCTION|PROCEDURE)\s+(?!(IS|AS|IN|NOT|LIKE|BETWEEN|RETURN)\b)("[^"]*"|[A-Za-z][\w$#.]*)\s*(\(|RETURN\b|IS\b|AS\b)/i;
+const FOREIGN_HEAD = /^\s*CREATE\s+(OR\s+REPLACE\s+)?(AND\s+(RE)?(COMPILE|RESOLVE)\s+)?((NO)?FORCE\s+)?((NON)?EDITIONABLE\s+)?(MLE\s+MODULE|JAVA\s+SOURCE)\b/i;
+
+/**
+ * An MLE module or Java source with its code inline (… AS code, AS outside parentheses; the
+ * USING BFILE/CLOB forms end at ";"): JavaScript or Java up to the "/" line, where SQL quoting
+ * rules mean nothing (don't, '\''). code: the statement's code so far (scanLine).
+ */
+export function inlineForeign(code: string): boolean {
+  const m = FOREIGN_HEAD.exec(code);
+  if (!m) return false;
+  let depth = 0;
+  const rest = code.slice(m[0].length);
+  for (let i = 0; i < rest.length; i++) {
+    const c = rest[i];
+    if (c === '(') depth++;
+    else if (c === ')') depth--;
+    else if (depth === 0 && /^AS\b/i.test(rest.slice(i, i + 3)) && !/[\w$#]/.test(rest[i - 1] ?? '')) return true;
+  }
+  return false;
+}
 
 /** Where a line ends: in a block comment, in a string or quoted name (its closing text), or in code. */
 export interface ScanState {
@@ -91,7 +111,8 @@ export function splitScript(text: string): string[] {
   let st: ScanState = { comment: false, quote: '' };
   let exec: string[] | undefined;
   let ended = false; // the statement ended, a block comment after its semicolon is still open
-  let cont = false; // a SQL*Plus command continues on the next line
+  let cont = false;
+  let foreign = false; // in an inline Java/MLE source: only the "/" line ends it // a SQL*Plus command continues on the next line
   const flush = () => {
     // a statement of comments only, or a lone semicolon, is none (ORA-00900)
     if (code.replace(/;\s*$/, '').trim()) out.push(buf.join('\n').replace(/\s+$/, ''));
@@ -136,6 +157,13 @@ export function splitScript(text: string): string[] {
       }
       continue;
     }
+    if (foreign) {
+      if (line.trim() === '/') {
+        foreign = false;
+        flush();
+      } else buf.push(line);
+      continue;
+    }
     // a SQL*Plus command continued with " -": this line belongs to it, even a blank one
     if (cont) {
       cont = /\s-\s*$/.test(line);
@@ -163,7 +191,12 @@ export function splitScript(text: string): string[] {
     buf.push(line);
     code += r.code + '\n';
     // PL/SQL is known once its first code is (CREATE OR REPLACE may stand on a line of its own)
-    const plsql = PLSQL_START.test(code) || SLASH_ONLY.test(code);
+    if (inlineForeign(code)) {
+      foreign = true;
+      st = { comment: false, quote: '' };
+      continue;
+    }
+    const plsql = PLSQL_START.test(code) || WITH_PLSQL.test(code);
     // (a block comment may follow the semicolon: its content is not in the code)
     if (!plsql && !st.quote && /;\s*$/.test(r.code) && code.trim()) {
       // the statement without its semicolon (a trailing comment stays, a block comment up to its end)

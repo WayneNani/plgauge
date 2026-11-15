@@ -106,6 +106,8 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
   // the lock went to another run: it restored this run's journal at its start and works on the
   // schema now; this run changes nothing there any more, not even to restore
   let foreign = false;
+  // the run is over: a check still taking the lock again closes what it took
+  let down = false;
   let checking: Promise<void> | undefined;
   // the lock's session still there (an idle one may be ended: IDLE_TIME, a firewall), else taken
   // again; before every change and every minute
@@ -113,11 +115,17 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     if (foreign) throw new Error('Laufsperre an einen anderen Lauf verloren');
     if (await lock.execute('select 1 from dual').then(() => true, () => false)) return;
     await lock.close().catch(() => {});
+    if (down) return;
     try {
-      lock = await takeLock();
+      const c = await takeLock();
+      if (down) {
+        await c.close().catch(() => {});
+        return;
+      }
+      lock = c;
     } catch (e) {
       if ((e as Error).message.includes('anderer pltest-Lauf')) foreign = true;
-      throw new Error(`Laufsperre verloren: ${(e as Error).message.split('\n')[0]}`);
+      throw new Error(`Laufsperre verloren: ${(e as Error).message.split('\n')[0]}${foreign ? ' – schon instrumentierter Code bleibt im Journal: pltest restore, sobald die Sperre frei ist' : ''}`);
     }
   })().finally(() => {
     checking = undefined;
@@ -246,7 +254,12 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     await conn.commit();
 
     await keepLock().catch((e: Error) => say(`WARNUNG: ${e.message}`));
-    if (!foreign) await restoreAll(conn, restore, say);
+    if (foreign) {
+      // that run restored this one's code at its start, maybe while the tests ran: no valid result
+      restore.length = 0;
+      throw new Error('Laufsperre während des Laufs verloren (ein anderer Lauf oder die alte Sitzung hält sie): die Messung ist ungültig, instrumentierter Code bleibt im Journal; pltest restore, sobald die Sperre frei ist');
+    }
+    await restoreAll(conn, restore, say);
     restore.length = 0;
 
     // Flaky: the result changed although our instrumentation was not involved (baseline runs and
@@ -315,6 +328,9 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       }
     } finally {
       await conn.close().catch(() => {});
+      // (a check in flight may still swap the connection; after this none takes the lock again)
+      down = true;
+      await checking?.catch(() => {});
       await lock.close().catch(() => {});
     }
   }

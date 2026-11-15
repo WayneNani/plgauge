@@ -141,3 +141,28 @@ test('viewFromDictionary rebuilds read-only, check-option and invoker-rights vie
     }
   });
 });
+
+test('a dead run\'s view mutant written with SELECT * is restored (the dictionary expands it)', { skip: !m && 'PLCOV_DB not set' }, async () => {
+  await withConn(async (conn, owner) => {
+    const text = async () => (await conn.execute<[string]>(`select text from user_views where view_name = 'PLTEST_JS'`)).rows![0][0];
+    const mine = async () => (await journalEntries(conn)).filter((e) => e.name === 'PLTEST_JS');
+    try {
+      await conn.execute(`create or replace view pltest_js as select dummy from dual where 1 = 1`);
+      const obj = await loadObject(conn, owner, 'PLTEST_JS', 'VIEW');
+      assert.equal(await replaceSource(conn, obj, `view pltest_js as select * from dual where 1 = 2`, 'test'), null);
+      const out: string[] = [];
+      await restoreJournal(conn, await mine(), quiet(out));
+      assert.match(await text(), /1 = 1/, out.join('\n'));
+      assert.deepEqual(await mine(), []);
+      // the run died between its compile and the note of what the dictionary holds: restored too
+      assert.equal(await replaceSource(conn, obj, `view pltest_js as select * from dual where 1 = 2`, 'test'), null);
+      await conn.execute(`update pltest_journal set current_sha = 'x', prev_sha = 'y', pending = 1 where name = 'PLTEST_JS'`);
+      await conn.commit();
+      out.length = 0;
+      await restoreJournal(conn, await mine(), quiet(out));
+      assert.match(await text(), /1 = 1/, out.join('\n'));
+    } finally {
+      await conn.execute(`drop view pltest_js`).catch(() => {});
+    }
+  });
+});

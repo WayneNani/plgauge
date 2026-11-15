@@ -8,7 +8,7 @@
  */
 import oracledb from 'oracledb';
 import { createHash } from 'node:crypto';
-import { codeFingerprint, fingerprint, journalForget, journalNote, journalRemember, journalUnnote, type JournalEntry } from './journal.js';
+import { codeFingerprint, fingerprint, journalForget, journalNote, journalRemember, journalSettle, journalUnnote, type JournalEntry } from './journal.js';
 
 export interface ConnectConfig {
   user: string;
@@ -226,11 +226,13 @@ export interface CompileOutcome {
 export async function compileDetailed(conn: oracledb.Connection, obj: SourceObject, source: string): Promise<CompileOutcome> {
   const cur = (await conn.execute<[string]>(`select sys_context('USERENV', 'CURRENT_SCHEMA') from dual`)).rows![0][0];
   if (cur === obj.owner) return compileHere(conn, obj, source);
-  await conn.execute(`alter session set current_schema = ${dbIdent(obj.owner)}`);
+  // quoted: a schema named in mixed case ("MyApp") is not MYAPP
+  const q = (x: string) => `"${x.replace(/"/g, '""')}"`;
+  await conn.execute(`alter session set current_schema = ${q(obj.owner)}`);
   try {
     return await compileHere(conn, obj, source);
   } finally {
-    await conn.execute(`alter session set current_schema = ${dbIdent(cur)}`);
+    await conn.execute(`alter session set current_schema = ${q(cur)}`);
   }
 }
 
@@ -312,6 +314,11 @@ export async function replaceSourceDetailed(conn: oracledb.Connection, obj: Sour
   const out = await compileDetailed(conn, obj, source);
   // rejected at once (a lock, a privilege, a view statement): the object still holds the text before
   if (out.error && !/^Zeile \d+:/.test(out.error)) await journalUnnote(conn, obj);
+  else if (obj.type === 'VIEW') {
+    // what the dictionary made of it (SELECT * expanded): a restore compares with that
+    const held = await currentCode(conn, obj).catch(() => undefined);
+    if (held) await journalSettle(conn, obj, held.sha);
+  }
   return out;
 }
 
@@ -339,7 +346,10 @@ async function currentCode(conn: oracledb.Connection, obj: Pick<SourceObject, 'o
 export async function restoreJournal(conn: oracledb.Connection, entries: JournalEntry[], say: (m: string) => void): Promise<void> {
   const todo: SourceObject[] = [];
   for (const e of entries) {
-    if (e.currentSha) {
+    // a view noted before its compile, or by an older version (other fingerprints): no comparison
+    // possible, the original goes back
+    const comparable = e.currentSha && (e.type !== 'VIEW' || e.pending === 0);
+    if (comparable) {
       // (not readable: restored as before; the compile reports what is wrong)
       const cur = await currentCode(conn, e.object).catch(() => null);
       if (cur === undefined) {

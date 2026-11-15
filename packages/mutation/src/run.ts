@@ -228,7 +228,7 @@ class Worker {
       // cannot be told apart; stopping is the safe side)
       if (this.held && (e as Error).message.includes('anderer pltest-Lauf')) {
         this.foreign = true;
-        this.run.abort ??= `Laufsperre${this.name} an einen anderen Lauf verloren`;
+        this.run.abort ??= `Laufsperre${this.name} an einen anderen Lauf verloren (oder die alte Sitzung hält sie noch); geänderter Code bleibt im Journal: pltest restore, sobald die Sperre frei ist`;
         this.logf(`FEHLER${this.name}: ${this.run.abort}, Lauf wird abgebrochen`);
       }
       throw e;
@@ -378,7 +378,10 @@ class Worker {
     if (!o) {
       const user = await this.currentSchema();
       const owner = objectOwner(name) ?? user;
-      o = await loadObject(this.deploy, owner, objectName(name), type);
+      // the same object under another unit key: its original is the one read first (the object
+      // may hold that key's changed code by now)
+      const same = [...this.objects.values()].find((x) => x.owner === owner && x.name === objectName(name) && x.type === type);
+      o = same ?? (await loadObject(this.deploy, owner, objectName(name), type));
       if (owner !== user && !this.granted.has(owner)) {
         await this.deploy.execute(`grant execute on plmut_ctl to ${dbIdent(owner)}`).catch(() => {});
         this.granted.add(owner);
@@ -831,6 +834,8 @@ class Run {
   plain = new Set<string>();
   /** Units the schema could not put in place at all (not even with errors): left out of it. */
   unplaced = new Set<string>();
+  /** Units whose schema text compileSchema put in place on the primary (valid or not). */
+  placed = new Set<string>();
   /** Ctrl-C: the dispatch loops stop, the phases before them end at the next checkpoint. */
   interrupted = false;
   checkpoint(): void {
@@ -1119,6 +1124,21 @@ export async function runMutation(opt: Options): Promise<Report> {
     if (f.errors.length) run.logf(`übersprungen, nicht parsbar: ${f.path}: ${f.errors.join('; ')}`);
   }
   run.logf(`${ms.length} Mutanten in ${files.length} Dateien${opt.diff ? ' (nur geänderte Zeilen)' : ''}, ${skipped} gleichwertige oder sinnlose Varianten ausgelassen`);
+  // one database object defined in two files (a unit file and an install-all script, say): both
+  // would compile into the same object, the second over the first; the first file's counts
+  const objectOf = new Map<string, string>();
+  const twice = new Set<string>();
+  for (const m of ms) {
+    const id = `${(objectOwner(m.unitRef.name) ?? '').toUpperCase()}|${objectName(m.unitRef.name).toUpperCase()}|${m.unitRef.type}`;
+    const first = objectOf.get(id);
+    if (first === undefined) objectOf.set(id, unitKey(m));
+    else if (first !== unitKey(m)) twice.add(unitKey(m));
+  }
+  if (twice.size) {
+    for (const k of twice) run.logf(`übersprungen, Objekt schon in einer anderen Datei definiert: ${k}`);
+    ms = ms.filter((m) => !twice.has(unitKey(m)));
+    run.total = ms.length;
+  }
   if (!ms.length) {
     run.logf('keine Mutanten: nichts zu tun');
     return { mode: opt.mode ?? 'schema', baselineMs: 0, limitMs: 0, tests: 0, excludedTests: 0, flakyTests: [], skippedVariants: skipped, results: [], elapsedMs: performance.now() - t0 };
@@ -1562,11 +1582,14 @@ async function compileSchema(run: Run, ms: Mutant[], dropped: Map<number, string
       const errs = await w.compileUnit(su.key, su.type, su.owner ? `"${su.owner}"."${su.name}"` : su.name, su.text)
         .catch((e: Error) => ((failure = firstLine(e)), []));
       if (failure) {
+        // an earlier round put its schema text there: back to the original, like on the other workers
+        if (run.placed.has(su.key)) await w.restore(su.key, false);
         run.unplaced.add(su.key);
         for (const m of ms) if (unitKey(m) === su.key) naive.add(m.point);
         run.logf(`${su.key}: nicht kompilierbar (${failure}), ohne Schema, Mutanten einzeln`);
         continue;
       }
+      run.placed.add(su.key);
       if (!errs.length) continue;
       bad = true;
       for (const e of errs) {

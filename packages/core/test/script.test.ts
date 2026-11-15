@@ -127,3 +127,20 @@ select 1 from dual;
     'select 1 from dual',
   ]);
 });
+
+test('splitScript: Java/MLE code is not read with SQL quoting, a column named FUNCTION is no WITH FUNCTION', () => {
+  assert.deepEqual(splitScript(`create or replace mle module m language javascript as
+// don't touch
+export function f() { return 1; }
+/
+insert into menu_flat
+select id from menu start with function is null connect by prior id = parent_id;
+create java source named "S" using clob (select src as s from t);
+create table t2 (x number);
+`), [
+    "create or replace mle module m language javascript as\n// don't touch\nexport function f() { return 1; }",
+    'insert into menu_flat\nselect id from menu start with function is null connect by prior id = parent_id',
+    'create java source named "S" using clob (select src as s from t)',
+    'create table t2 (x number)',
+  ]);
+});

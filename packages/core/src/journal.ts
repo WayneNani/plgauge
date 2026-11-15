@@ -30,7 +30,8 @@ export async function ensureJournal(conn: oracledb.Connection): Promise<void> {
   }
   // settings as a CLOB (a view's comments outgrow VARCHAR2(4000)); the fingerprint of the code
   // pltest compiled last (see journalNote); journals of older versions get the columns
-  for (const col of ['props clob', 'current_sha varchar2(64)', 'prev_sha varchar2(64)']) {
+  // pending: a view note made before its compile, not yet replaced by what the dictionary holds
+  for (const col of ['props clob', 'current_sha varchar2(64)', 'prev_sha varchar2(64)', 'pending number(1)']) {
     try {
       await conn.execute(`alter table pltest_journal add (${col})`);
     } catch (e) {
@@ -41,7 +42,7 @@ export async function ensureJournal(conn: oracledb.Connection): Promise<void> {
 
 /** Undoes journalNote after a compile that did not change the object (rejected at once). */
 export async function journalUnnote(conn: oracledb.Connection, obj: Pick<SourceObject, 'owner' | 'name' | 'type'>): Promise<void> {
-  await conn.execute(`update pltest_journal set current_sha = prev_sha where owner = :o and name = :n and type = :t`, { o: obj.owner, n: obj.name, t: obj.type });
+  await conn.execute(`update pltest_journal set current_sha = prev_sha, pending = 0 where owner = :o and name = :n and type = :t`, { o: obj.owner, n: obj.name, t: obj.type });
   await conn.commit();
 }
 
@@ -100,9 +101,11 @@ export function codeFingerprint(type: string, source: string): string {
 export async function journalNote(conn: oracledb.Connection, obj: Pick<SourceObject, 'owner' | 'name' | 'type'>, source: string, before?: string): Promise<void> {
   // before: what the object holds now (its fingerprint, read from the database); without it the
   // previous note stands in for it
+  // a view: the dictionary may hold its query differently (SELECT * expanded); until journalSettle
+  // notes what it holds, a restore cannot tell and puts the original back
   const note = () => conn.execute(
-    `update pltest_journal set prev_sha = nvl(:p, current_sha), current_sha = :h where owner = :o and name = :n and type = :t`,
-    { p: before ?? null, h: codeFingerprint(obj.type, source), o: obj.owner, n: obj.name, t: obj.type });
+    `update pltest_journal set prev_sha = nvl(:p, current_sha), current_sha = :h, pending = :w where owner = :o and name = :n and type = :t`,
+    { p: before ?? null, h: codeFingerprint(obj.type, source), w: obj.type === 'VIEW' ? 1 : 0, o: obj.owner, n: obj.name, t: obj.type });
   try {
     await note();
   } catch (e) {
@@ -114,6 +117,12 @@ export async function journalNote(conn: oracledb.Connection, obj: Pick<SourceObj
   await conn.commit();
 }
 
+/** After a view's compile: the fingerprint of what the dictionary holds now (see journalNote). */
+export async function journalSettle(conn: oracledb.Connection, obj: Pick<SourceObject, 'owner' | 'name' | 'type'>, sha: string): Promise<void> {
+  await conn.execute(`update pltest_journal set current_sha = :h, pending = 0 where owner = :o and name = :n and type = :t`, { h: sha, o: obj.owner, n: obj.name, t: obj.type });
+  await conn.commit();
+}
+
 /** Records the original of an object unless an older entry exists (that one is the true original). */
 export async function journalRemember(conn: oracledb.Connection, obj: SourceObject, tool: string): Promise<void> {
   // with the original's fingerprint from the start: a restore checks the unit even when no
@@ -122,7 +131,7 @@ export async function journalRemember(conn: oracledb.Connection, obj: SourceObje
     `merge into pltest_journal j
      using (select :o owner, :n name, :t type from dual) x
         on (j.owner = x.owner and j.name = x.name and j.type = x.type)
-      when not matched then insert (owner, name, type, source, props, tool, current_sha) values (:o, :n, :t, :src, :st, :tool, :h)`,
+      when not matched then insert (owner, name, type, source, props, tool, current_sha, pending) values (:o, :n, :t, :src, :st, :tool, :h, 0)`,
     { o: obj.owner, n: obj.name, t: obj.type, src: { val: obj.original, type: oracledb.DB_TYPE_CLOB }, st: { val: JSON.stringify(obj.settings), type: oracledb.DB_TYPE_CLOB }, tool, h: codeFingerprint(obj.type, obj.original) },
   );
   try {
@@ -151,16 +160,18 @@ export interface JournalEntry {
   /** Fingerprints of the code pltest compiled last and the one before (rows of older versions: none). */
   currentSha?: string;
   prevSha?: string;
+  /** 1: a view's note before its compile (or a row of an older version: undefined). */
+  pending?: number;
 }
 
 export async function journalEntries(conn: oracledb.Connection): Promise<JournalEntry[]> {
-  const res = await conn.execute<[string, string, string, string, string | null, string | null, Date, string | null, string | null]>(
-    `select owner, name, type, source, nvl(props, to_clob(settings)) settings, tool, created_at, current_sha, prev_sha from pltest_journal order by created_at`,
+  const res = await conn.execute<[string, string, string, string, string | null, string | null, Date, string | null, string | null, number | null]>(
+    `select owner, name, type, source, nvl(props, to_clob(settings)) settings, tool, created_at, current_sha, prev_sha, pending from pltest_journal order by created_at`,
     {},
     { fetchInfo: { SOURCE: { type: oracledb.STRING }, SETTINGS: { type: oracledb.STRING } } },
   );
-  return (res.rows ?? []).map(([owner, name, type, source, settings, tool, createdAt, sha, prev]) => ({
-    owner, name, type, tool: tool ?? '', createdAt, currentSha: sha ?? undefined, prevSha: prev ?? undefined,
+  return (res.rows ?? []).map(([owner, name, type, source, settings, tool, createdAt, sha, prev, pending]) => ({
+    owner, name, type, tool: tool ?? '', createdAt, currentSha: sha ?? undefined, prevSha: prev ?? undefined, pending: pending ?? undefined,
     object: { owner, name, type, original: source, processed: source, settings: settings ? JSON.parse(settings) : {} },
   }));
 }

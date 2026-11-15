@@ -11,7 +11,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { TextDecoder } from 'node:util';
-import { parse, preprocessBlocks, scanLine, tokenize, type Node, type ScanState, type Token } from '@pltest/core';
+import { parse, preprocessBlocks, inlineForeign, scanLine, tokenize, type Node, type ScanState, type Token } from '@pltest/core';
 import type { Loop, Point, SourceFile, Unit } from './mutant.js';
 
 export function findPoints(paths: string[]): SourceFile[] {
@@ -38,6 +38,12 @@ const UNIT_START = /^\s*(CREATE\s+(OR\s+REPLACE\s+)?((NON)?EDITIONABLE\s+)?(PACK
 /** Code that may still turn into a unit's start (CREATE OR REPLACE on a line of its own). */
 const UNIT_OPEN = /^\s*CREATE(\s+OR(\s+REPLACE)?)?(\s+(NON)?EDITIONABLE)?\s*$/i;
 
+/** name used as a size or precision: (name), (name, …), (name CHAR|BYTE), (…, name). */
+function sizeUse(src: string, name: string): boolean {
+  const n = name.replace(/[$#]/g, (c) => `\\${c}`);
+  return new RegExp(`[(,]\\s*(\\w+\\.)?${n}\\s*([),]|CHAR\\b|BYTE\\b)`, 'i').test(src);
+}
+
 const utf8Len = (c: number) => (c < 0x80 ? 1 : c < 0x800 ? 2 : 3);
 
 /**
@@ -49,12 +55,22 @@ const utf8Len = (c: number) => (c < 0x80 ? 1 : c < 0x800 ? 2 : 3);
  */
 export function blankSqlPlus(s: string): string {
   let out = '';
-  let state: 'between' | 'open' | 'unit' | 'sql' = 'between';
+  // foreign: an inline Java/MLE source, blanked up to its "/" line (no PL/SQL, no SQL quoting)
+  let state: 'between' | 'open' | 'unit' | 'sql' | 'foreign' = 'between';
   let head = ''; // the code of a statement whose kind is still open
+  let headAt = 0; // where that statement starts in out
   let st: ScanState = { comment: false, quote: '' };
   let cont = false; // a blanked SQL*Plus command continues on the next line (" -")
+  const blank = (x: string) => x.replace(/[^\n]/g, ' ');
   for (const line of s.split(/(?<=\n)/)) {
     const body = line.endsWith('\n') ? line.slice(0, -1) : line;
+    if (state === 'foreign') {
+      if (body.trim() === '/') {
+        state = 'between';
+        out += line;
+      } else out += blank(line);
+      continue;
+    }
     const inside = st.comment || st.quote !== '';
     const r = scanLine(body, st);
     st = r.state;
@@ -74,9 +90,16 @@ export function blankSqlPlus(s: string): string {
     if (state === 'between' && r.code.trim()) {
       state = 'open';
       head = '';
+      headAt = out.length;
     }
     if (state === 'open') {
       head += r.code + '\n';
+      if (inlineForeign(head)) {
+        state = 'foreign';
+        out = out.slice(0, headAt) + blank(out.slice(headAt)) + blank(line);
+        st = { comment: false, quote: '' };
+        continue;
+      }
       if (UNIT_START.test(head)) state = 'unit';
       else if (!UNIT_OPEN.test(head)) state = 'sql';
     }
@@ -102,6 +125,30 @@ export function prepare(text: string): { text: string; blocks: [number, number][
 }
 
 // ------------------------------------------------------------------ finder
+
+/**
+ * A parenthesised list with a comma at its top level: (a, b), or a subquery whose select list
+ * (or FROM list: then wrongly, but only ROR's order operators go) has one.
+ */
+function columnList(e: string): boolean {
+  if (!e.startsWith('(') || !e.endsWith(')')) return false;
+  let depth = 0;
+  let comma = false;
+  for (let i = 0; i < e.length; i++) {
+    const c = e[i];
+    if (c === "'" || c === '"') {
+      const end = e.indexOf(c, i + 1);
+      if (end < 0) return false;
+      i = end;
+    } else if (c === '(') depth++;
+    else if (c === ')') {
+      depth--;
+      // the first parenthesis closes before the end: (a) + (b, c) is no list
+      if (depth === 0 && i < e.length - 1) return false;
+    } else if (c === ',' && depth === 1) comma = true;
+  }
+  return comma;
+}
 
 const ROR: Record<string, string[]> = {
   '<': ['<=', '<>', 'FALSE'],
@@ -182,9 +229,10 @@ interface Env {
   /**
    * Points here run only with the oracle rewriter: 'cache' inside a RESULT_CACHE function (its
    * results are shared by all sessions and survive the switch of the active mutant), 'when' in
-   * a trigger's WHEN condition (no PL/SQL function calls allowed there).
+   * a trigger's WHEN condition (no PL/SQL function calls allowed there), 'static' in the value of a
+   * constant that gives a size elsewhere (it must stay a static expression).
    */
-  naiveOnly?: 'cache' | 'when';
+  naiveOnly?: 'cache' | 'when' | 'static';
   /** Inside a query block the schema switches with UNION ALL branches (views, cursor declarations). */
   union?: boolean;
   /** In a select list (of the innermost query): a switch there cannot change the plan. */
@@ -357,6 +405,14 @@ class Finder {
         this.scopeNode = outer;
         const body = n.kids.find((k) => k.k === 'body');
         if (body) this.ret(body, n, inner);
+        return;
+      }
+      case 'decl': {
+        // a constant whose name gives a size (VARCHAR2(c_len)) must stay static: a switch in its
+        // value (it reads plmut$a) would make every such use fail to compile (PLS-00491)
+        const name = this.t[n.a + 1]?.up === 'CONSTANT' ? this.norm(n.a) : undefined;
+        const fixed = !!name && sizeUse(this.src, name);
+        for (const k of n.kids) this.walk(k, n, fixed ? { ...env, naiveOnly: env.naiveOnly ?? 'static' } : env);
         return;
       }
       case 'trigger-when':
@@ -1044,8 +1100,14 @@ class Finder {
       if (!keep.length) return;
       repl = keep;
     }
+    // column lists, (a, b) = (select x, y …): only = and <> exist between them (ORA-00920)
+    if (columnList(left) || columnList(right)) {
+      const keep = repl.filter((m) => m === 'TRUE' || m === 'FALSE');
+      this.skipped += repl.length - keep.length;
+      repl = keep;
+    }
     // codes compared with a string literal are categories, not an order
-    if ((op === '=' || op === '<>') && (isStringLiteral(left) || isStringLiteral(right))) {
+    else if ((op === '=' || op === '<>') && (isStringLiteral(left) || isStringLiteral(right))) {
       this.skipped += 1;
       repl = ['TRUE', 'FALSE'];
     }

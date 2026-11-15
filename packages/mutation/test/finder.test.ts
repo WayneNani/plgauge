@@ -902,3 +902,40 @@ end;
   assert.deepEqual(sbr, ['g := 1;', 'g := 2;']);
   assert.ok(f.units.some((u) => u.name.toLowerCase() === 'p'));
 });
+
+test('finder: an inline Java/MLE source is skipped up to its slash, the units after it keep their mutants', () => {
+  const f = points(`create or replace mle module m language javascript as
+// don't touch
+export function f() { return 1; }
+/
+create or replace and compile java source named "J" as
+public class J { static char q() { return '\\''; } }
+/
+create or replace procedure p(a number) is begin if a > 1 then null; end if; end;
+/
+`, 'f.sql')[0];
+  assert.deepEqual(f.errors, []);
+  assert.deepEqual(f.units.map((u) => u.name.toLowerCase()), ['p']);
+  assert.ok(f.points.some((p) => p.op === 'ROR'));
+});
+
+test('finder: ROR between column lists keeps only TRUE/FALSE', () => {
+  const got = mutants(body(`DELETE FROM t WHERE (x, y) = (SELECT a1, b1 FROM u WHERE u.id = a);
+    IF (a) + (b) > c THEN NULL; END IF;`), ['ROR']);
+  assert.ok(got.some((g) => /\(x, y\) = \(SELECT .* → FALSE/.test(g)), got.join('\n'));
+  assert.ok(!got.some((g) => /\(x, y\) (<=|>=)/.test(g)), got.join('\n'));
+  assert.ok(got.some((g) => g.includes('(a) + (b) >= c')), got.join('\n'));
+});
+
+test('finder: the value of a constant that gives a size runs only one by one', () => {
+  const f = points(`CREATE OR REPLACE PACKAGE BODY k AS
+  c_len CONSTANT PLS_INTEGER := 10 * 2;
+  c_other CONSTANT PLS_INTEGER := 3 * 2;
+  PROCEDURE p IS v VARCHAR2(c_len); BEGIN v := 'x'; END;
+END k;
+/
+`)[0];
+  const aor = f.points.filter((p) => p.op === 'AOR');
+  assert.equal(aor.find((p) => p.orig.includes('10'))?.naiveOnly, 'static');
+  assert.equal(aor.find((p) => p.orig.includes('3'))?.naiveOnly, undefined);
+});
