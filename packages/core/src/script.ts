@@ -1,7 +1,23 @@
 /** Splitting SQL*Plus style scripts into statements. */
 
-/** SQL*Plus commands between statements (SET TRANSACTION, ROLE and CONSTRAINTS are SQL). */
-const SQLPLUS = /^\s*(PROMPT|PRO|SET(?!\s+(TRANSACTION|ROLE|CONSTRAINTS?)\b)|SPOOL|WHENEVER|DEFINE|DEF|UNDEFINE|SHOW|SHO|EXIT|QUIT|REM|REMARK|COLUMN|COL|TTITLE|BTITLE|PAUSE|CLEAR|VAR|VARIABLE|PRINT|ACCEPT|TIMING|BREAK|COMPUTE|HOST|LIST|CONNECT|CONN|DISCONNECT|START|RUN|GET|DESC|DESCRIBE)(\s|;|$)|^\s*[@$!]/i;
+/** A SQL*Plus command word in every length it accepts: PRO, PROM, PROMP, PROMPT. */
+const abbrev = (min: string, full: string) => min + [...full.slice(min.length)].reduceRight((acc, c) => `(?:${c}${acc})?`, '');
+/**
+ * SQL*Plus commands (their shortest form and full name) that a script may use between
+ * statements; EXEC is handled apart (it becomes a block).
+ */
+const COMMANDS: [string, string][] = [
+  ['ACC', 'ACCEPT'], ['BRE', 'BREAK'], ['BTI', 'BTITLE'], ['CL', 'CLEAR'], ['COL', 'COLUMN'], ['COMP', 'COMPUTE'],
+  ['CONN', 'CONNECT'], ['DEF', 'DEFINE'], ['DESC', 'DESCRIBE'], ['DISC', 'DISCONNECT'], ['ED', 'EDIT'], ['EXIT', 'EXIT'],
+  ['GET', 'GET'], ['HO', 'HOST'], ['LIST', 'LIST'], ['PASSW', 'PASSWORD'], ['PAU', 'PAUSE'], ['PRI', 'PRINT'],
+  ['PRO', 'PROMPT'], ['QUIT', 'QUIT'], ['REM', 'REMARK'], ['REPF', 'REPFOOTER'], ['REPH', 'REPHEADER'], ['RUN', 'RUN'],
+  ['SAV', 'SAVE'], ['SHO', 'SHOW'], ['SPO', 'SPOOL'], ['STA', 'START'], ['STORE', 'STORE'], ['TIMI', 'TIMING'],
+  ['TTI', 'TTITLE'], ['UNDEF', 'UNDEFINE'], ['VAR', 'VARIABLE'], ['WHENEVER', 'WHENEVER'],
+];
+/** The command words as a regex alternation (SET without TRANSACTION, ROLE, CONSTRAINTS: those are SQL). */
+export const SQLPLUS_WORDS = [...COMMANDS.map(([m, f]) => abbrev(m, f)), 'SET(?!\\s+(TRANSACTION|ROLE|CONSTRAINTS?)\\b)'].join('|');
+/** SQL*Plus commands between statements; @file, $ and ! too. */
+const SQLPLUS = new RegExp(`^\\s*(${SQLPLUS_WORDS})(\\s|;|$)|^\\s*[@$!]`, 'i');
 /** The first word of a SQL statement or PL/SQL block (what SQL*Plus takes as one, not as SP2-0734). */
 const SQL_START = /^\s*(<<|\(|(SELECT|INSERT|UPDATE|DELETE|MERGE|CREATE|ALTER|DROP|TRUNCATE|GRANT|REVOKE|COMMENT|COMMIT|ROLLBACK|SAVEPOINT|LOCK|WITH|EXPLAIN|CALL|ANALYZE|AUDIT|NOAUDIT|RENAME|PURGE|FLASHBACK|SET|DECLARE|BEGIN|VALUES|ASSOCIATE|DISASSOCIATE|ADMINISTER|TABLE)\b)/i;
 const PLSQL_START = /^\s*(<<|CREATE\s+(OR\s+REPLACE\s+)?((NON)?EDITIONABLE\s+)?(PACKAGE|PROCEDURE|FUNCTION|TRIGGER|TYPE)\b|DECLARE\b|BEGIN\b)/i;
@@ -121,7 +137,8 @@ export function splitScript(text: string): string[] {
   let foreign = false; // in an inline Java/MLE source: only the "/" line ends it
   let parked = false; // SQL cut off by a blank line: run only if "/" follows
   let blankLines = false; // SET SQLBLANKLINES ON: blank lines belong to the statement
-  let dropped = false; // after SQL a blank line ended: lines that start no statement are rejected // a SQL*Plus command continues on the next line
+  let dropped = false; // after SQL a blank line ended: lines that start no statement are rejected
+  let held = ''; // that SQL: still in SQL*Plus's buffer, a later "/" runs it // a SQL*Plus command continues on the next line
   const flush = () => {
     // a statement of comments only, or a lone semicolon, is none (ORA-00900)
     if (code.replace(/;\s*$/, '').trim()) out.push(buf.join('\n').replace(/\s+$/, ''));
@@ -186,9 +203,17 @@ export function splitScript(text: string): string[] {
         continue;
       }
       // SQL*Plus (SQLBLANKLINES OFF) ended the statement at the blank line without running it
+      held = buf.join('\n').replace(/\s+$/, '');
       buf = [];
       code = '';
       dropped = true;
+    }
+    // a "/" before the next statement runs the held one (SP2 errors and commands leave the buffer)
+    if (held && !code.trim() && !st.comment && !st.quote && line.trim() === '/') {
+      out.push(held);
+      held = '';
+      dropped = false;
+      continue;
     }
     // the rest of it: SQL*Plus reads each line as a new command and rejects those that start none
     if (dropped && !st.comment && !st.quote) {
@@ -225,6 +250,8 @@ export function splitScript(text: string): string[] {
     st = r.state;
     buf.push(line);
     code += r.code + '\n';
+    // a new statement replaces the buffer
+    if (r.code.trim()) held = '';
     // PL/SQL is known once its first code is (CREATE OR REPLACE may stand on a line of its own)
     if (inlineForeign(code)) {
       foreign = true;

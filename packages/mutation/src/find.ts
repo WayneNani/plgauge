@@ -11,7 +11,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { TextDecoder } from 'node:util';
-import { parse, preprocessBlocks, FOREIGN_HEAD, inlineForeign, scanLine, tokenize, type Node, type ScanState, type Token } from '@pltest/core';
+import { parse, preprocessBlocks, FOREIGN_HEAD, inlineForeign, scanLine, SQLPLUS_WORDS, tokenize, type Node, type ScanState, type Token } from '@pltest/core';
 import type { Loop, Point, SourceFile, Unit } from './mutant.js';
 
 export function findPoints(paths: string[]): SourceFile[] {
@@ -32,7 +32,7 @@ export function findInFile(path: string, buf: Buffer): SourceFile {
 // ------------------------------------------------------------ preprocessing
 
 /** SQL*Plus commands (at the start of a statement; SET TRANSACTION, ROLE and CONSTRAINTS are SQL). */
-const SQLPLUS = /^\s*(SHOW|SHO|SET(?!\s+(TRANSACTION|ROLE|CONSTRAINTS?)\b)|PROMPT|PRO|REM|REMARK|WHENEVER|SPOOL|DEFINE|DEF|UNDEFINE|COLUMN|COL|TTITLE|BTITLE|PAUSE|CLEAR|EXEC|EXECUTE|CONNECT|CONN|DISCONNECT|EXIT|QUIT|LIST|VAR|VARIABLE|HOST|START|PRINT|ACCEPT|TIMING|BREAK|COMPUTE|STORE|GET|SAVE|EDIT|INPUT|RUN|DESC|DESCRIBE)(\s|;|$).*|^\s*[@$!].*/i;
+const SQLPLUS = new RegExp(`^\\s*(${SQLPLUS_WORDS}|EXEC(UTE)?|INPUT)(\\s|;|$).*|^\\s*[@$!].*`, 'i');
 /** The start of a PL/SQL unit (ends with "/"); other CREATE statements end with ";". */
 const UNIT_START = /^\s*(<<|CREATE\s+(OR\s+REPLACE\s+)?((NON)?EDITIONABLE\s+)?(PACKAGE|PROCEDURE|FUNCTION|TRIGGER|TYPE)\b|DECLARE\b|BEGIN\b)/i;
 /** Code that may still turn into a unit's start (CREATE OR REPLACE on a line of its own). */
@@ -949,7 +949,7 @@ class Finder {
     this.skipped += inner.skipped;
     // fetched INTO a single row without a row limit or a subquery (whose order could pick the row):
     // its ORDER BY changes nothing, as in a static SELECT … INTO
-    const orderFree = single && !/\b(FETCH\s+(FIRST|NEXT)|ROWNUM)\b|\(\s*(SELECT|WITH)\b/i.test(content);
+    const orderFree = single && !/\b(FETCH\s+(FIRST|NEXT)|OFFSET|ROWNUM)\b|\(\s*(SELECT|WITH)\b/i.test(content);
     for (const p of inner.points) {
       if (p.start < from || p.end > to || p.kind === 'insert' || p.kind === 'stmt') continue;
       // (only the query's own ORDER BY: one in OVER, WITHIN GROUP or KEEP decides the row's value)
@@ -1391,7 +1391,8 @@ class Finder {
     const inSub = parent?.k === 'pred' && (parent.op === 'IN' || parent.op === 'EXISTS');
     const top = own.map((_, i) => i).filter((i) => depth[i] === 0);
     const has = (w: string) => top.some((i) => up(i) === w);
-    const fetch = top.some((i) => up(i) === 'FETCH' && ['FIRST', 'NEXT'].includes(up(i + 1)));
+    // a row limit: the order picks the rows (OFFSET alone too)
+    const fetch = top.some((i) => (up(i) === 'FETCH' && ['FIRST', 'NEXT'].includes(up(i + 1))) || up(i) === 'OFFSET');
     // (in IN with FETCH FIRST the order and duplicates decide which rows count; EXISTS only asks for one)
     const member = inSub && (!fetch || parent?.op === 'EXISTS');
     const singleRow = q.k === 'sql' && (q.op === 'SELECT' || q.op === 'WITH') && has('INTO') && !has('BULK');

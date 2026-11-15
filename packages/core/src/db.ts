@@ -110,6 +110,10 @@ export async function loadObjects(conn: oracledb.Connection, schema: string, fil
 
 export async function loadObject(conn: oracledb.Connection, owner: string, name: string, type: string): Promise<SourceObject> {
   if (type === 'VIEW') {
+    // a view the ALL_* views do not show (DBMS_METADATA may, with SELECT_CATALOG_ROLE): its
+    // comments, triggers and text could be neither read nor checked, not even after a crash
+    const seen = (await conn.execute<[number]>(`select count(*) from all_views where owner = :o and view_name = :n`, { o: owner, n: name })).rows?.[0]?.[0] ?? 0;
+    if (!seen) throw new Error(`View ${owner}.${name} ist ohne SELECT- oder READ-Recht nicht sichtbar: nicht verändert`);
     const original = await viewDdl(conn, owner, name);
     // CREATE OR REPLACE VIEW drops the comments: compile puts them back
     const t = await conn.execute<[string | null]>(`select comments from all_tab_comments where owner = :o and table_name = :n`, { o: owner, n: name });
@@ -355,7 +359,12 @@ export async function replaceSourceDetailed(conn: oracledb.Connection, obj: Sour
   // holds now (read from the database, not assumed from the last note: a compile that failed
   // before its DDL changed nothing)
   const now = await currentCode(conn, obj).catch(() => undefined);
-  await journalNote(conn, obj, source, now?.sha);
+  // what cannot be read cannot be checked after a crash (a restore would take it for dropped)
+  if (!now) {
+    if (fresh) await journalForget(conn, obj);
+    return { error: `${obj.owner}.${obj.name} ist nicht lesbar (ALL_SOURCE/ALL_VIEWS): nicht verändert`, untouched: fresh };
+  }
+  await journalNote(conn, obj, source, now.sha);
   const out = await compileDetailed(conn, obj, source);
   // rejected at once (a lock, a privilege, a view statement): the object still holds the text before
   if (out.error && !/^Zeile \d+:/.test(out.error)) {

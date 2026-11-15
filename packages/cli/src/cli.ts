@@ -350,11 +350,15 @@ async function main() {
       const listOnly = flag('list');
       // entries that cannot be restored at all (their table is gone, say) would block every run
       const forget = flag('forget');
-      for (const cfg of cfgs) {
+      // a database URL: the journal of a mutation run (the session's CURRENT_SCHEMA) and of a
+      // coverage run of a project (the user's own schema); they differ only with a logon trigger
+      const targets: [typeof cfgs[number], boolean][] = cfgs.flatMap((c) => (fromUrls ? [[c, false], [c, true]] : [[c, false]]) as [typeof cfgs[number], boolean][]);
+      const seen = new Set<string>();
+      for (const [cfg, own] of targets) {
         if (!(cfg as { user?: string }).user) throw new Error('keine Datenbankangaben: --db oder eine Coverage-Konfiguration angeben');
         // one database that fails (gone, locked by a run) must not keep the others from their restore
         try {
-          if (cfgs.length > 1) console.error(`${(cfg as { user: string }).user}@${(cfg as { connectString?: string }).connectString ?? ''}:`);
+          if (cfgs.length > 1 && !own) console.error(`${(cfg as { user: string }).user}@${(cfg as { connectString?: string }).connectString ?? ''}:`);
           // journal and lock live where the runs keep them: the coverage config's runtime schema
           const c2 = cfg as { schema?: string; schemas?: string[]; runtimeSchema?: string; user: string };
           const conn = await connect(cfg);
@@ -362,8 +366,12 @@ async function main() {
             // a mutation run (a database URL) works in its session's CURRENT_SCHEMA, which a logon
             // trigger may set; a coverage run in its runtime schema
             const home = fromUrls
-              ? (await conn.execute<[string]>(`select sys_context('USERENV', 'CURRENT_SCHEMA') from dual`)).rows![0][0]
+              ? own ? c2.user.toUpperCase() : (await conn.execute<[string]>(`select sys_context('USERENV', 'CURRENT_SCHEMA') from dual`)).rows![0][0]
               : (c2.schemas?.length ? c2.runtimeSchema ?? c2.user : c2.schema ?? c2.user).toUpperCase();
+            const where = `${(cfg as { connectString?: string }).connectString ?? ''}|${home}`;
+            if (seen.has(where)) continue;
+            seen.add(where);
+            if (own) console.error(`(Schema ${home}:)`);
             const qi = (x: string) => `"${x.replace(/"/g, '""')}"`;
             await conn.execute(`alter session set current_schema = ${qi(home)}`);
             await ensureJournal(conn);

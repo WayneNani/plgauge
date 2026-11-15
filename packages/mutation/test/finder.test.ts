@@ -1046,3 +1046,9 @@ test('finder: ORD in OVER / WITHIN GROUP of a dynamic single-row query stays', (
     EXECUTE IMMEDIATE 'SELECT FIRST_VALUE(n) OVER (ORDER BY m) FROM t WHERE id = 1' INTO x;`), ['ORD']);
   assert.ok(got.some((g) => g.includes('n DESC')) && got.some((g) => g.includes('m DESC')), got.join('\n'));
 });
+
+test('finder: OFFSET without FETCH is a row limit, ORD stays for single-row queries', () => {
+  const got = mutants(body(`SELECT a INTO x FROM t ORDER BY a OFFSET 1 ROWS;
+    EXECUTE IMMEDIATE 'SELECT b FROM t ORDER BY b OFFSET 1 ROWS' INTO y;`), ['ORD']);
+  assert.ok(got.some((g) => g.includes('a DESC')) && got.some((g) => g.includes('b DESC')), got.join('\n'));
+});

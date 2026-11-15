@@ -227,3 +227,22 @@ as public class X {}
     'create or replace and compile java source named "X"\n\nas public class X {}',
   ]);
 });
+
+test('splitScript: SQL*Plus commands in every abbreviation; "/" runs SQL a blank line held back', () => {
+  assert.deepEqual(splitScript(`undef x
+spo x.log
+cl scr
+prom hello
+CREATE OR REPLACE PROCEDURE p(a NUMBER) IS
+BEGIN
+  IF a > 1 THEN NULL; END IF;
+END;
+/
+INSERT INTO t (a)
+VALUES (1)
+
+PROMPT inserted
+/
+SELECT 1 FROM dual;
+`), ['CREATE OR REPLACE PROCEDURE p(a NUMBER) IS\nBEGIN\n  IF a > 1 THEN NULL; END IF;\nEND;', 'INSERT INTO t (a)\nVALUES (1)', 'SELECT 1 FROM dual']);
+});

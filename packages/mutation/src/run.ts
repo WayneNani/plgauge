@@ -564,6 +564,12 @@ class Worker {
   inTests = false;
 
   async runTests(paths: string[], limitMs = this.limitMs): Promise<RunResult> {
+    // after Ctrl-C no test run starts (a repair, a second look), and one broken off counts for
+    // nothing: callers take the error as "no result" (a CI kill follows within seconds)
+    const stopped = () => {
+      if (this.run.interrupted) throw new Error('Abbruch angefordert');
+    };
+    stopped();
     this.testsRan = true;
     this.guard();
     this.inTests = true;
@@ -573,6 +579,7 @@ class Worker {
     } finally {
       this.inTests = false;
     }
+    stopped();
     if (r.killed || (!r.timedOut && lostConnection(r.err))) await this.reconnectTest();
     return r;
   }
