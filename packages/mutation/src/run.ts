@@ -1324,7 +1324,8 @@ async function runSchema(run: Run, ms: Mutant[], stop: () => boolean): Promise<R
   const rep = emptyReport(run, base.ms, base.tests.length);
   run.logf(`Baseline mit Schema: ${base.tests.length} Tests in ${Math.round(base.ms)}ms, Zeitgrenze ${Math.round(w.limitMs)}ms`);
 
-  const covering = await record(run, base.tests, units.flatMap((u) => u.mutants.map((m) => m.id)));
+  // (with the recorded view points, which run one by one on the recording's reach)
+  const covering = await record(run, base.tests, units.flatMap((u) => [...u.mutants.map((m) => m.id), ...u.recorded]));
   run.checkpoint();
   run.covering = covering;
   run.recorded = new Set(units.flatMap((u) => u.recorded));
@@ -1713,7 +1714,8 @@ async function record(run: Run, tests: TestResult[], ids: number[]): Promise<Map
     const sorted = [...all].sort((a, b) => (dur.get(a) ?? 0) - (dur.get(b) ?? 0));
     for (const id of ids) covering.set(id, sorted);
   }
-  const counts = await loops(w.test);
+  // counts after a reset would be partial: limits from them could stop the original code
+  const counts = intact ? await loops(w.test) : new Map<number, number>();
   w.loopLimits = new Map([...counts].map(([id, n]) => [id, Math.max(1000, 10 * n)]));
   await setLoopLimits(w.test, w.loopLimits);
   run.logf(`Aufzeichnung: ${covering.size} von ${run.total} Mutanten erreicht, ${counts.size} Schleifen gezählt`);

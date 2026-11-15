@@ -1145,7 +1145,8 @@ class Finder {
   private exc(h: Node, env: Env) {
     const stmts = h.kids[0].kids.filter((k) => k.k === 'stmt' || k.k === 'pragma');
     if (!stmts.length) return;
-    if (stmts.length === 1 && (SBR_KINDS.has(stmts[0].op!) || stmts[0].op === 'exit')) return; // same mutant as SBR
+    // same mutant as SBR (EXIT WHEN gets one, a plain EXIT none)
+    if (stmts.length === 1 && (SBR_KINDS.has(stmts[0].op!) || (stmts[0].op === 'exit' && stmts[0].at! >= 0))) return;
     const first = stmts[0];
     const last = stmts[stmts.length - 1];
     const a = first.at2 ?? first.a;
@@ -1589,7 +1590,10 @@ class Finder {
     const ofAlias = (x: Node) => x.k === 'name' && x.b - x.a >= 3 && this.t[x.a].up === alias && this.t[x.a + 1].text === '.';
     // comparisons, LIKE, BETWEEN, IN, = ANY: NULL makes them unknown. Not IS DISTINCT FROM or
     // IS [NOT] TRUE/UNKNOWN/JSON …, which hold for NULL or test it
-    const rejects = (c: Node) => c.k === 'cmp' || (c.k === 'pred' && (['LIKE', 'BETWEEN', 'IN'].includes(c.op!) || c.op!.endsWith(' ANY')));
+    // (not x > ALL (subquery) nor x NOT IN (subquery): with no rows they hold for NULL too)
+    const all = (c: Node) => this.t[c.at! + 1]?.up === 'ALL';
+    const notInQuery = (c: Node) => c.op === 'IN' && c.kids[1]?.k === 'query' && this.t.slice(c.kids[0].b, c.kids[1].a).some((t) => t.up === 'NOT');
+    const rejects = (c: Node) => c.k === 'cmp' || (c.k === 'pred' && ((['LIKE', 'BETWEEN', 'IN'].includes(c.op!) && !notInQuery(c)) || (c.op!.endsWith(' ANY') && !all(c))));
     return conj.some((c) => rejects(c) && c.kids.some(ofAlias));
   }
 

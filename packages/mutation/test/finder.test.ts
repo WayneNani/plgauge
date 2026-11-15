@@ -1065,3 +1065,11 @@ test('finder: OFFSET with an expression is a row limit too', () => {
     SELECT a INTO x FROM t ORDER BY d OFFSET c - 1 ROWS;`), ['ORD']);
   assert.ok(got.some((g) => g.includes('b ASC')) && got.some((g) => g.includes('d DESC')), got.join('\n'));
 });
+
+test('finder: JOI stays with NOT IN (subquery) or > ALL (subquery) in WHERE; EXC for a handler with a plain EXIT', () => {
+  const got = mutants(body(`SELECT COUNT(*) INTO x FROM t1 a JOIN t2 b ON b.id = a.bid WHERE b.code NOT IN (SELECT code FROM blocked);
+    SELECT COUNT(*) INTO y FROM t1 a JOIN t2 b ON b.id = a.bid WHERE b.sal > ALL (SELECT s FROM lim);
+    LOOP BEGIN x := x + 1; EXCEPTION WHEN no_data_found THEN EXIT; END; END LOOP;`), ['JOI', 'EXC']);
+  assert.equal(got.filter((g) => g.startsWith('JOI')).length, 2, got.join('\n'));
+  assert.ok(got.some((g) => g.startsWith('EXC')), got.join('\n'));
+});

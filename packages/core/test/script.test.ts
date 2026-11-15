@@ -263,3 +263,16 @@ exit
 drop table t2;
 `), ['insert into t values (1)', 'insert into t values (1)', 'begin\n  null;\nend;', 'select 2 from dual', 'create table t2 (a number)']);
 });
+
+test('splitScript: an unterminated last statement is not run; a line that starts nothing is rejected', () => {
+  assert.deepEqual(splitScript(`create table t (a number);
+So this line is prose.
+insert into t values (1);
+.
+insert into t values (2);
+create or replace procedure p is
+begin
+  null;
+end;
+`), ['create table t (a number)', 'insert into t values (1)', 'insert into t values (2)']);
+});

@@ -263,6 +263,8 @@ export function splitScript(text: string): string[] {
       else execBlock([line]);
       continue;
     }
+    // a line that starts neither a statement, a block nor a command: SQL*Plus rejects it (SP2-0734)
+    if (between && line.trim() && !SQL_START.test(line) && !/^\s*(--|\/\*)/.test(line)) continue;
     const r = scanLine(line, st);
     st = r.state;
     buf.push(line);
@@ -286,10 +288,8 @@ export function splitScript(text: string): string[] {
   }
   if (exec) execBlock(exec);
   // (cut off by a blank line and never run)
-  if (parked) {
-    buf = [];
-    code = '';
-  }
-  flush();
+  // a statement without its terminator at the end stays in SQL*Plus's buffer, never run (a block
+  // comment still open after a semicolon: that statement had ended)
+  if (ended) flush();
   return out;
 }

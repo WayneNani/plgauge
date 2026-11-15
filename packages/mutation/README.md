@@ -178,7 +178,8 @@ der Lauf vergibt `EXECUTE` darauf. Rechte wie bei der Coverage (`CREATE ANY PROC
 Kontext für Schleifengrenzen heißt pro Schema anders, so stören sich Läufe verschiedener Benutzer in einer Datenbank
 nicht – solange sie nicht dieselben fremden Einheiten mutieren: Sperre und Journal liegen im Schema des Laufs, ein Lauf
 eines anderen Benutzers auf `app_util.calc` sieht sie nicht. Zwei solche Läufe (oder Worker-URLs mit verschiedenen
-Benutzern auf einer Datenbank) dürfen nicht gleichzeitig laufen.
+Benutzern auf einer Datenbank) dürfen nicht gleichzeitig laufen; ebenso wenig ein Coverage-Lauf mit `schema: app_util`
+und ein Mutationslauf, der `app_util.…` mutiert (sie sperren verschiedene Schemas).
 
 ## Zusammen mit Coverage
 
