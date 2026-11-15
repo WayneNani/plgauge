@@ -336,56 +336,68 @@ async function main() {
       const configFile = opt('config');
       // every database of a mutation run with several workers (each keeps its own journal)
       const dbs = (opt('db') ?? process.env.PLMUT_DB ?? '').split(',').map((u) => u.trim()).filter(Boolean);
-      const cfgs = configFile || !dbs.length ? [loadConfig(configFile)] : dbs.map((u) => parseDbUrl(u));
+      const fromUrls = !configFile && dbs.length > 0;
+      const cfgs = fromUrls ? dbs.map((u) => parseDbUrl(u)) : [loadConfig(configFile)];
       const listOnly = flag('list');
       // entries that cannot be restored at all (their table is gone, say) would block every run
       const forget = flag('forget');
       for (const cfg of cfgs) {
         if (!(cfg as { user?: string }).user) throw new Error('keine Datenbankangaben: --db oder eine Coverage-Konfiguration angeben');
-        if (cfgs.length > 1) console.error(`${(cfg as { user: string }).user}@${(cfg as { connectString?: string }).connectString ?? ''}:`);
-        // journal and lock live where the runs keep them: the coverage config's runtime schema
-        const c2 = cfg as { schema?: string; schemas?: string[]; runtimeSchema?: string; user: string };
-        const home = (c2.schemas?.length ? c2.runtimeSchema ?? c2.user : c2.schema ?? c2.user).toUpperCase();
-        const conn = await connect(cfg);
+        // one database that fails (gone, locked by a run) must not keep the others from their restore
         try {
-          await conn.execute(`alter session set current_schema = ${dbIdent(home)}`);
-          await ensureJournal(conn);
-          const entries = await journalEntries(conn);
-          // a coverage run that died during its instrumented test run left its logoff trigger
-          const logoff = (await conn.execute<[number]>(`select count(*) from all_triggers where owner = :o and trigger_name = 'COV$_LOGOFF'`, { o: home })).rows?.[0]?.[0] ?? 0;
-          if (!entries.length && !logoff) {
-            console.error('Journal leer: kein Objekt ist verändert.');
-            continue;
-          }
-          for (const e of entries) console.error(`  ${e.type} ${e.owner}.${e.name} (${e.tool}, seit ${e.createdAt.toISOString()})`);
-          if (logoff) console.error(`  TRIGGER ${home}.COV$_LOGOFF (Coverage-Laufzeit eines abgebrochenen Laufs)`);
-          if (!listOnly) {
-            const lock = await connect(cfg);
-            try {
-              await lock.execute(`alter session set current_schema = ${dbIdent(home)}`);
-              // a running run (of either tool) holds the lock: its objects are not leftovers
-              await lockRun(lock, RUN_LOCK);
-              if (logoff) {
-                await conn.execute(`drop trigger ${dbIdent(home)}.cov$_logoff`).then(
-                  () => console.error('Logoff-Trigger der Coverage entfernt'),
-                  (e: Error) => { if (!e.message.includes('ORA-04080')) console.error(`  ✗ Logoff-Trigger nicht entfernt: ${e.message.split('\n')[0]}`); });
-              }
-              // read again under the lock: a run that finished meanwhile left other entries
-              await restoreJournal(conn, await journalEntries(conn), (m) => console.error(m));
-              const still = await journalEntries(conn);
-              if (still.length && forget) {
-                for (const e of still) await journalForget(conn, e.object);
-                console.error(`${still.length} Einträge ohne Wiederherstellung aus dem Journal gelöscht: ${still.map((e) => e.name).join(', ')}`);
-              } else if (still.length) {
-                console.error(`${still.length} Einträge ließen sich nicht wiederherstellen; --forget löscht sie aus dem Journal`);
-                process.exitCode = 1;
-              }
-            } finally {
-              await lock.close().catch(() => {});
+          if (cfgs.length > 1) console.error(`${(cfg as { user: string }).user}@${(cfg as { connectString?: string }).connectString ?? ''}:`);
+          // journal and lock live where the runs keep them: the coverage config's runtime schema
+          const c2 = cfg as { schema?: string; schemas?: string[]; runtimeSchema?: string; user: string };
+          const conn = await connect(cfg);
+          try {
+            // a mutation run (a database URL) works in its session's CURRENT_SCHEMA, which a logon
+            // trigger may set; a coverage run in its runtime schema
+            const home = fromUrls
+              ? (await conn.execute<[string]>(`select sys_context('USERENV', 'CURRENT_SCHEMA') from dual`)).rows![0][0]
+              : (c2.schemas?.length ? c2.runtimeSchema ?? c2.user : c2.schema ?? c2.user).toUpperCase();
+            const qi = (x: string) => `"${x.replace(/"/g, '""')}"`;
+            await conn.execute(`alter session set current_schema = ${qi(home)}`);
+            await ensureJournal(conn);
+            const entries = await journalEntries(conn);
+            // a coverage run that died during its instrumented test run left its logoff trigger
+            const logoff = (await conn.execute<[number]>(`select count(*) from all_triggers where owner = :o and trigger_name = 'COV$_LOGOFF'`, { o: home })).rows?.[0]?.[0] ?? 0;
+            if (!entries.length && !logoff) {
+              console.error('Journal leer: kein Objekt ist verändert.');
+              continue;
             }
+            for (const e of entries) console.error(`  ${e.type} ${e.owner}.${e.name} (${e.tool}, seit ${e.createdAt.toISOString()})`);
+            if (logoff) console.error(`  TRIGGER ${home}.COV$_LOGOFF (Coverage-Laufzeit eines abgebrochenen Laufs)`);
+            if (!listOnly) {
+              const lock = await connect(cfg);
+              try {
+                await lock.execute(`alter session set current_schema = ${qi(home)}`);
+                // a running run (of either tool) holds the lock: its objects are not leftovers
+                await lockRun(lock, RUN_LOCK);
+                if (logoff) {
+                  await conn.execute(`drop trigger ${qi(home)}.cov$_logoff`).then(
+                    () => console.error('Logoff-Trigger der Coverage entfernt'),
+                    (e: Error) => { if (!e.message.includes('ORA-04080')) console.error(`  ✗ Logoff-Trigger nicht entfernt: ${e.message.split('\n')[0]}`); });
+                }
+                // read again under the lock: a run that finished meanwhile left other entries
+                await restoreJournal(conn, await journalEntries(conn), (m) => console.error(m));
+                const still = await journalEntries(conn);
+                if (still.length && forget) {
+                  for (const e of still) await journalForget(conn, e.object);
+                  console.error(`${still.length} Einträge ohne Wiederherstellung aus dem Journal gelöscht: ${still.map((e) => e.name).join(', ')}`);
+                } else if (still.length) {
+                  console.error(`${still.length} Einträge ließen sich nicht wiederherstellen; --forget löscht sie aus dem Journal`);
+                  process.exitCode = 1;
+                }
+              } finally {
+                await lock.close().catch(() => {});
+              }
+            }
+          } finally {
+            await conn.close();
           }
-        } finally {
-          await conn.close();
+        } catch (e) {
+          console.error(`  ✗ ${(e as Error).message.split('\n')[0]}`);
+          process.exitCode = 1;
         }
       }
       break;

@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import oracledb from 'oracledb';
-import { ensureJournal, journalEntries, loadObject, replaceSource, restoreAll, restoreJournal, viewFromDictionary, viewQuery } from '@pltest/core';
+import { ensureJournal, journalEntries, loadObject, replaceSource, replaceSourceDetailed, restoreAll, restoreJournal, viewFromDictionary, viewQuery } from '@pltest/core';
 
 const db = process.env.PLCOV_DB;
 const m = db ? /^([^/]+)\/([^@]+)@(.+)$/.exec(db) : null;
@@ -163,6 +163,27 @@ test('a dead run\'s view mutant written with SELECT * is restored (the dictionar
       assert.match(await text(), /1 = 1/, out.join('\n'));
     } finally {
       await conn.execute(`drop view pltest_js`).catch(() => {});
+    }
+  });
+});
+
+test('a compile rejected at once leaves no journal entry when the object was never changed', { skip: !m && 'PLCOV_DB not set' }, async () => {
+  await withConn(async (conn, owner) => {
+    const mine = async () => (await journalEntries(conn)).filter((e) => e.name === 'PLTEST_JU');
+    try {
+      await conn.execute(`create or replace view pltest_ju as select 1 a from dual`);
+      const obj = await loadObject(conn, owner, 'PLTEST_JU', 'VIEW');
+      const out = await replaceSourceDetailed(conn, obj, `view pltest_ju as select no_such_column a from dual`, 'test');
+      assert.ok(out.error && out.untouched, JSON.stringify(out));
+      assert.deepEqual(await mine(), []);
+      // changed before: the entry stays (the object holds pltest's text)
+      assert.equal(await replaceSource(conn, obj, `view pltest_ju as select 2 a from dual`, 'test'), null);
+      const again = await replaceSourceDetailed(conn, obj, `view pltest_ju as select no_such_column a from dual`, 'test');
+      assert.ok(again.error && !again.untouched);
+      assert.equal((await mine()).length, 1);
+      await restoreAll(conn, (await mine()).map((e) => e.object), () => {});
+    } finally {
+      await conn.execute(`drop view pltest_ju`).catch(() => {});
     }
   });
 });

@@ -14,7 +14,7 @@ import oracledb from 'oracledb';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import {
-  connect, databaseInfo, dbIdent, utInfoContext, restoreJournal, ensureJournal, journalEntries, loadObjects, lockRun, replaceSource, restoreAll, RUN_LOCK, runScript, sha256, splitScript,
+  connect, databaseInfo, dbIdent, utInfoContext, restoreJournal, ensureJournal, journalEntries, loadObjects, lockRun, replaceSourceDetailed, restoreAll, RUN_LOCK, runScript, sha256, splitScript,
   runTestsJunit as runTests, sameResults, suiteTests, type SourceObject, type TestCase, type TestRun,
 } from '@pltest/core';
 import { instrument } from './instrument.js';
@@ -138,6 +138,20 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     say(`WARNUNG: ${e.message}`);
     return false;
   });
+  // this run's objects back through the journal check: what someone compiled or dropped while the
+  // tests ran stays (a warning), like after a crashed run; returns how many stay changed
+  const restoreOwn = async (objs: SourceObject[]) => {
+    const mine = new Set(objs.map((o) => `${o.owner}|${o.name}|${o.type}`));
+    return restoreJournal(conn, (await journalEntries(conn)).filter((e) => mine.has(`${e.owner}|${e.name}|${e.type}`)), say);
+  };
+  // the logoff trigger this run created, dropped under a confirmed lock (a run that took the lock
+  // meanwhile may have its own there now); one left behind is reported
+  let logoff = false;
+  const dropLogoff = async () => {
+    if (!logoff || !(await confirmed())) return;
+    await conn.execute(`drop trigger cov$_logoff`).catch(() => {});
+    logoff = false;
+  };
   const ping = setInterval(() => keepLock().catch((e: Error) => say(`WARNUNG: ${e.message}`)), 60_000);
   ping.unref();
   const conn = await connect(cfg).catch(async (e) => {
@@ -205,6 +219,13 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
 
     say('3/4 Instrumentieren und kompilieren …');
     const ids = newIds();
+    // package and type specs with PRAGMA RESTRICT_REFERENCES: their bodies' SQL takes the probes
+    // with full purity (see instrument)
+    const restricted = new Set<string>();
+    for (const s of schemas) {
+      const r = await conn.execute<[string]>(`select distinct name from all_source where owner = :o and type in ('PACKAGE', 'TYPE') and upper(text) like '%RESTRICT\\_REFERENCES%' escape '\\'`, { o: s });
+      for (const [n] of r.rows ?? []) restricted.add(`${s}.${n}`);
+    }
     const maps: (ObjectMap | { error: string; obj: SourceObject })[] = [];
     let instrumentMs = 0;
     let compileMs = 0;
@@ -212,7 +233,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       const t0 = performance.now();
       let res;
       try {
-        res = instrument(obj.processed, obj.owner, ids, { sqlProbes, runtime: obj.owner === rtOwner ? undefined : `${rtOwner.toLowerCase()}.cov$` });
+        res = instrument(obj.processed, obj.owner, ids, { sqlProbes, runtime: obj.owner === rtOwner ? undefined : `${rtOwner.toLowerCase()}.cov$`, restricted: restricted.has(`${obj.owner}.${obj.name}`) });
       } catch (e) {
         maps.push({ error: `Parser: ${(e as Error).message}`, obj });
         say(`  ✗ ${obj.name}: ${(e as Error).message}`);
@@ -223,12 +244,15 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       const t1 = performance.now();
       await keepLock();
       restore.push(obj);
-      const errors = await replaceSource(conn, obj, res.instrumented, 'coverage');
+      const out = await replaceSourceDetailed(conn, obj, res.instrumented, 'coverage');
+      const errors = out.error;
       compileMs += performance.now() - t1;
       if (errors) {
         say(`  ✗ ${obj.name}: instrumentierter Code kompiliert nicht (${errors})`);
+        // rejected at once, never changed: the original is in place, nothing to restore
+        if (out.untouched) restore.pop();
         // back at once; if that fails, the end of the run tries again (it stays in restore)
-        if (!(await restoreAll(conn, [obj], (m) => (m.includes('✗') ? say(m) : undefined)))) {
+        else if (!(await restoreAll(conn, [obj], (m) => (m.includes('✗') ? say(m) : undefined)))) {
           restore.pop();
           say(`    Original wieder aktiv`);
         }
@@ -244,7 +268,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     const perTest = cfg.perTest !== false;
     await fresh();
     await conn.execute(`begin cov$.reset; cov$.per_test(:p = 1); cov$.start_run(:r); end;`, { p: perTest ? 1 : 0, r: runId });
-    await conn.execute(LOGOFF_TRIGGER).catch((e) => say(`  Hinweis: ohne Logoff-Trigger (${(e as Error).message.split('\n')[0]}), andere Sessions schreiben nur alle 1000 Anweisungen`));
+    await conn.execute(LOGOFF_TRIGGER).then(() => { logoff = true; }, (e) => say(`  Hinweis: ohne Logoff-Trigger (${(e as Error).message.split('\n')[0]}), andere Sessions schreiben nur alle 1000 Anweisungen`));
     let instrumentedRun;
     // compiling left the last object's length semantics in the session; the tests (DDL in them)
     // run with the session's own, as in the baseline
@@ -258,19 +282,20 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       await waitForJobs(conn, say);
     } finally {
       await conn.execute(`begin cov$.stop_run(:r); end;`, { r: runId }).catch(() => {});
-      // (a run that took the lock meanwhile may have its own trigger there now)
-      if (await confirmed()) await conn.execute(`drop trigger cov$_logoff`).catch(() => {});
+      await dropLogoff();
     }
     const hits = await loadHits(conn, runId);
     await conn.execute(`delete from plcov_hits where run_id = :r`, { r: runId });
     await conn.commit();
 
+    // (a check that failed above for a moment: the trigger goes now)
+    await dropLogoff();
     if (!(await confirmed())) {
       // another run may have restored this one's code at its start, maybe while the tests ran
       restore.length = 0;
       throw new Error('Laufsperre während des Laufs verloren (ein anderer Lauf oder die alte Sitzung hält sie): die Messung ist ungültig, instrumentierter Code bleibt im Journal; pltest restore, sobald die Sperre frei ist');
     }
-    const unrestored = await restoreAll(conn, restore, say);
+    const unrestored = await restoreOwn(restore);
     restore.length = 0;
     if (unrestored) say(`FEHLER: ${unrestored} Objekte nicht wiederhergestellt, ihr instrumentierter Code steht im Journal: pltest restore`);
 
@@ -334,9 +359,11 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     };
   } finally {
     clearInterval(ping);
+    await dropLogoff().catch(() => {});
+    if (logoff) say('FEHLER: Trigger cov$_logoff nicht entfernt (Laufsperre nicht bestätigt): pltest restore');
     try {
       if (restore.length) {
-        if (await confirmed()) await restoreAll(conn, restore, say);
+        if (await confirmed()) await restoreOwn(restore);
         else say(`FEHLER: ${restore.length} Objekte nicht wiederhergestellt (Laufsperre nicht bestätigt), ihr instrumentierter Code steht im Journal: pltest restore`);
       }
     } finally {

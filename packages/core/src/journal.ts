@@ -123,8 +123,11 @@ export async function journalSettle(conn: oracledb.Connection, obj: Pick<SourceO
   await conn.commit();
 }
 
-/** Records the original of an object unless an older entry exists (that one is the true original). */
-export async function journalRemember(conn: oracledb.Connection, obj: SourceObject, tool: string): Promise<void> {
+/**
+ * Records the original of an object unless an older entry exists (that one is the true original).
+ * Returns whether this call made the entry.
+ */
+export async function journalRemember(conn: oracledb.Connection, obj: SourceObject, tool: string): Promise<boolean> {
   // with the original's fingerprint from the start: a restore checks the unit even when no
   // compile of pltest ever got through (see restoreJournal)
   const merge = () => conn.execute(
@@ -134,15 +137,17 @@ export async function journalRemember(conn: oracledb.Connection, obj: SourceObje
       when not matched then insert (owner, name, type, source, props, tool, current_sha, pending) values (:o, :n, :t, :src, :st, :tool, :h, 0)`,
     { o: obj.owner, n: obj.name, t: obj.type, src: { val: obj.original, type: oracledb.DB_TYPE_CLOB }, st: { val: JSON.stringify(obj.settings), type: oracledb.DB_TYPE_CLOB }, tool, h: codeFingerprint(obj.type, obj.original) },
   );
+  let r;
   try {
-    await merge();
+    r = await merge();
   } catch (e) {
     // a journal of an older version without the new columns
     if (!(e as Error).message.includes('ORA-00904')) throw e;
     await ensureJournal(conn);
-    await merge();
+    r = await merge();
   }
   await conn.commit();
+  return (r.rowsAffected ?? 0) > 0;
 }
 
 export async function journalForget(conn: oracledb.Connection, obj: Pick<SourceObject, 'owner' | 'name' | 'type'>): Promise<void> {

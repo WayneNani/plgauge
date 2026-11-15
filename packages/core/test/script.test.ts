@@ -152,3 +152,32 @@ test('splitScript: an MLE call spec with JavaScript inline ends at the slash', (
 select 1 from dual;
 `), ["create or replace function js_f return varchar2 as mle language javascript {{ // don't\n  return 'x'; }};", 'select 1 from dual']);
 });
+
+test('withDisable puts DISABLE in front of WHEN or the trigger body', async () => {
+  const { withDisable } = await import('@pltest/core');
+  assert.equal(withDisable(`trigger t before insert on x for each row when (new.n > 0) begin null; end;`),
+    `trigger t before insert on x for each row DISABLE when (new.n > 0) begin null; end;`);
+  assert.equal(withDisable(`trigger t after update of a on x referencing new as n for each row declare v number; begin null; end;`),
+    `trigger t after update of a on x referencing new as n for each row DISABLE declare v number; begin null; end;`);
+  assert.equal(withDisable(`trigger t for insert on x compound trigger before statement is begin null; end before statement; end;`),
+    `trigger t for insert on x DISABLE compound trigger before statement is begin null; end before statement; end;`);
+  assert.equal(withDisable(`trigger t before insert on x enable begin null; end;`), `trigger t before insert on x DISABLE begin null; end;`);
+});
+
+test('splitScript: a blank line drops unfinished SQL as SQL*Plus does, unless "/" follows; PL/SQL keeps its blank lines', () => {
+  assert.deepEqual(splitScript(`select 1 from dual
+
+create or replace procedure p is
+
+begin
+  null;
+end;
+/
+insert into t
+values (1)
+
+/
+select 2 from dual
+
+`), ['create or replace procedure p is\n\nbegin\n  null;\nend;', 'insert into t\nvalues (1)']);
+});

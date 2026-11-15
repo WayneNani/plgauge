@@ -21,7 +21,9 @@ Portierung von plmut (Go) nach TypeScript. Abgeglichen gegen die Go-Fassung auf 
 Jede Änderung am Code läuft über das Wiederherstellungs-Journal des Kerns (`pltest restore`). Hat ein abgebrochener
 Lauf Einheiten verändert zurückgelassen, stellt der nächste Lauf sie beim Start aus dem Journal wieder her, bevor er
 installiert oder Originale liest. Hat seitdem jemand eine neuere Fassung kompiliert (Text weder von pltest noch das Original, ohne
-Schaltaufrufe) oder das Objekt gelöscht, bleibt das so: der Eintrag wird mit Warnung verworfen. Damit das nicht einen noch laufenden Lauf trifft, hält jeder Lauf für seine Dauer
+Schaltaufrufe) oder das Objekt gelöscht, bleibt das so: der Eintrag wird mit Warnung verworfen. Während eines Laufs ändert man die Objekte des Schemas besser nicht: jeder Mutant und das
+Zurückspielen am Ende kompilieren über sie hinweg (ein Coverage-Lauf lässt am Ende stehen, was inzwischen jemand
+anderes kompiliert oder gelöscht hat). Damit das nicht einen noch laufenden Lauf trifft, hält jeder Lauf für seine Dauer
 eine Zeilensperre in `PLTEST_LOCK` (eigene Verbindung, nie committet); ein zweiter Lauf auf demselben Schema bricht
 sofort ab, auch ein Coverage-Lauf (beide Werkzeuge nehmen dieselbe Sperre und stellen beim Start wieder her, was ein
 abgebrochener Lauf des einen oder anderen im Journal hinterlassen hat). Die Sperre endet mit der Sitzung, auch wenn der Prozess stirbt. Lässt sich ein Rest nicht zurückspielen (etwa weil eine Sitzung des toten Laufs die Einheit noch hält), bricht der Lauf ab, statt den veränderten Code für das Original zu halten. Sperre und Journal liegen im Schema des Laufs; ein Coverage-Lauf über mehrere Schemas sperrt nur sein Laufzeitschema, Mutationsläufe auf den gemessenen Schemas dürfen dann nicht gleichzeitig laufen.

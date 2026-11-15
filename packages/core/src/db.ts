@@ -8,6 +8,7 @@
  */
 import oracledb from 'oracledb';
 import { createHash } from 'node:crypto';
+import { tokenize } from './lexer.js';
 import { codeFingerprint, fingerprint, journalForget, journalNote, journalRemember, journalSettle, journalUnnote, type JournalEntry } from './journal.js';
 
 export interface ConnectConfig {
@@ -117,6 +118,12 @@ export async function loadObject(conn: oracledb.Connection, owner: string, name:
     const table = t.rows?.[0]?.[0] ?? null;
     const cols = Object.fromEntries(c.rows ?? []);
     const settings: Record<string, string> = table || Object.keys(cols).length ? { comments: JSON.stringify({ table, cols }) } : {};
+    if (settings.comments) {
+      // another schema's view: COMMENT ON needs COMMENT ANY TABLE, or the comments are lost for good
+      const user = (await conn.execute<[string]>(`select user from dual`)).rows![0][0];
+      const may = owner === user || ((await conn.execute<[number]>(`select count(*) from session_privs where privilege = 'COMMENT ANY TABLE'`)).rows?.[0]?.[0] ?? 0) > 0;
+      if (!may) throw new Error(`View ${owner}.${name} hat Kommentare, die ohne COMMENT ANY TABLE verloren gingen: nicht verändert`);
+    }
     // CAST(… AS VARCHAR2(n)) without BYTE/CHAR takes the session's length semantics at CREATE:
     // compile the view with what its columns have (mixed: the default BYTE)
     const u = await conn.execute<[string]>(
@@ -221,6 +228,11 @@ export interface CompileOutcome {
   offset?: number;
   /** Compiled, but a property could not be put back (a trigger's DISABLED status, say). */
   warning?: string;
+  /**
+   * Rejected at once, and pltest had not changed the object before: it holds its original, the
+   * journal has no entry for it, nothing to restore.
+   */
+  untouched?: boolean;
 }
 
 export async function compileDetailed(conn: oracledb.Connection, obj: SourceObject, source: string): Promise<CompileOutcome> {
@@ -240,11 +252,12 @@ export async function compileDetailed(conn: oracledb.Connection, obj: SourceObje
  * What CREATE OR REPLACE loses and the original object had: a trigger's DISABLED status, a
  * view's table and column comments (from loadObject's settings, kept in the journal too).
  */
-async function keepProperties(conn: oracledb.Connection, obj: SourceObject): Promise<string | undefined> {
+async function keepProperties(conn: oracledb.Connection, obj: SourceObject, disabled: boolean): Promise<string | undefined> {
   const q = (x: string) => `"${x.replace(/"/g, '""')}"`;
   const lit = (x: string) => `'${x.replace(/'/g, "''")}'`;
   const full = `${q(obj.owner)}.${q(obj.name)}`;
-  if (obj.type === 'TRIGGER' && obj.settings.trigger_status === 'DISABLED') {
+  // (disabled by the statement itself: see withDisable; ALTER only where that found no place)
+  if (obj.type === 'TRIGGER' && obj.settings.trigger_status === 'DISABLED' && !disabled) {
     try {
       await conn.execute(`alter trigger ${full} disable`);
     } catch (e) {
@@ -266,8 +279,34 @@ async function keepProperties(conn: oracledb.Connection, obj: SourceObject): Pro
   return undefined;
 }
 
+/**
+ * A trigger's statement with DISABLE in its header (in front of WHEN or the body): CREATE OR
+ * REPLACE TRIGGER enables a trigger otherwise, and ALTER TRIGGER on another schema's trigger
+ * needs ALTER ANY TRIGGER. Oracle keeps the clause out of the stored source (fingerprints stay).
+ * undefined: no place found.
+ */
+export function withDisable(source: string): string | undefined {
+  const t = tokenize(source);
+  const on = t.findIndex((x) => x.kind === 'ident' && x.up === 'ON');
+  if (on < 0) return undefined;
+  let depth = 0;
+  for (let i = on + 1; i < t.length; i++) {
+    const x = t[i];
+    if (x.text === '(') depth++;
+    else if (x.text === ')') depth--;
+    else if (depth === 0 && x.kind === 'ident') {
+      if (x.up === 'DISABLE') return source;
+      if (x.up === 'ENABLE') return source.slice(0, x.start) + 'DISABLE' + source.slice(x.end);
+      if (['WHEN', 'DECLARE', 'BEGIN', 'COMPOUND', 'CALL'].includes(x.up)) return `${source.slice(0, x.start)}DISABLE ${source.slice(x.start)}`;
+    }
+  }
+  return undefined;
+}
+
 async function compileHere(conn: oracledb.Connection, obj: SourceObject, source: string): Promise<CompileOutcome> {
   const st = obj.settings;
+  const disabled = obj.type === 'TRIGGER' && st.trigger_status === 'DISABLED' ? withDisable(source) : undefined;
+  if (disabled) source = disabled;
   if (st.plsql_optimize_level) await conn.execute(`alter session set plsql_optimize_level = ${Number(st.plsql_optimize_level)}`);
   if (st.plsql_code_type) await conn.execute(`alter session set plsql_code_type = '${st.plsql_code_type.replace(/'/g, '')}'`);
   await conn.execute(`alter session set plsql_ccflags = '${(st.plsql_ccflags ?? '').replace(/'/g, "''")}'`);
@@ -287,7 +326,7 @@ async function compileHere(conn: oracledb.Connection, obj: SourceObject, source:
       return { error: msg.split('\n')[0], offset: typeof off === 'number' && off >= prefix.length ? off - prefix.length : undefined };
     }
   }
-  const warning = await keepProperties(conn, obj);
+  const warning = await keepProperties(conn, obj, !!disabled);
   const err = await conn.execute<[number, string]>(
     `select line, text from all_errors where owner = :o and name = :n and type = :t and attribute = 'ERROR' order by sequence`,
     { o: obj.owner, n: obj.name, t: obj.type },
@@ -305,7 +344,7 @@ export async function replaceSource(conn: oracledb.Connection, obj: SourceObject
 }
 
 export async function replaceSourceDetailed(conn: oracledb.Connection, obj: SourceObject, source: string, tool: string): Promise<CompileOutcome> {
-  await journalRemember(conn, obj, tool);
+  const fresh = await journalRemember(conn, obj, tool);
   // noted before the compile: if the run dies during it, the unit holds this text or the one it
   // holds now (read from the database, not assumed from the last note: a compile that failed
   // before its DDL changed nothing)
@@ -313,8 +352,13 @@ export async function replaceSourceDetailed(conn: oracledb.Connection, obj: Sour
   await journalNote(conn, obj, source, now?.sha);
   const out = await compileDetailed(conn, obj, source);
   // rejected at once (a lock, a privilege, a view statement): the object still holds the text before
-  if (out.error && !/^Zeile \d+:/.test(out.error)) await journalUnnote(conn, obj);
-  else if (obj.type === 'VIEW') {
+  if (out.error && !/^Zeile \d+:/.test(out.error)) {
+    // (a privilege, a lock the next restore would hit just the same)
+    if (fresh) {
+      await journalForget(conn, obj);
+      out.untouched = true;
+    } else await journalUnnote(conn, obj);
+  } else if (obj.type === 'VIEW') {
     // what the dictionary made of it (SELECT * expanded): a restore compares with that
     const held = await currentCode(conn, obj).catch(() => undefined);
     if (held) await journalSettle(conn, obj, held.sha);
@@ -343,7 +387,7 @@ async function currentCode(conn: oracledb.Connection, obj: Pick<SourceObject, 'o
  * neither pltest's (the fingerprint of what it compiled last) nor carries its marks: then
  * someone has put newer work there since, which wins; its entry is dropped with a warning.
  */
-export async function restoreJournal(conn: oracledb.Connection, entries: JournalEntry[], say: (m: string) => void): Promise<void> {
+export async function restoreJournal(conn: oracledb.Connection, entries: JournalEntry[], say: (m: string) => void): Promise<number> {
   const todo: SourceObject[] = [];
   for (const e of entries) {
     // a view noted before its compile, or by an older version (other fingerprints): no comparison
@@ -368,7 +412,8 @@ export async function restoreJournal(conn: oracledb.Connection, entries: Journal
     }
     todo.push(e.object);
   }
-  await restoreAll(conn, todo, say);
+  // how many hold changed code still
+  return restoreAll(conn, todo, say);
 }
 
 /**

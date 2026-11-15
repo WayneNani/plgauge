@@ -973,3 +973,32 @@ END k;
   assert.equal(aor.find((p) => p.orig.includes('c_a * 2'))?.naiveOnly, 'static');
   assert.equal(aor.find((p) => p.orig.includes('3 * 2'))?.naiveOnly, undefined);
 });
+
+test('finder: no mutants in parameter defaults of package body subprograms (they must match the spec)', () => {
+  const got = mutants(`CREATE OR REPLACE PACKAGE BODY d AS
+  PROCEDURE p(a DATE DEFAULT SYSDATE - 500) IS BEGIN IF a > SYSDATE THEN NULL; END IF; END;
+END d;
+/
+`);
+  assert.ok(!got.some((g) => g.includes('SYSDATE - 500')), got.join('\n'));
+  assert.ok(got.some((g) => g.startsWith('ROR')), got.join('\n'));
+});
+
+test('finder: an MLE call spec whose AS MLE LANGUAGE comes on a later line is skipped', () => {
+  const f = points(`create or replace function f(a number)
+return number
+as mle language javascript
+{{ // don't touch
+   return a; }};
+/
+create or replace procedure p(x number) is begin if 1 < x then null; end if; end;
+/
+`, 'm.sql')[0];
+  assert.deepEqual(f.errors, []);
+  assert.deepEqual(f.units.map((u) => u.name.toLowerCase()), ['p']);
+});
+
+test('withoutCreate drops IF NOT EXISTS also after FORCE', () => {
+  assert.equal(withoutCreate('create force view if not exists v as select 1 a from dual'), 'force view v as select 1 a from dual');
+  assert.equal(withoutCreate('create procedure if not exists p is begin null; end;'), 'procedure p is begin null; end;');
+});

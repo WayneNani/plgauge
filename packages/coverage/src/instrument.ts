@@ -25,6 +25,8 @@ export interface InstrumentOptions {
   sqlProbes: boolean;
   /** Name of the runtime package. */
   runtime?: string;
+  /** The unit's spec declares PRAGMA RESTRICT_REFERENCES (see Instrumenter.q). */
+  restricted?: boolean;
 }
 
 export interface InstrumentResult {
@@ -76,6 +78,9 @@ class Instrumenter {
 
   constructor(private src: string, owner: string, private ids: IdCounters, private opts: InstrumentOptions) {
     this.rt = opts.runtime ?? 'cov$';
+    // code under PRAGMA RESTRICT_REFERENCES (…, RNPS, WNPS) may not call the q… probes in its SQL
+    // (PLS-00452): there the probes with the package's full purity, at the price of parallel slaves
+    this.q = opts.restricted || /\bRESTRICT_REFERENCES\b/i.test(src) ? '' : 'q';
     this.map = { owner, name: '', type: '', source: src, statements: [], decisions: [], constructs: [], loops: [], gaps: [] };
   }
 
@@ -448,6 +453,9 @@ class Instrumenter {
 
   // -------------------------------------------------------------- decisions
 
+  /** Prefix of the probes in SQL: 'q' (see the runtime), '' in code under RESTRICT_REFERENCES. */
+  private q: string;
+
   /** The context of the condition being wrapped: in SQL the probes are the q… variants. */
   private probeCtx: 'plsql' | 'sql' = 'plsql';
 
@@ -460,7 +468,7 @@ class Instrumenter {
     const id = this.ids.dec++;
     const vectors = ctx === 'plsql';
     const rt = this.rt;
-    this.ins(this.t[a].start, vectors ? `${rt}.d(${id},${rt}.o(${id}) and (` : `${rt}.qd(${id},`);
+    this.ins(this.t[a].start, vectors ? `${rt}.d(${id},${rt}.o(${id}) and (` : `${rt}.${this.q}d(${id},`);
     const conds: Condition[] = [];
     const outer = this.probeCtx;
     this.probeCtx = ctx;
@@ -507,7 +515,7 @@ class Instrumenter {
   private atom(j: number, k: number, d: number, conds: Condition[], pos: boolean): CondNode {
     const i = conds.length + 1;
     conds.push({ i, text: this.text(j, k - 1), span: this.span(j, k - 1) });
-    this.ins(this.t[j].start, `${this.rt}.${this.probeCtx === 'sql' ? 'q' : ''}${pos ? 'c' : 'n'}(${d},${i},`);
+    this.ins(this.t[j].start, `${this.rt}.${this.probeCtx === 'sql' ? this.q : ''}${pos ? 'c' : 'n'}(${d},${i},`);
     this.ins(this.t[k - 1].end, ')');
     return { t: 'cond', i };
   }
@@ -712,7 +720,7 @@ class Instrumenter {
   private simpleCaseExpr(n: Node, ctx: 'plsql' | 'sql', clause: string) {
     const c = this.newConstruct('case-expr', ctx, this.t[n.a]);
     const rt = this.rt;
-    const bt = ctx === 'sql' ? 'qbt' : 'bt';
+    const bt = ctx === 'sql' ? `${this.q}bt` : 'bt';
     // A CASE whose results are all NULL does not compile (PLS-00617): a probe around a NULL
     // result, and the probe of the implicit ELSE, get a dead ELSE with the shortest real
     // result of this CASE for the type. It never runs, the probe is always TRUE. Tokens only:

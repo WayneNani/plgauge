@@ -342,6 +342,8 @@ class Worker {
         await c.close().catch(() => {});
       }
     } catch (e) {
+      // the lock went to another run: it restored this run's journal, the schema is its own now
+      if (this.foreign) return [];
       return [`Worker${this.name}: ${firstLine(e as Error)}`];
     }
   }
@@ -421,8 +423,11 @@ class Worker {
       return [{ line, position: col, text: out.error }];
     }
     // not compiled at all (a lock: ORA-04021, a privilege): no error of this text; the caller's
-    // verdict is ERROR, not COMPILE_ERROR
-    if (!/^Zeile \d+:/.test(out.error)) throw new Error(out.error);
+    // verdict is ERROR, not COMPILE_ERROR. Never changed before: nothing to restore either
+    if (!/^Zeile \d+:/.test(out.error)) {
+      if (out.untouched) this.changed.delete(key);
+      throw new Error(out.error);
+    }
     const errs = await objectErrors(this.deploy, obj);
     return errs.length ? errs : [{ line: 0, position: 0, text: out.error }];
   }
@@ -1196,6 +1201,8 @@ export async function runMutation(opt: Options): Promise<Report> {
     // reported always (also with -q) and in the report
     // (a worker that never held the lock changed nothing: another run has the schema)
     const left = (await Promise.all(run.workers.filter((w) => w.held && !w.foreign).map((w) => w.finalRestore()))).flat();
+    // (the lock lost while restoring: the report must not look complete)
+    if (report && run.abort && !report.aborted) report.aborted = run.abort;
     if (left.length) {
       const msg = `FEHLER: Originale nicht wiederhergestellt (${left.join('; ')}); geänderter Code steht im Journal: pltest restore`;
       (opt.log ?? console.error)(msg);
@@ -1552,7 +1559,7 @@ async function failingTests(run: Run, paths: string[]): Promise<Set<string>> {
  */
 async function isolateViews(run: Run, ms: Mutant[], dropped: Map<number, string>, naive: Set<Point>, broken: Set<string>): Promise<number> {
   const w = run.primary;
-  const views = buildSchema(ms, new Set(dropped.keys()), naive, await w.currentSchema(), broken, run.plain).filter((u) => u.type === 'VIEW' && u.text !== u.original);
+  const views = buildSchema(ms, new Set(dropped.keys()), naive, await w.currentSchema(), broken, run.plain).filter((u) => u.type === 'VIEW' && u.text !== u.original && !run.unplaced.has(u.key));
   if (!views.length) return 0;
   const withViews = await failingTests(run, run.cfg.tests);
   if (!withViews.size) return 0;

@@ -117,7 +117,17 @@ export function blankSqlPlus(s: string): string {
       head = '';
       headAt = out.length;
     }
-    if (state === 'open') {
+    if (state === 'unit' && !/;/.test(head)) {
+      // a unit's header up to its first ";": an MLE call spec with JavaScript inline (AS MLE
+      // LANGUAGE … {{ }}) may come on a later line
+      head += r.code + '\n';
+      if (inlineForeign(head)) {
+        state = 'foreign';
+        out = out.slice(0, headAt) + blank(out.slice(headAt)) + blank(line);
+        st = { comment: false, quote: '' };
+        continue;
+      }
+    } else if (state === 'open') {
       head += r.code + '\n';
       if (inlineForeign(head)) {
         state = 'foreign';
@@ -431,7 +441,10 @@ class Finder {
         const inner: Env = { sub, ctx: 'plsql', guard: false, naiveOnly: cached ? 'cache' : env.naiveOnly };
         const outer = this.scopeNode;
         this.scopeNode = n;
-        for (const k of n.kids) this.walk(k, n, inner);
+        // parameter defaults of a subprogram that a spec or a forward declaration declares too (in
+        // a package or type body, or nested) must match that declaration (PLS-00593): no mutants
+        const declaredTwice = !!env.sub || / BODY$/.test(this.units[this.unit]?.type ?? '');
+        for (const k of n.kids) if (!(declaredTwice && k.k === 'decl')) this.walk(k, n, inner);
         this.scopeNode = outer;
         const body = n.kids.find((k) => k.k === 'body');
         if (body) this.ret(body, n, inner);

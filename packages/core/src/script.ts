@@ -8,7 +8,7 @@ const PLSQL_START = /^\s*(CREATE\s+(OR\s+REPLACE\s+)?((NON)?EDITIONABLE\s+)?(PAC
  * declaration, not a column named FUNCTION: START WITH function IS NULL).
  */
 const WITH_PLSQL = /\bWITH\s+(FUNCTION|PROCEDURE)\s+(?!(IS|AS|IN|NOT|LIKE|BETWEEN|RETURN)\b)("[^"]*"|[A-Za-z][\w$#.]*)\s*(\(|RETURN\b|IS\b|AS\b)/i;
-const MLE_INLINE = /^\s*CREATE\b[^;]*?\b(FUNCTION|PROCEDURE)\b[\s\S]*?\b(AS|IS)\s+MLE\s+LANGUAGE\b/i;
+const MLE_INLINE = /^\s*CREATE\b[^;]*?\b(FUNCTION|PROCEDURE)\b[^;]*?\b(AS|IS)\s+MLE\s+LANGUAGE\b/i;
 /** An MLE module or Java source (its code may follow AS; whether it does is inlineForeign's). */
 export const FOREIGN_HEAD = /^\s*CREATE\s+(OR\s+REPLACE\s+)?(AND\s+(RE)?(COMPILE|RESOLVE)\s+)?((NO)?FORCE\s+)?((NON)?EDITIONABLE\s+)?(MLE\s+MODULE|JAVA\s+SOURCE)\b/i;
 
@@ -116,7 +116,8 @@ export function splitScript(text: string): string[] {
   let exec: string[] | undefined;
   let ended = false; // the statement ended, a block comment after its semicolon is still open
   let cont = false;
-  let foreign = false; // in an inline Java/MLE source: only the "/" line ends it // a SQL*Plus command continues on the next line
+  let foreign = false; // in an inline Java/MLE source: only the "/" line ends it
+  let parked = false; // SQL cut off by a blank line: run only if "/" follows // a SQL*Plus command continues on the next line
   const flush = () => {
     // a statement of comments only, or a lone semicolon, is none (ORA-00900)
     if (code.replace(/;\s*$/, '').trim()) out.push(buf.join('\n').replace(/\s+$/, ''));
@@ -173,6 +174,22 @@ export function splitScript(text: string): string[] {
       cont = /\s-\s*$/.test(line);
       continue;
     }
+    if (parked) {
+      if (!line.trim()) continue;
+      parked = false;
+      if (line.trim() === '/') {
+        flush();
+        continue;
+      }
+      // SQL*Plus (SQLBLANKLINES OFF) ended the statement at the blank line without running it
+      buf = [];
+      code = '';
+    }
+    // a blank line in unfinished SQL (not PL/SQL, not in a string or comment) ends its entry
+    if (!line.trim() && code.trim() && !st.comment && !st.quote && !PLSQL_START.test(code) && !WITH_PLSQL.test(code)) {
+      parked = true;
+      continue;
+    }
     const between = !code.trim() && !st.comment && !st.quote;
     if (between && !line.trim() && !buf.length) continue;
     if (!st.comment && !st.quote && line.trim() === '/') {
@@ -210,6 +227,11 @@ export function splitScript(text: string): string[] {
     }
   }
   if (exec) execBlock(exec);
+  // (cut off by a blank line and never run)
+  if (parked) {
+    buf = [];
+    code = '';
+  }
   flush();
   return out;
 }
