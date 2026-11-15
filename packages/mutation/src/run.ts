@@ -291,10 +291,15 @@ class Worker {
       await this.restoreLeftovers(left);
     }
     if (!this.run.opt.skipInstall) {
+      const scripts: [string, string[]][] = [];
       for (const s of this.run.cfg.install) {
         const path = join(this.run.opt.dir, s);
         const stmts = splitScript(readFileSync(path, 'utf8'));
         await runScript(this.deploy, stmts, path);
+        scripts.push([path, stmts]);
+      }
+      // checked after all scripts: a unit may use what a later one creates
+      for (const [path, stmts] of scripts) {
         const invalid = await this.invalidUnits(stmts);
         if (invalid.length) throw new Error(`Installation${this.name}: ${path}: ungültig: ${invalid.join(', ')}`);
       }
@@ -350,21 +355,33 @@ class Worker {
     }
   }
 
+  /**
+   * The units the install scripts created that are not VALID, after one recompile (a body
+   * installed before what it uses is INVALID until then; SQL*Plus users rely on the implicit
+   * recompile on first use).
+   */
   private async invalidUnits(stmts: string[]): Promise<string[]> {
-    const out: string[] = [];
     // (a script may switch CURRENT_SCHEMA: unqualified names after that are there)
     let schema = await this.currentSchema();
-    for (const st of stmts) {
-      const sw = /^\s*alter\s+session\s+set\s+current_schema\s*=\s*("[^"]+"|[\w$#À-\uffff]+)/i.exec(st);
+    const units: { type: string; owner: string; name: string }[] = [];
+    for (const raw of stmts) {
+      const st = withoutLeadingComments(raw);
+      const sw = /^alter\s+session\s+set\s+current_schema\s*=\s*("[^"]+"|[\w$#À-\uffff]+)/i.exec(st);
       if (sw) schema = sw[1].startsWith('"') ? sw[1].slice(1, -1) : sw[1].toUpperCase();
-      const m = /^\s*create\s+(?:or\s+replace\s+)?(?:(?:non)?editionable\s+)?(package\s+body|package|type\s+body|procedure|function|trigger)\s+(?:if\s+not\s+exists\s+)?((?:"[^"]+"|[\w$#À-\uffff]+)(?:\s*\.\s*(?:"[^"]+"|[\w$#À-\uffff]+))?)/i.exec(st);
+      const m = /^create\s+(?:or\s+replace\s+)?(?:(?:non)?editionable\s+)?(package\s+body|package|type\s+body|procedure|function|trigger)\s+(?:if\s+not\s+exists\s+)?((?:"[^"]+"|[\w$#À-\uffff]+)(?:\s*\.\s*(?:"[^"]+"|[\w$#À-\uffff]+))?)/i.exec(st);
       if (!m) continue;
-      const type = m[1].toUpperCase().replace(/\s+/g, ' ');
       const full = m[2].replace(/\s*\.\s*(?=(?:"[^"]+"|[\w$#À-\uffff]+)$)/, '.');
-      const name = objectName(full);
-      const owner = objectOwner(full) ?? schema;
-      const r = await this.deploy.execute<[string]>(`select status from all_objects where owner = :o and object_name = :n and object_type = :t`, { o: owner, n: name, t: type });
-      if (r.rows?.[0]?.[0] !== 'VALID') out.push(`${type} ${name}`);
+      units.push({ type: m[1].toUpperCase().replace(/\s+/g, ' '), owner: objectOwner(full) ?? schema, name: objectName(full) });
+    }
+    const status = async (u: (typeof units)[number]) =>
+      (await this.deploy.execute<[string]>(`select status from all_objects where owner = :o and object_name = :n and object_type = :t`, { o: u.owner, n: u.name, t: u.type })).rows?.[0]?.[0];
+    const q = (x: string) => `"${x.replace(/"/g, '""')}"`;
+    const out: string[] = [];
+    for (const u of units) {
+      if ((await status(u)) === 'VALID') continue;
+      const [kind, body] = u.type.endsWith(' BODY') ? [u.type.replace(' BODY', ''), ' BODY'] : [u.type, ''];
+      await this.deploy.execute(`alter ${kind} ${q(u.owner)}.${q(u.name)} compile${body} reuse settings`).catch(() => {});
+      if ((await status(u)) !== 'VALID') out.push(`${u.type} ${u.name}`);
     }
     return out;
   }
@@ -1096,23 +1113,24 @@ class Run {
  */
 async function withoutTriggeredViews(run: Run, ms: Mutant[]): Promise<Mutant[]> {
   if (!ms.some((m) => m.unitRef.type === 'VIEW')) return ms;
-  const me = await run.primary.currentSchema();
-  // on every worker database (they may differ beyond the install): DBA_TRIGGERS sees all,
-  // ALL_TRIGGERS another schema's triggers only with CREATE ANY TRIGGER
-  const triggered = new Set<string>();
-  let complete = true;
+  // on every worker database (they may differ beyond the install, and so may their users):
+  // DBA_TRIGGERS sees all, ALL_TRIGGERS another schema's triggers only with CREATE ANY TRIGGER
+  const checks: { me: string; triggered: Set<string>; complete: boolean }[] = [];
   for (const w of run.workers) {
     const dba = await w.deploy.execute<[string, string]>(`select table_owner, table_name from dba_triggers where base_object_type = 'VIEW'`).catch(() => undefined);
     const r = dba ?? await w.deploy.execute<[string, string]>(`select table_owner, table_name from all_triggers where base_object_type = 'VIEW'`);
-    for (const [o, n] of r.rows ?? []) triggered.add(`${o}.${n}`);
-    if (!dba && !(((await w.deploy.execute<[number]>(`select count(*) from session_privs where privilege = 'CREATE ANY TRIGGER'`)).rows?.[0]?.[0] ?? 0) > 0)) complete = false;
+    const complete = !!dba || ((await w.deploy.execute<[number]>(`select count(*) from session_privs where privilege = 'CREATE ANY TRIGGER'`)).rows?.[0]?.[0] ?? 0) > 0;
+    checks.push({ me: await w.currentSchema(), triggered: new Set((r.rows ?? []).map(([o, n]) => `${o}.${n}`)), complete });
   }
-  const owner = (m: Mutant) => objectOwner(m.unitRef.name) ?? me;
-  const out = ms.filter((m) => m.unitRef.type !== 'VIEW' || (!triggered.has(`${owner(m)}.${objectName(m.unitRef.name)}`) && (complete || owner(m) === me)));
+  // per worker: the view as that worker's user names it unqualified
+  const key = (m: Mutant, c: (typeof checks)[number]) => `${objectOwner(m.unitRef.name) ?? c.me}.${objectName(m.unitRef.name)}`;
+  const hasTrigger = (m: Mutant) => checks.some((c) => c.triggered.has(key(m, c)));
+  const unchecked = (m: Mutant) => checks.some((c) => !c.complete && (objectOwner(m.unitRef.name) ?? c.me) !== c.me);
+  const out = ms.filter((m) => m.unitRef.type !== 'VIEW' || (!hasTrigger(m) && !unchecked(m)));
   const left = new Set(ms.filter((m) => !out.includes(m)).map((m) => unitKey(m)));
   for (const k of left) {
     const m = ms.find((x) => unitKey(x) === k)!;
-    run.logf(triggered.has(`${owner(m)}.${objectName(m.unitRef.name)}`)
+    run.logf(hasTrigger(m)
       ? `${k}: View mit INSTEAD-OF-Trigger, wird nicht mutiert (CREATE OR REPLACE VIEW würde den Trigger löschen)`
       : `${k}: View eines anderen Schemas, deren INSTEAD-OF-Trigger sich ohne CREATE ANY TRIGGER nicht prüfen lassen: wird nicht mutiert`);
   }
@@ -1164,9 +1182,14 @@ async function confirmVerdicts(run: Run, results: Result[], stop: () => boolean)
   run.logf(`Gegenprobe: ${todo.length} Urteile in ${Math.round(performance.now() - t0)}ms, ${kills} Erkennungen nicht wiederholbar, ${slow} Zeitüberschreitungen knapp`);
 }
 
+/** A script statement without the comments in front of it (splitScript keeps them). */
+function withoutLeadingComments(stmt: string): string {
+  return stmt.replace(/^(\s*(--[^\n]*(\n|$)|\/\*[\s\S]*?\*\/))*\s*/, '');
+}
+
 /** "TYPE|NAME" of the unit a script statement creates (leading comments skipped), or ''. */
 export function createdUnit(stmt: string): string {
-  const s = stmt.replace(/^(\s*(--[^\n]*(\n|$)|\/\*[\s\S]*?\*\/))*\s*/, '');
+  const s = withoutLeadingComments(stmt);
   // (names as the lexer reads them: letters beyond ASCII too, quoted ones with their spaces)
   const m = /^CREATE\s+(OR\s+REPLACE\s+)?((NO\s+)?FORCE\s+|(NON)?EDITIONABLE\s+|EDITIONING\s+)*(PACKAGE\s+BODY|TYPE\s+BODY|PROCEDURE|FUNCTION|TRIGGER|VIEW)\s+(IF\s+NOT\s+EXISTS\s+)?((?:"[^"]+"|[\w$#À-\uffff]+)(?:\s*\.\s*(?:"[^"]+"|[\w$#À-\uffff]+))?)/i.exec(s);
   return m ? `${m[5].replace(/\s+/g, ' ').toUpperCase()}|${objectName(m[7].replace(/\s*\.\s*(?=(?:"[^"]+"|[\w$#À-\uffff]+)$)/, '.'))}` : '';

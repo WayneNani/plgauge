@@ -304,7 +304,9 @@ interface Sink {
 }
 
 /** The bind placeholders of a statement (:name, :1, :"x"), sorted. */
-const binds = (sql: string) => (sql.match(/:(?:"[^"]+"|[A-Za-z0-9_$#]+)/g) ?? []).sort().join(' ');
+// (strings and comments out first: 'HH24:MI' holds no bind)
+const binds = (sql: string) => (sql.replace(/'(?:[^']|'')*'/g, "''").replace(/--[^\n]*/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ')
+  .match(/:(?:"[^"]+"|[A-Za-z0-9_$#]+)/g) ?? []).sort().join(' ');
 
 /** Statements the schema rewriter may duplicate to switch a clause point. */
 const SCOPE_STMTS = new Set(['sql', 'forall', 'open']);
@@ -419,6 +421,11 @@ class Finder {
     const from = this.t[a].start;
     const to = this.t[last].end;
     if (this.blocks.some(([x, y]) => x < to && y > from && (kind !== 'stmt' || x < from || y > to))) return;
+    // a replacement must not join the words around it: (a = b)or c with FALSE is FALSE or c
+    const word = /[\w$#À-\uffff]/;
+    const before = this.src[from - 1] ?? '';
+    const after = this.src[to] ?? '';
+    mutants = mutants.map((m) => (m && word.test(m[0]) && word.test(before) ? ' ' : '') + m + (m && word.test(m[m.length - 1]) && word.test(after) ? ' ' : ''));
     if (ctx === 'sql' && kind !== 'clause' && env.grouped?.some(([x, y]) => x <= a && last < y)) {
       this.skipped++;
       return;

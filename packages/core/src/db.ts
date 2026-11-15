@@ -155,6 +155,11 @@ export async function loadObject(conn: oracledb.Connection, owner: string, name:
        from all_plsql_object_settings where owner = :o and name = :n and type = :t`, { o: owner, n: name, t: type },
   );
   const s = st.rows?.[0];
+  // implicit BOOLEAN conversion (23.26+, kept per unit): its own query, older versions lack it
+  const icb = s
+    ? await conn.execute<[string]>(`select plsql_implicit_conversion_bool from all_plsql_object_settings where owner = :o and name = :n and type = :t`, { o: owner, n: name, t: type })
+      .then((r) => r.rows?.[0]?.[0], () => undefined)
+    : undefined;
   // CREATE OR REPLACE TRIGGER enables a disabled trigger: compile disables it again
   const status = type === 'TRIGGER'
     ? (await conn.execute<[string]>(`select status from all_triggers where owner = :o and trigger_name = :n`, { o: owner, n: name })).rows?.[0]?.[0]
@@ -162,7 +167,7 @@ export async function loadObject(conn: oracledb.Connection, owner: string, name:
   return {
     owner, name, type, original, processed,
     settings: {
-      ...(s ? { plsql_optimize_level: String(s[0]), plsql_code_type: s[1], plsql_ccflags: s[2] ?? '', nls_length_semantics: s[3], plscope_settings: s[4] ?? '', ...(s[5] ? { plsql_warnings: s[5] } : {}), ...(s[6] === 'TRUE' ? { plsql_debug: 'TRUE' } : {}) } : {}),
+      ...(s ? { plsql_optimize_level: String(s[0]), plsql_code_type: s[1], plsql_ccflags: s[2] ?? '', nls_length_semantics: s[3], plscope_settings: s[4] ?? '', ...(s[5] ? { plsql_warnings: s[5] } : {}), ...(s[6] === 'TRUE' ? { plsql_debug: 'TRUE' } : {}), ...(icb === 'TRUE' ? { plsql_implicit_conversion_bool: 'TRUE' } : {}) } : {}),
       ...(status === 'DISABLED' ? { trigger_status: 'DISABLED' } : {}),
     },
   };
@@ -327,6 +332,8 @@ async function compileHere(conn: oracledb.Connection, obj: SourceObject, source:
   if (st.plsql_warnings) await conn.execute(`alter session set plsql_warnings = '${st.plsql_warnings.replace(/'/g, '')}'`);
   // compiled for debugging (breakpoints): stays so; set for every unit, the session keeps it
   if (obj.type !== 'VIEW') await conn.execute(`alter session set plsql_debug = ${st.plsql_debug === 'TRUE' ? 'TRUE' : 'FALSE'}`);
+  // likewise implicit BOOLEAN conversion (a unit may need it to compile at all); refused before 23.26
+  if (obj.type !== 'VIEW') await conn.execute(`alter session set plsql_implicit_conversion_bool = ${st.plsql_implicit_conversion_bool === 'TRUE' ? 'TRUE' : 'FALSE'}`).catch(() => {});
   const prefix = 'create or replace ';
   try {
     await conn.execute(prefix + source.replace(/\s*$/, ''));

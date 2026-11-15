@@ -244,3 +244,21 @@ test('a unit compiled for debugging stays so through change and restore', { skip
     }
   });
 });
+
+test('a unit compiled with implicit BOOLEAN conversion keeps it through change and restore', { skip: !m && 'PLCOV_DB not set' }, async () => {
+  await withConn(async (conn, owner) => {
+    const state = async () => (await conn.execute<[string, string]>(`select s.plsql_implicit_conversion_bool, o.status from user_plsql_object_settings s join user_objects o on o.object_name = s.name and o.object_type = s.type where s.name = 'PLTEST_JOURNAL_ICB'`)).rows![0];
+    try {
+      await conn.execute(`alter session set plsql_implicit_conversion_bool = true`);
+      await conn.execute(`create or replace procedure pltest_journal_icb is b boolean; begin b := 1; end;`);
+      await conn.execute(`alter session set plsql_implicit_conversion_bool = false`);
+      const obj = await loadObject(conn, owner, 'PLTEST_JOURNAL_ICB', 'PROCEDURE');
+      assert.equal(await replaceSource(conn, obj, 'procedure pltest_journal_icb is b boolean; begin b := 0; end;', 'test'), null);
+      await restoreAll(conn, [obj], () => {});
+      assert.deepEqual(await state(), ['TRUE', 'VALID']);
+    } finally {
+      await conn.execute(`drop procedure pltest_journal_icb`).catch(() => {});
+      await conn.execute(`alter session set plsql_implicit_conversion_bool = false`).catch(() => {});
+    }
+  });
+});

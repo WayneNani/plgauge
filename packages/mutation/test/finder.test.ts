@@ -1103,3 +1103,10 @@ END ptf;
 `)[0];
   assert.ok(f.points.length && f.points.every((p) => p.naiveOnly === 'macro'), JSON.stringify(f.points.map((p) => [p.op, p.naiveOnly])));
 });
+
+test('finder: a replacement never joins the next word; binds in string literals do not count', () => {
+  const got = mutants(body(`IF a > 0 and (a < 2 OR b = 0)and(b < a) THEN NULL; END IF;
+    EXECUTE IMMEDIATE 'DELETE FROM log WHERE to_char(ts, ''HH24:MI'') < ''06:00''';`));
+  assert.ok(!got.some((g) => /(FALSE|TRUE)and/.test(g)), got.join('\n'));
+  assert.ok(got.some((g) => g.startsWith('ROR') && g.includes("< ''06:00''") && g.endsWith('FALSE')), got.join('\n'));
+});
