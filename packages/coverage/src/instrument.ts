@@ -118,8 +118,7 @@ class Instrumenter {
         }
         const first = u.kids[begin];
         // header: WHEN clause is not measured
-        let declIdx = first.a;
-        if (first.k === 'decls') declIdx = first.a - 1; // DECLARE token
+        const declIdx = first.k === 'decls' ? first.a - 1 : first.a; // DECLARE token
         for (let k = u.a; k < declIdx; k++) {
           if (this.t[k].up === 'WHEN') this.gap(this.t[k].line, 'WHEN-Klausel des Triggers wird nicht gemessen');
           if (this.t[k].up === '(' && this.match[k] > 0) k = this.match[k];
@@ -187,6 +186,9 @@ class Instrumenter {
   private get nf(): boolean {
     return this.nfPending || this.nfRange || this.nfNest > 0;
   }
+  private br(label: string, tok: Token, more: Partial<Branch> = {}): Branch {
+    return { label, line: tok.line, col: tok.col, nf: false, ...more };
+  }
   private newConstruct(kind: ConstructKind, ctx: 'plsql' | 'sql', tok: Token): Construct {
     const c: Construct = { id: this.ids.construct++, kind, ctx, line: tok.line, col: tok.col, branches: [] };
     this.map.constructs.push(c);
@@ -227,7 +229,7 @@ class Instrumenter {
       const id = this.ids.branch++;
       this.ins(this.t[thenIdx].end, ` ${this.rt}.b(${id});`);
       const r = this.seq(h.kids[0]);
-      c.branches.push({ label: `WHEN ${this.label(whenIdx + 1, thenIdx - 1)}`, line: this.t[whenIdx].line, col: this.t[whenIdx].col, nf: r.firstNF, probe: id });
+      c.branches.push(this.br(`WHEN ${this.label(whenIdx + 1, thenIdx - 1)}`, this.t[whenIdx], { nf: r.firstNF, probe: id }));
     }
   }
 
@@ -334,23 +336,17 @@ class Instrumenter {
     for (const k of s.kids) {
       if (k.k === 'branch') {
         const kind: DecisionKind = this.t[k.a].up === 'IF' ? 'if' : 'elsif';
-        const kwTok = this.t[k.a];
         last = this.decision(kind, k.kids[0], 'plsql');
-        const r = this.seq(k.kids[1]);
-        c.branches.push({
-          label: kind === 'if' ? 'THEN' : 'ELSIF … THEN', line: kwTok.line, col: kwTok.col, nf: r.firstNF,
-          derived: { decision: last!.id, outcome: 'T' },
-        });
+        const nf = this.seq(k.kids[1]).firstNF;
+        c.branches.push(this.br(kind === 'if' ? 'THEN' : 'ELSIF … THEN', this.t[k.a], { nf, derived: { decision: last!.id, outcome: 'T' } }));
         endIdx = k.b;
       } else {
-        const elseTok = this.t[k.a];
-        const r = this.seq(k.kids[0]);
-        c.branches.push({ label: 'ELSE', line: elseTok.line, col: elseTok.col, nf: r.firstNF, derived: { decision: last!.id, outcome: 'notT' } });
+        const nf = this.seq(k.kids[0]).firstNF;
+        c.branches.push(this.br('ELSE', this.t[k.a], { nf, derived: { decision: last!.id, outcome: 'notT' } }));
         return;
       }
     }
-    const endTok = this.t[endIdx];
-    c.branches.push({ label: 'ELSE (implizit)', line: endTok.line, col: endTok.col, nf: false, derived: { decision: last!.id, outcome: 'notT' } });
+    c.branches.push(this.br('ELSE (implizit)', this.t[endIdx], { derived: { decision: last!.id, outcome: 'notT' } }));
   }
 
   private caseStmt(s: Node) {
@@ -358,42 +354,29 @@ class Instrumenter {
     const c = this.newConstruct('case', 'plsql', this.t[s.a]);
     let last: Decision | null = null;
     let endIdx = -1;
+    // searched: derived from the WHEN conditions; simple: a probe after THEN / ELSE, or as the implicit ELSE
+    const arm = (label: string, tok: Token, cond: Node | null, pos: number, probe: (id: number) => string, body?: Node) => {
+      const br = this.br(label, tok);
+      if (searched) {
+        if (cond) last = this.decision('case-when', cond, 'plsql');
+        br.derived = { decision: last!.id, outcome: cond ? 'T' : 'notT' };
+      } else {
+        br.probe = this.ids.branch++;
+        this.ins(pos, probe(br.probe));
+      }
+      if (body) br.nf = this.seq(body).firstNF;
+      c.branches.push(br);
+    };
     for (const k of s.kids) {
       if (k.k === 'branch') {
-        const whenTok = this.t[k.a];
-        const thenIdx = k.at!;
-        const br: Branch = { label: `WHEN ${this.label(k.a + 1, thenIdx - 1)}`, line: whenTok.line, col: whenTok.col, nf: false };
-        if (searched) {
-          last = this.decision('case-when', k.kids[0], 'plsql');
-          br.derived = { decision: last!.id, outcome: 'T' };
-        } else {
-          br.probe = this.ids.branch++;
-          this.ins(this.t[thenIdx].end, ` ${this.rt}.b(${br.probe});`);
-        }
-        br.nf = this.seq(k.kids[1]).firstNF;
-        c.branches.push(br);
+        arm(`WHEN ${this.label(k.a + 1, k.at! - 1)}`, this.t[k.a], k.kids[0], this.t[k.at!].end, (id) => ` ${this.rt}.b(${id});`, k.kids[1]);
         endIdx = k.b;
       } else if (k.k === 'else') {
-        const elseTok = this.t[k.a];
-        const br: Branch = { label: 'ELSE', line: elseTok.line, col: elseTok.col, nf: false };
-        if (searched) br.derived = { decision: last!.id, outcome: 'notT' };
-        else {
-          br.probe = this.ids.branch++;
-          this.ins(elseTok.end, ` ${this.rt}.b(${br.probe});`);
-        }
-        br.nf = this.seq(k.kids[0]).firstNF;
-        c.branches.push(br);
+        arm('ELSE', this.t[k.a], null, this.t[k.a].end, (id) => ` ${this.rt}.b(${id});`, k.kids[0]);
         return;
       }
     }
-    const endTok = this.t[endIdx];
-    const br: Branch = { label: 'ELSE (implizit → CASE_NOT_FOUND)', line: endTok.line, col: endTok.col, nf: false };
-    if (searched) br.derived = { decision: last!.id, outcome: 'notT' };
-    else {
-      br.probe = this.ids.branch++;
-      this.ins(endTok.start, `else ${this.rt}.b(${br.probe}); raise case_not_found; `);
-    }
-    c.branches.push(br);
+    arm('ELSE (implizit → CASE_NOT_FOUND)', this.t[endIdx], null, this.t[endIdx].start, (id) => `else ${this.rt}.b(${id}); raise case_not_found; `);
   }
 
   private loop(s: Node, insertPos: number) {
@@ -439,10 +422,7 @@ class Instrumenter {
   private twoWay(kind: ConstructKind & DecisionKind, cond: Node, tok: Token, yes: string, no: string) {
     const c = this.newConstruct(kind, 'plsql', tok);
     const d = this.decision(kind, cond, 'plsql')!;
-    c.branches.push(
-      { label: yes, line: tok.line, col: tok.col, nf: false, derived: { decision: d.id, outcome: 'T' } },
-      { label: no, line: tok.line, col: tok.col, nf: false, derived: { decision: d.id, outcome: 'notT' } },
-    );
+    c.branches.push(this.br(yes, tok, { derived: { decision: d.id, outcome: 'T' } }), this.br(no, tok, { derived: { decision: d.id, outcome: 'notT' } }));
   }
 
   // -------------------------------------------------------------- decisions
@@ -565,15 +545,21 @@ class Instrumenter {
         return [n, m + 1];
       }
     }
-    let k = j;
+    const k = this.atomEnd(j, end);
+    if (k === j) throw new ParseError(`Operand fehlt vor "${this.t[k].text}"`, this.t[k].line);
+    return [this.atom(j, k, d, conds, pos), k];
+  }
+
+  /** Where the atom at j ends: the next AND / OR at depth 0 (BETWEEN x AND y and CASE ... END inside), or end. */
+  private atomEnd(j: number, end: number): number {
     let depth = 0;
     let caseDepth = 0;
     let between = false;
-    while (k < end) {
+    for (let k = j; k < end; k++) {
       const tk = this.t[k];
       const u = tk.up;
       if (depth === 0 && caseDepth === 0 && tk.kind === 'ident') {
-        if (u === 'OR' || (u === 'AND' && !between)) break;
+        if (u === 'OR' || (u === 'AND' && !between)) return k;
         if (u === 'AND') between = false;
         if (u === 'BETWEEN') between = true;
       }
@@ -581,34 +567,13 @@ class Instrumenter {
       else if (tk.kind === 'op' && u === ')') depth--;
       else if (tk.kind === 'ident' && u === 'CASE') caseDepth++;
       else if (tk.kind === 'ident' && u === 'END' && caseDepth > 0) caseDepth--;
-      k++;
     }
-    if (k === j) throw new ParseError(`Operand fehlt vor "${this.t[k].text}"`, this.t[k].line);
-    return [this.atom(j, k, d, conds, pos), k];
+    return end;
   }
 
   /** True if the token range is a boolean combination (top-level AND/OR or leading NOT). */
   private groupIsBoolean(a: number, b: number): boolean {
-    if (this.upAt(a) === 'NOT') return true;
-    let depth = 0;
-    let caseDepth = 0;
-    let between = false;
-    for (let k = a; k < b; k++) {
-      const tk = this.t[k];
-      const u = tk.up;
-      if (tk.kind === 'op' && u === '(') depth++;
-      else if (tk.kind === 'op' && u === ')') depth--;
-      else if (tk.kind === 'ident') {
-        if (u === 'CASE') caseDepth++;
-        else if (u === 'END' && caseDepth > 0) caseDepth--;
-        else if (depth === 0 && caseDepth === 0) {
-          if (u === 'BETWEEN') between = true;
-          else if (u === 'AND' && between) between = false;
-          else if (u === 'AND' || u === 'OR') return true;
-        }
-      }
-    }
-    return false;
+    return this.upAt(a) === 'NOT' || this.atomEnd(a, b) < b;
   }
 
   // ------------------------------------------------------ CASE expressions
@@ -626,18 +591,10 @@ class Instrumenter {
       for (const k of n.kids) collect(k);
     };
     roots.forEach(collect);
-    let hasGroupBy = false;
-    if (ctx === 'sql') {
-      for (let k = a; k < b - 1; k++) if (this.t[k].up === 'GROUP' && this.t[k + 1].up === 'BY') hasGroupBy = true;
-      // SELECT DISTINCT … ORDER BY: the order expressions must stay identical to the selected ones (ORA-01791)
-      let distinct = false;
-      let order = false;
-      for (let k = a; k < b - 1; k++) {
-        if (this.t[k].up === 'SELECT' && ['DISTINCT', 'UNIQUE'].includes(this.t[k + 1].up)) distinct = true;
-        if (this.t[k].up === 'ORDER' && this.t[k + 1].up === 'BY') order = true;
-      }
-      if (distinct && order) hasGroupBy = true;
-    }
+    // GROUP BY, or SELECT DISTINCT … ORDER BY: the expressions must stay identical to the selected ones (ORA-01791)
+    const seen = new Set<string>();
+    if (ctx === 'sql') for (let k = a; k < b - 1; k++) seen.add(`${this.t[k].up} ${this.t[k + 1].up}`);
+    const hasGroupBy = seen.has('GROUP BY') || ((seen.has('SELECT DISTINCT') || seen.has('SELECT UNIQUE')) && seen.has('ORDER BY'));
     const stack = [clause];
     for (let k = a; k < b; k++) {
       const tk = this.t[k];
@@ -657,25 +614,15 @@ class Instrumenter {
       }
       if (u !== 'CASE') continue;
       const cl = stack[stack.length - 1];
-      const searched = this.upAt(k + 1) === 'WHEN';
-      if (ctx === 'sql' && !this.opts.sqlProbes) {
-        this.gap(tk.line, 'CASE-Ausdruck in SQL: Messung erst ab Oracle 23ai/26ai möglich');
-        continue;
-      }
-      if (ctx === 'sql' && !SQL_SAFE_CLAUSES.has(cl)) {
-        this.gap(tk.line, `CASE in ${cl.toUpperCase()}-Klausel bewusst nicht gemessen (würde den Ausführungsplan verändern)`);
-        continue;
-      }
-      if (ctx === 'sql' && cl === 'select' && hasGroupBy) {
-        this.gap(tk.line, 'CASE in Abfrage mit GROUP BY oder DISTINCT … ORDER BY nicht gemessen (Ausdrücke müssen identisch bleiben)');
-        continue;
-      }
       const c = cases.get(k);
-      if (!c) {
-        this.gap(tk.line, 'CASE-Ausdruck nicht verstanden, nicht gemessen');
+      const skip = ctx !== 'sql' ? '' : !this.opts.sqlProbes ? 'CASE-Ausdruck in SQL: Messung erst ab Oracle 23ai/26ai möglich'
+        : !SQL_SAFE_CLAUSES.has(cl) ? `CASE in ${cl.toUpperCase()}-Klausel bewusst nicht gemessen (würde den Ausführungsplan verändern)`
+        : cl === 'select' && hasGroupBy ? 'CASE in Abfrage mit GROUP BY oder DISTINCT … ORDER BY nicht gemessen (Ausdrücke müssen identisch bleiben)' : '';
+      if (skip || !c) {
+        this.gap(tk.line, skip || 'CASE-Ausdruck nicht verstanden, nicht gemessen');
         continue;
       }
-      if (searched) this.caseExpr(c, ctx, cl);
+      if (this.upAt(k + 1) === 'WHEN') this.caseExpr(c, ctx, cl);
       else this.simpleCaseExpr(c, ctx, cl);
       k = c.b - 1;
     }
@@ -686,24 +633,18 @@ class Instrumenter {
     let last: Decision | null = null;
     for (const k of n.kids) {
       if (k.k === 'when') {
-        const whenTok = this.t[k.a];
         const [cond, res] = k.kids;
         last = this.decision('case-expr-when', cond, ctx)!;
-        c.branches.push({
-          label: `WHEN ${this.label(cond.a, cond.b - 1)}`, line: whenTok.line, col: whenTok.col,
-          nf: false, derived: { decision: last.id, outcome: 'T' },
-        });
+        c.branches.push(this.br(`WHEN ${this.label(cond.a, cond.b - 1)}`, this.t[k.a], { derived: { decision: last.id, outcome: 'T' } }));
         this.scanRegion(res.a, res.b, ctx, clause, [res]);
       } else if (k.k === 'else') {
-        const elseTok = this.t[k.a];
         const res = k.kids[0];
         this.scanRegion(res.a, res.b, ctx, clause, [res]);
-        c.branches.push({ label: 'ELSE', line: elseTok.line, col: elseTok.col, nf: false, derived: { decision: last!.id, outcome: 'notT' } });
+        c.branches.push(this.br('ELSE', this.t[k.a], { derived: { decision: last!.id, outcome: 'notT' } }));
         return;
       }
     }
-    const endTok = this.t[n.b - 1];
-    c.branches.push({ label: 'ELSE (implizit → NULL)', line: endTok.line, col: endTok.col, nf: false, derived: { decision: last!.id, outcome: 'notT' } });
+    c.branches.push(this.br('ELSE (implizit → NULL)', this.t[n.b - 1], { derived: { decision: last!.id, outcome: 'notT' } }));
   }
 
   /** CASE x WHEN v THEN r …: a branch probe in front of every result, also for the implicit ELSE. */
@@ -733,13 +674,9 @@ class Instrumenter {
       if (k.k === 'when') {
         const [val, res] = k.kids;
         this.scanRegion(val.a, val.b, ctx, clause, [val]);
-        const whenTok = this.t[k.a];
-        const id = probe(res);
-        c.branches.push({ label: `WHEN ${this.label(val.a, val.b - 1)}`, line: whenTok.line, col: whenTok.col, nf: false, probe: id });
+        c.branches.push(this.br(`WHEN ${this.label(val.a, val.b - 1)}`, this.t[k.a], { probe: probe(res) }));
       } else if (k.k === 'else') {
-        const elseTok = this.t[k.a];
-        const id = probe(k.kids[0]);
-        c.branches.push({ label: 'ELSE', line: elseTok.line, col: elseTok.col, nf: false, probe: id });
+        c.branches.push(this.br('ELSE', this.t[k.a], { probe: probe(k.kids[0]) }));
         return;
       } else {
         this.scanRegion(k.a, k.b, ctx, clause, [k]); // the operand
@@ -748,7 +685,7 @@ class Instrumenter {
     const endTok = this.t[n.b - 1];
     const id = this.ids.branch++;
     this.ins(endTok.start, `else case when ${rt}.${bt}(${id}) then null else ${copy} end `);
-    c.branches.push({ label: 'ELSE (implizit → NULL)', line: endTok.line, col: endTok.col, nf: false, probe: id });
+    c.branches.push(this.br('ELSE (implizit → NULL)', endTok, { probe: id }));
   }
 
   // ------------------------------------------------------------------ edits

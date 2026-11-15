@@ -97,6 +97,7 @@ export interface ObjectResult {
   instrumentError?: string;
 }
 
+const tfn = <X>(f: (v: 'T' | 'F' | 'N') => X) => ({ T: f('T'), F: f('F'), N: f('N') });
 const WORD: Record<string, string> = { T: 'WAHR', F: 'FALSCH', N: 'NULL', '-': 'nicht ausgewertet' };
 
 export function analyze(map: ObjectMap, hits: Hits, testIndex: Map<string, number> = new Map()): ObjectResult {
@@ -126,16 +127,12 @@ export function analyze(map: ObjectMap, hits: Hits, testIndex: Map<string, numbe
       i: c.i, text: c.text, span: c.span,
       t: g(hits.cond, `${d.id}:${c.i}:T`), f: g(hits.cond, `${d.id}:${c.i}:F`), n: g(hits.cond, `${d.id}:${c.i}:N`),
       mcdc: d.vectors ? 'no' : 'na',
-      tests: withTests ? {
-        T: testsWhere((th) => th.c.has(`${d.id}:${c.i}:T`)),
-        F: testsWhere((th) => th.c.has(`${d.id}:${c.i}:F`)),
-        N: testsWhere((th) => th.c.has(`${d.id}:${c.i}:N`)),
-      } : undefined,
+      tests: withTests ? tfn((v) => testsWhere((th) => th.c.has(`${d.id}:${c.i}:${v}`))) : undefined,
     }));
     if (d.vectors) computeMcdc(d.tree, conds, vectors);
     return {
       id: d.id, kind: d.kind, ctx: d.ctx, line: d.span.line, span: d.span, text: d.text, nf: d.nf, conds, vectors,
-      outcomes: { T: g(hits.dec, `${d.id}:T`), F: g(hits.dec, `${d.id}:F`), N: g(hits.dec, `${d.id}:N`) },
+      outcomes: tfn((v) => g(hits.dec, `${d.id}:${v}`)),
     };
   });
   const decById = new Map(decisions.map((d) => [d.id, d]));
@@ -143,31 +140,24 @@ export function analyze(map: ObjectMap, hits: Hits, testIndex: Map<string, numbe
   const branches: BranchResult[] = [];
   for (const c of map.constructs) {
     for (const b of c.branches) {
+      const dk = b.derived;
+      const d = dk && decById.get(dk.decision)!;
       let h = 0;
       let reason: string | undefined;
       let tests: number[] | undefined;
-      let condition: Span | undefined;
       if (b.probe !== undefined) {
         h = g(hits.branch, b.probe);
         if (withTests) tests = testsWhere((th) => th.b.has(b.probe!));
-      } else if (b.derived) {
-        const d = decById.get(b.derived.decision)!;
-        const dk = b.derived;
-        condition = d.span;
-        if (withTests) {
-          tests = testsWhere((th) => dk.outcome === 'T' ? th.d.has(`${dk.decision}:T`) : th.d.has(`${dk.decision}:F`) || th.d.has(`${dk.decision}:N`));
-        }
-        h = b.derived.outcome === 'T' ? d.outcomes.T : d.outcomes.F + d.outcomes.N;
-        if (h === 0) {
-          reason = b.derived.outcome === 'T'
-            ? `Bedingung \`${short(d.text)}\` war nie WAHR`
-            : `Bedingung \`${short(d.text)}\` war nie FALSCH oder NULL`;
-          if (d.outcomes.T + d.outcomes.F + d.outcomes.N === 0) reason = `Bedingung \`${short(d.text)}\` wurde nie ausgewertet`;
-        }
+      } else if (dk && d) {
+        const T = dk.outcome === 'T';
+        if (withTests) tests = testsWhere((th) => T ? th.d.has(`${dk.decision}:T`) : th.d.has(`${dk.decision}:F`) || th.d.has(`${dk.decision}:N`));
+        h = T ? d.outcomes.T : d.outcomes.F + d.outcomes.N;
+        const never = d.outcomes.T + d.outcomes.F + d.outcomes.N === 0 ? 'wurde nie ausgewertet' : T ? 'war nie WAHR' : 'war nie FALSCH oder NULL';
+        if (h === 0) reason = `Bedingung \`${short(d.text)}\` ${never}`;
       }
       branches.push({
         construct: c.id, constructKind: c.kind, ctx: c.ctx, label: b.label, line: b.line, col: b.col, hits: h,
-        nf: b.nf || (b.derived ? decById.get(b.derived.decision)!.nf : false), reason, tests, condition,
+        nf: b.nf || (d ? d.nf : false), reason, tests, condition: d && b.probe === undefined ? d.span : undefined,
       });
     }
   }
@@ -201,12 +191,9 @@ export function analyze(map: ObjectMap, hits: Hits, testIndex: Map<string, numbe
   const lineStatus: Record<number, LineStatus> = {};
   const lineHits: Record<number, number> = {};
   const lineTests: Record<number, number[]> = {};
-  for (const s of statements) {
-    if (!s.tests?.length) continue;
-    lineTests[s.line] = [...new Set([...(lineTests[s.line] ?? []), ...s.tests])].sort((a, b) => a - b);
-  }
   const byLine = new Map<number, { hit: number; miss: number; nf: number }>();
   for (const s of statements) {
+    if (s.tests?.length) lineTests[s.line] = [...new Set([...(lineTests[s.line] ?? []), ...s.tests])].sort((a, b) => a - b);
     const e = byLine.get(s.line) ?? { hit: 0, miss: 0, nf: 0 };
     if (s.nf) e.nf++; else if (s.hits > 0) e.hit++; else e.miss++;
     byLine.set(s.line, e);

@@ -46,12 +46,13 @@ export async function newSession(cfg: ConnectConfig): Promise<Session> {
   }
 }
 
+/** A catch handler that lets only errors with code pass. */
+const ignoring = (code: string) => (e: Error) => {
+  if (!e.message.includes(code)) throw e;
+};
+
 async function compileDdl(conn: oracledb.Connection, ddl: string, type: string, name: string): Promise<void> {
-  try {
-    await conn.execute(ddl);
-  } catch (e) {
-    if (!(e as Error).message.includes('ORA-24344')) throw e;
-  }
+  await conn.execute(ddl).catch(ignoring('ORA-24344'));
   const err = await conn.execute<[number, string]>(
     `select line, text from user_errors where name = :n and type = :t and attribute = 'ERROR' order by sequence`, { n: name, t: type },
   );
@@ -60,11 +61,7 @@ async function compileDdl(conn: oracledb.Connection, ddl: string, type: string, 
 
 /** Marker table and plmut_rt. */
 export async function installRuntime(conn: oracledb.Connection): Promise<void> {
-  try {
-    await conn.execute(MARKER_TABLE);
-  } catch (e) {
-    if (!(e as Error).message.includes('ORA-00955')) throw e;
-  }
+  await conn.execute(MARKER_TABLE).catch(ignoring('ORA-00955'));
   await compileDdl(conn, RT_SPEC, 'PACKAGE', 'PLMUT_RT');
   await compileDdl(conn, RT_BODY, 'PACKAGE BODY', 'PLMUT_RT');
 }
@@ -108,13 +105,8 @@ export interface RunResult {
 
 export const failed = (r: RunResult) => !!r.err || r.tests.some((t) => t.failed);
 
-export function firstFailure(r: RunResult): string {
-  return r.tests.find((t) => t.failed)?.name ?? (r.err ? firstLine(r.err) : '');
-}
-
-export function firstFailureMessage(r: RunResult): string {
-  return r.tests.find((t) => t.failed)?.message ?? (r.err ? firstLine(r.err) : '');
-}
+/** Name (or message) of the first failed test, else the call's error. */
+export const firstFailure = (r: RunResult, what: 'name' | 'message' = 'name') => r.tests.find((t) => t.failed)?.[what] ?? (r.err ? firstLine(r.err) : '');
 
 export const firstLine = (e: Error | string) => String(e instanceof Error ? e.message : e).split('\n')[0];
 

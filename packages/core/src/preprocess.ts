@@ -37,20 +37,12 @@ export function preprocessBlocks(src: string): { text: string; blocks: [number, 
         k = j;
         break;
       }
-      case '$ELSIF': {
-        if (!top || top.kind !== 'if') throw new Error(`$ELSIF ohne $IF (Zeile ${t.line})`);
-        const j = thenAfter(k);
+      case '$ELSIF': case '$ELSE': {
+        if (!top || top.kind !== 'if') throw new Error(`${t.up} ohne $IF (Zeile ${t.line})`);
+        const end = t.up === '$ELSE' ? t.end : toks[(k = thenAfter(k))].end;
         top.branches.push([top.branchStart, t.start]);
-        blank.push([t.start, toks[j].end]);
-        top.branchStart = toks[j].end;
-        k = j;
-        break;
-      }
-      case '$ELSE': {
-        if (!top || top.kind !== 'if') throw new Error(`$ELSE ohne $IF (Zeile ${t.line})`);
-        top.branches.push([top.branchStart, t.start]);
-        blank.push([t.start, t.end]);
-        top.branchStart = t.end;
+        blank.push([t.start, end]);
+        top.branchStart = end;
         break;
       }
       case '$ERROR':

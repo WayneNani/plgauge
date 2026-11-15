@@ -130,18 +130,12 @@ export function toLcov(exp: CoverageExport, map?: SourceMap): string {
 /** Cobertura XML (GitLab coverage visualization, Jenkins, Azure DevOps). */
 export function toCobertura(exp: CoverageExport, map?: SourceMap): string {
   const fs = files(exp, map);
-  const sum = (list: FileCov[], count: (f: FileCov) => [number, number]) => list.reduce<[number, number]>((a, f) => {
-    const [c, t] = count(f);
-    return [a[0] + c, a[1] + t];
-  }, [0, 0]);
-  const lineCount = (f: FileCov): [number, number] => [[...f.lines.values()].filter((h) => h > 0).length, f.lines.size];
-  const brCount = (f: FileCov): [number, number] => {
-    const all = [...f.branches.values()].flat();
-    return [all.filter((b) => b[1] > 0).length, all.length];
-  };
+  const count = (hits: number[]): [number, number] => [hits.filter((h) => h > 0).length, hits.length];
+  const lineCount = (list: FileCov[]) => count(list.flatMap((f) => [...f.lines.values()]));
+  const brCount = (list: FileCov[]) => count(list.flatMap((f) => [...f.branches.values()].flat().map((b) => b[1])));
   const rate = ([c, t]: [number, number]) => (t ? (c / t).toFixed(4) : '1');
-  const [lc, lt] = sum(fs, lineCount);
-  const [bc, bt] = sum(fs, brCount);
+  const [lc, lt] = lineCount(fs);
+  const [bc, bt] = brCount(fs);
   const ts = Math.floor(Date.parse(exp.generated || new Date().toISOString()) / 1000) || 0;
   const out = [
     '<?xml version="1.0" ?>',
@@ -156,16 +150,13 @@ export function toCobertura(exp: CoverageExport, map?: SourceMap): string {
     byDir.set(d, [...(byDir.get(d) ?? []), f]);
   }
   for (const [dir, list] of byDir) {
-    out.push(`    <package name="${xml(dir.replace(/\//g, '.'))}" line-rate="${rate(sum(list, lineCount))}" branch-rate="${rate(sum(list, brCount))}" complexity="0">`, '      <classes>');
+    out.push(`    <package name="${xml(dir.replace(/\//g, '.'))}" line-rate="${rate(lineCount(list))}" branch-rate="${rate(brCount(list))}" complexity="0">`, '      <classes>');
     for (const f of list) {
       const name = f.path.slice(f.path.lastIndexOf('/') + 1).replace(/\.[^.]*$/, '');
-      out.push(`        <class name="${xml(name)}" filename="${xml(f.path)}" line-rate="${rate(lineCount(f))}" branch-rate="${rate(brCount(f))}" complexity="0">`, '          <methods/>', '          <lines>');
+      out.push(`        <class name="${xml(name)}" filename="${xml(f.path)}" line-rate="${rate(lineCount([f]))}" branch-rate="${rate(brCount([f]))}" complexity="0">`, '          <methods/>', '          <lines>');
       for (const [l, hits] of [...f.lines].sort((a, b) => a[0] - b[0])) {
-        const br = f.branches.get(l);
-        if (br) {
-          const c = br.filter((b) => b[1] > 0).length;
-          out.push(`            <line number="${l}" hits="${hits}" branch="true" condition-coverage="${Math.round((c / br.length) * 100)}% (${c}/${br.length})"/>`);
-        } else out.push(`            <line number="${l}" hits="${hits}" branch="false"/>`);
+        const [c, t] = count((f.branches.get(l) ?? []).map((b) => b[1]));
+        out.push(`            <line number="${l}" hits="${hits}" branch="${t > 0}"${t ? ` condition-coverage="${Math.round((c / t) * 100)}% (${c}/${t})"` : ''}/>`);
       }
       out.push('          </lines>', '        </class>');
     }
@@ -174,6 +165,8 @@ export function toCobertura(exp: CoverageExport, map?: SourceMap): string {
   out.push('  </packages>', '</coverage>');
   return out.join('\n') + '\n';
 }
+
+const SKIPPED = new Set(['skipped', 'excluded', 'flaky']);
 
 /** JUnit XML of the tests of the run (instrumented run; excluded tests are reported as skipped). */
 export function toJunit(exp: CoverageExport): string {
@@ -187,13 +180,13 @@ export function toJunit(exp: CoverageExport): string {
   for (const [suite, ts] of suites) {
     const fail = ts.filter((t) => t.status === 'failed').length;
     const err = ts.filter((t) => t.status === 'error').length;
-    const skip = ts.filter((t) => ['skipped', 'excluded', 'flaky'].includes(t.status)).length;
+    const skip = ts.filter((t) => SKIPPED.has(t.status)).length;
     const time = ts.reduce((a, t) => a + t.ms, 0) / 1000;
     out.push(`  <testsuite name="${xml(suite)}" tests="${ts.length}" failures="${fail}" errors="${err}" skipped="${skip}" time="${time.toFixed(3)}">`);
     for (const t of ts) {
       const name = t.path.split('.').pop()!;
       const body = t.status === 'failed' ? '<failure message="failed"/>' : t.status === 'error' ? '<error message="error"/>'
-        : ['skipped', 'excluded', 'flaky'].includes(t.status) ? `<skipped message="${t.status}"/>` : '';
+        : SKIPPED.has(t.status) ? `<skipped message="${t.status}"/>` : '';
       out.push(`    <testcase classname="${xml(suite)}" name="${xml(name)}" time="${(t.ms / 1000).toFixed(3)}"${body ? `>${body}</testcase>` : '/>'}`);
     }
     out.push('  </testsuite>');
@@ -225,6 +218,10 @@ export function mergeExports(list: CoverageExport[]): CoverageExport {
   });
   const objs = new Map<string, Obj>();
   const uniq = (a: number[]) => [...new Set(a)].sort((x, y) => x - y);
+  type Hit = { hits: number; tests: number[] };
+  const add = (prev: Hit[] | undefined, cur: Hit[] | undefined) => prev?.forEach((p, i) => {
+    if (cur?.[i]) Object.assign(p, { hits: p.hits + cur[i].hits, tests: uniq([...p.tests, ...cur[i].tests]) });
+  });
   for (const e of list) {
     if (e.format !== 'plcov-coverage/1') throw new Error(`unbekanntes Format ${e.format}`);
     const m = remap(e);
@@ -251,14 +248,8 @@ export function mergeExports(list: CoverageExport[]): CoverageExport {
         const p = prev.lines[l];
         prev.lines[l] = p ? { hits: p.hits + v.hits, tests: uniq([...p.tests, ...v.tests]) } : v;
       }
-      prev.statements?.forEach((s, i) => {
-        const c = cur.statements?.[i];
-        if (c) Object.assign(s, { hits: s.hits + c.hits, tests: uniq([...s.tests, ...c.tests]) });
-      });
-      prev.branches.forEach((b, i) => {
-        const c = cur.branches[i];
-        if (c) Object.assign(b, { hits: b.hits + c.hits, tests: uniq([...b.tests, ...c.tests]) });
-      });
+      add(prev.statements, cur.statements);
+      add(prev.branches, cur.branches);
       prev.conditions.forEach((x, i) => {
         const c = cur.conditions[i];
         if (!c) return;

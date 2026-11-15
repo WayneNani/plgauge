@@ -89,8 +89,6 @@ interface Node {
 /**
  * Rewrites every unit that has mutants. Mutants in dropped are left out (they did not
  * compile); points in naive are not switched (their mutants run with the oracle rewriter).
- */
-/**
  * runtimeOwner: the schema of plmut_ctl. Units of other schemas call it qualified (A4).
  * broken: view blocks (blockKey) whose wrapper did not compile; they get none, not even
  * the one that only records.
@@ -149,14 +147,12 @@ export function buildSchema(ms: Mutant[], dropped: Set<number> = new Set(), naiv
         const g = dups.get(p.scope.join(':')) ?? dupNode(p, p.scope, 'plsql');
         g.dup!.reach.push(...live);
         g.dup!.all.push(p);
-        if (p.inline) {
-          // switched in place, inside the block's original branch
-          nodes.push({ p, ms: live, kids: [], loop: 0, order: order++ });
-          su.mutants.push(...live);
-          continue;
+        // inline: switched in place, inside the block's original branch
+        if (p.inline) nodes.push({ p, ms: live, kids: [], loop: 0, order: order++ });
+        else {
+          g.dup!.points.push(p);
+          g.ms.push(...live);
         }
-        g.dup!.points.push(p);
-        g.ms.push(...live);
         su.mutants.push(...live);
         continue;
       }
@@ -369,20 +365,25 @@ class Renderer {
     return out.join(' + ');
   }
 
+  /** (CASE head WHEN id THEN variant … ELSE orig END), every variant the region of its mutant; paren: around orig too. */
+  cases(n: Node, head: string, ms: Mutant[], id: (m: Mutant) => string, variant: (m: Mutant) => string, paren = true) {
+    this.write(`(CASE ${head}`);
+    for (const m of ms) {
+      this.write(` WHEN ${id(m)} THEN `);
+      this.variantRegion(variant(m), m.point, m.id);
+    }
+    this.write(paren ? ' ELSE (' : ' ELSE ');
+    this.orig(n);
+    this.write(paren ? ') END)' : ' END)');
+  }
+
   /** Dynamic SQL: the literal once per variant, switched in place; see the header. */
   lit(n: Node) {
     const a = this.active;
     this.spaceBefore();
     const start = this.b.length;
     const ms = [...n.ms].sort((x, y) => x.id - y.id);
-    this.write(`(CASE CASE ${a} WHEN -1 THEN ${this.hits(ms.map((m) => m.id))} ELSE ${a} END`);
-    for (const m of ms) {
-      this.write(` WHEN ${m.id} THEN `);
-      this.variantRegion(this.spliced(n, m), m.point, m.id);
-    }
-    this.write(' ELSE ');
-    this.orig(n);
-    this.write(' END)');
+    this.cases(n, `CASE ${a} WHEN -1 THEN ${this.hits(ms.map((m) => m.id))} ELSE ${a} END`, ms, (m) => `${m.id}`, (m) => this.spliced(n, m), false);
     this.su.regions.push({ start, end: this.b.length, point: n.lit![0], mutantId: 0, points: n.lit });
     this.spaceAfter(n.p.end);
   }
@@ -422,14 +423,7 @@ class Renderer {
     const p = n.p;
     this.spaceBefore();
     const start = this.b.length;
-    this.write(`(CASE SYS_CONTEXT('${this.ctx}', 'ACTIVE')`);
-    for (const m of n.ms) {
-      this.write(` WHEN '${m.id}' THEN `);
-      this.variantRegion(`(${m.mutated})`, p, m.id);
-    }
-    this.write(' ELSE (');
-    this.orig(n);
-    this.write(') END)');
+    this.cases(n, `SYS_CONTEXT('${this.ctx}', 'ACTIVE')`, n.ms, (m) => `'${m.id}'`, (m) => `(${m.mutated})`);
     this.region(start, p, 0);
     this.spaceAfter(p.end);
   }
@@ -488,14 +482,7 @@ class Renderer {
       }
       default: {
         // bool in PL/SQL, value anywhere
-        this.write(`(CASE CASE ${a} WHEN -1 THEN ${this.ctl}.hit(${base}, ${count}) ELSE ${a} END`);
-        for (const m of n.ms) {
-          this.write(` WHEN ${m.id} THEN `);
-          this.variantRegion(`(${m.mutated})`, p, m.id);
-        }
-        this.write(' ELSE (');
-        this.orig(n);
-        this.write(') END)');
+        this.cases(n, `CASE ${a} WHEN -1 THEN ${this.ctl}.hit(${base}, ${count}) ELSE ${a} END`, n.ms, (m) => `${m.id}`, (m) => `(${m.mutated})`);
       }
     }
     this.region(start, p, 0);

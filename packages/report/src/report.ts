@@ -16,6 +16,13 @@ const md = (s: string) => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>');
 
 const KEYWORDS = new Set(('and as begin between body by case close constant create cursor declare default delete else elsif end exception exit continue fetch for forall from function goto group having if in insert into is like loop merge not null of on open or order package pragma procedure raise replace return reverse rowtype select set then type update using values when where while with true false is_null raise_application_error commit rollback savepoint execute immediate bulk collect limit record table index varchar2 number boolean pls_integer date timestamp clob others no_data_found too_many_rows case_not_found deterministic pipelined authid definer current_user').split(' '));
 
+const DARK = `  --bg: #0e1413; --surface: #151d1c; --sunk: #1b2524; --ink: #e2eae8; --muted: #93a3a0; --line: #283432;
+  --accent: #52b6bf; --accent-ink: #062022;
+  --ok: #52c486; --warn: #e3ab4f; --bad: #f08068; --null: #a898f2; --nf: #73807e;
+  --ok-tint: #15291f; --warn-tint: #2c2414; --bad-tint: #321a16; --nf-tint: #1b2322; --target: #3a3413;
+  --code-kw: #79c0e6; --code-str: #e6b17a; --code-com: #6f7f7c; --code-num: #c7a2ea;
+  color-scheme: dark;`;
+
 type MetricKey = 'stmt' | 'branch' | 'cond' | 'mcdc' | 'loop';
 const METRICS: { key: MetricKey; label: string; help: string }[] = [
   { key: 'stmt', label: 'Anweisungen', help: 'Jede ausführbare Anweisung einzeln, auch wenn mehrere in einer Zeile stehen.' },
@@ -53,6 +60,7 @@ export interface MutationResultLite {
   detail?: string;
 }
 
+const MUT_HELP = 'Anteil der künstlich eingebauten Fehler, die ein Test bemerkt. Zeigt, ob ausgeführter Code auch geprüft wird.';
 const DETECTED = new Set(['KILLED', 'TIMEOUT', 'MEMORY']);
 const VALID = new Set(['KILLED', 'TIMEOUT', 'MEMORY', 'SURVIVED', 'NOT_COVERED']);
 const mutScore = (rs: MutationResultLite[]): Metric => ({
@@ -108,22 +116,11 @@ export function renderHtml(r: RunReport, opts: { mutation?: { results: MutationR
        ${bar(ut, 'ref')}
        <div class="cmp-val"><b>${fmtPct(utPct)}</b><small>${ut.covered}/${ut.total}</small></div>
      </div>`,
-    ...METRICS.map((m) => {
-      const v = totals[m.key];
-      return `<div class="cmp-row">
-        <div class="cmp-label"><strong>${m.label}</strong><span>${esc(m.help)}</span></div>
+    ...[...METRICS.map((m) => ({ ...m, v: totals[m.key] })), ...(muts ? [{ label: 'Mutation Score', help: MUT_HELP, v: mutScore(mutAll) }] : [])].map(({ label, help, v }) => `<div class="cmp-row">
+        <div class="cmp-label"><strong>${label}</strong><span>${esc(help)}</span></div>
         ${bar(v)}
         <div class="cmp-val"><b>${fmtPct(pctNum(v))}</b><small>${v.covered}/${v.total}</small></div>
-      </div>`;
-    }),
-    ...(muts ? [(() => {
-      const v = mutScore(mutAll);
-      return `<div class="cmp-row">
-        <div class="cmp-label"><strong>Mutation Score</strong><span>Anteil der künstlich eingebauten Fehler, die ein Test bemerkt. Zeigt, ob ausgeführter Code auch geprüft wird.</span></div>
-        ${bar(v)}
-        <div class="cmp-val"><b>${fmtPct(pctNum(v))}</b><small>${v.covered}/${v.total}</small></div>
-      </div>`;
-    })()] : []),
+      </div>`),
   ].join('');
 
   // ---------------------------------------------------------------- run facts
@@ -160,19 +157,12 @@ export function renderHtml(r: RunReport, opts: { mutation?: { results: MutationR
 
   // ---------------------------------------------------------------- object table
   const tableRows = objs.map((o, idx) => {
-    const cells = METRICS.map((m) => {
-      const v = o.metrics[m.key];
-      return `<td><div class="cell">${bar(v, 'mini')}<span class="num">${fmtPct(pctNum(v))}</span></div></td>`;
-    }).join('');
-    const utm = o.utplsql ? { covered: o.utplsql.covered, total: o.utplsql.total } : { covered: 0, total: 0 };
+    const cell = (v: Metric, cls = 'mini') => `<td><div class="cell">${bar(v, cls)}<span class="num">${fmtPct(pctNum(v))}</span></div></td>`;
     return `<tr>
       <th scope="row"><a href="#o${idx}">${esc(o.name.toLowerCase())}</a><span class="otype">${esc(o.type.toLowerCase())}</span></th>
-      <td><div class="cell">${bar(utm, 'mini ref')}<span class="num">${fmtPct(pctNum(utm))}</span></div></td>
-      ${o.instrumentError ? `<td colspan="${METRICS.length}" class="err">${esc(o.instrumentError)}</td>` : cells}
-      ${muts ? (() => {
-        const v = mutScore([...(mutOf(o)?.values() ?? [])].flat());
-        return `<td><div class="cell">${bar(v, 'mini')}<span class="num">${fmtPct(pctNum(v))}</span></div></td>`;
-      })() : ''}
+      ${cell(o.utplsql ?? { covered: 0, total: 0 }, 'mini ref')}
+      ${o.instrumentError ? `<td colspan="${METRICS.length}" class="err">${esc(o.instrumentError)}</td>` : METRICS.map((m) => cell(o.metrics[m.key])).join('')}
+      ${muts ? cell(mutScore([...(mutOf(o)?.values() ?? [])].flat())) : ''}
       <td class="num find">${o.findings.length + (muts ? unchecked(o, mutOf(o)).length : 0)}</td>
     </tr>`;
   }).join('');
@@ -200,21 +190,11 @@ export function renderHtml(r: RunReport, opts: { mutation?: { results: MutationR
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #0e1413; --surface: #151d1c; --sunk: #1b2524; --ink: #e2eae8; --muted: #93a3a0; --line: #283432;
-    --accent: #52b6bf; --accent-ink: #062022;
-    --ok: #52c486; --warn: #e3ab4f; --bad: #f08068; --null: #a898f2; --nf: #73807e;
-    --ok-tint: #15291f; --warn-tint: #2c2414; --bad-tint: #321a16; --nf-tint: #1b2322; --target: #3a3413;
-    --code-kw: #79c0e6; --code-str: #e6b17a; --code-com: #6f7f7c; --code-num: #c7a2ea;
-    color-scheme: dark;
+${DARK.replace(/^/gm, '  ')}
   }
 }
 :root[data-theme="dark"] {
-  --bg: #0e1413; --surface: #151d1c; --sunk: #1b2524; --ink: #e2eae8; --muted: #93a3a0; --line: #283432;
-  --accent: #52b6bf; --accent-ink: #062022;
-  --ok: #52c486; --warn: #e3ab4f; --bad: #f08068; --null: #a898f2; --nf: #73807e;
-  --ok-tint: #15291f; --warn-tint: #2c2414; --bad-tint: #321a16; --nf-tint: #1b2322; --target: #3a3413;
-  --code-kw: #79c0e6; --code-str: #e6b17a; --code-com: #6f7f7c; --code-num: #c7a2ea;
-  color-scheme: dark;
+${DARK}
 }
 * { box-sizing: border-box; }
 body { background: var(--bg); color: var(--ink); font: 15px/1.5 var(--font-ui); margin: 0; }
@@ -457,14 +437,8 @@ const one = (s: string, max = 48) => {
 function renderObject(o: ObjectResult, idx: number, tip: (html: string) => string, names: string[], muts?: Map<number, MutationResultLite[]>): string {
   const chips = [
     o.utplsql ? `<span class="chip ref">Zeilen (utPLSQL) <b>${fmtPct(pctNum(o.utplsql))}</b></span>` : '',
-    ...METRICS.map((m) => {
-      const v = pctNum(o.metrics[m.key]);
-      return `<span class="chip t-${tone(v)}">${m.label} <b>${fmtPct(v)}</b></span>`;
-    }),
-    muts ? (() => {
-      const v = pctNum(mutScore([...muts.values()].flat()));
-      return `<span class="chip t-${tone(v)}">Mutation Score <b>${fmtPct(v)}</b></span>`;
-    })() : '',
+    ...[...METRICS.map((m) => [m.label, o.metrics[m.key]] as const), ...(muts ? [['Mutation Score', mutScore([...muts.values()].flat())] as const] : [])]
+      .map(([label, m]) => `<span class="chip t-${tone(pctNum(m))}">${label} <b>${fmtPct(pctNum(m))}</b></span>`),
   ].join('');
 
   const head = `<div class="obj-head"><div><div class="eyebrow">${esc(o.type.toLowerCase())}</div><h3>${esc(o.owner.toLowerCase())}.${esc(o.name.toLowerCase())}</h3></div><div class="chips">${chips}</div></div>`;
@@ -487,10 +461,7 @@ function renderObject(o: ObjectResult, idx: number, tip: (html: string) => strin
 
   // branch badges per line
   const branchesByLine = new Map<number, ObjectResult['branches']>();
-  for (const b of o.branches) {
-    if (!branchesByLine.has(b.line)) branchesByLine.set(b.line, []);
-    branchesByLine.get(b.line)!.push(b);
-  }
+  for (const b of o.branches) branchesByLine.set(b.line, [...(branchesByLine.get(b.line) ?? []), b]);
   const loopByLine = new Map(o.loops.map((l) => [l.line, l]));
 
   // highlighted source → html per line
@@ -595,9 +566,7 @@ function condTip(c: CondResult, d: ObjectResult['decisions'][number]): string {
     `<b><code>${esc(c.text.replace(/\s+/g, ' '))}</code></b>`,
     `<div style="opacity:.75">Teilbedingung ${c.i} von ${d.conds.length} · ${d.ctx === 'sql' ? 'SQL' : 'PL/SQL'}</div>`,
     '<hr>',
-    `<div class="row"><span>WAHR</span><span>${c.t.toLocaleString('de-DE')}×</span></div>`,
-    `<div class="row"><span>FALSCH</span><span>${c.f.toLocaleString('de-DE')}×</span></div>`,
-    `<div class="row"><span>NULL</span><span>${c.n.toLocaleString('de-DE')}×</span></div>`,
+    ...([['WAHR', c.t], ['FALSCH', c.f], ['NULL', c.n]] as const).map(([w, n]) => `<div class="row"><span>${w}</span><span>${n.toLocaleString('de-DE')}×</span></div>`),
   ];
   if (c.mcdc !== 'na' && d.conds.length > 1) {
     lines.push('<hr>', c.mcdc === 'yes' ? '<div>MC/DC: unabhängige Wirkung nachgewiesen ✓</div>' : `<div>MC/DC: unabhängige Wirkung nicht nachgewiesen</div>${c.suggestion ? `<div style="margin-top:4px">Fehlender Testfall: ${md(c.suggestion)}</div>` : ''}`);

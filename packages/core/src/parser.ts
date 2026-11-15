@@ -102,6 +102,12 @@ const ARG_TAIL = new Set([
   'ENCODING', 'IDENT', 'CHAR', 'BYTE',
 ]);
 
+/** Words of a SQL statement that only switch sqlScan's state. */
+const SQL_STATE = new Map(Object.entries({
+  values: 'VALUES', into: 'INTO COLLECT', from: 'FROM USING JOIN APPLY', skip: 'MODEL PIVOT UNPIVOT MATCH_RECOGNIZE WINDOW',
+  target: 'INSERT UPDATE DELETE MERGE', with: 'WITH', '': 'UNION INTERSECT MINUS EXCEPT',
+}).flatMap(([state, ws]) => ws.split(' ').map((w) => [w, state] as const)));
+
 const SQL_CLAUSE_END = new Set([
   'FROM', 'WHERE', 'GROUP', 'HAVING', 'ORDER', 'INTO', 'BULK', 'UNION', 'INTERSECT', 'MINUS', 'EXCEPT', 'CONNECT',
   'START', 'RETURNING', 'RETURN', 'SET', 'VALUES', 'ON', 'USING', 'WHEN', 'THEN', 'ELSE', 'FOR', 'OFFSET', 'FETCH',
@@ -234,13 +240,8 @@ class Parser {
       }
       if (x.kind === 'op' && x.text === ')') return -1;
       if (cases === 0 && (x.kind === 'ident' || x.kind === 'op') && stops.has(x.up)) return k;
-      if (x.kind === 'ident') {
-        if (x.up === 'CASE') cases++;
-        else if (x.up === 'END' && cases > 0) {
-          cases--;
-          // END CASE of a CASE statement is not ours to count, but inside a region it cannot occur.
-        }
-      }
+      if (x.kind === 'ident' && x.up === 'CASE') cases++;
+      else if (x.kind === 'ident' && x.up === 'END' && cases > 0) cases--;
     }
     return -1;
   }
@@ -288,11 +289,9 @@ class Parser {
   /** "/" alone on its line ends a PL/SQL unit in SQL*Plus scripts. */
   private isSlash(k: number): boolean {
     const x = this.t[k];
-    if (!x || x.text !== '/' || x.kind !== 'op') return false;
-    const ls = this.src.lastIndexOf('\n', x.start - 1) + 1;
-    let le = this.src.indexOf('\n', x.end);
-    if (le < 0) le = this.src.length;
-    return this.src.slice(ls, x.start).trim() === '' && this.src.slice(x.end, le).trim() === '';
+    if (!x || x.text !== '/' || x.kind !== 'op' || !this.firstOnLine(k)) return false;
+    const le = this.src.indexOf('\n', x.end);
+    return this.src.slice(x.end, le < 0 ? this.src.length : le).trim() === '';
   }
 
   private firstOnLine(k: number): boolean {
@@ -639,8 +638,9 @@ class Parser {
     const st = (op: string, kids: Node[] = [], extra: Partial<Node> = {}) => node('stmt', a, this.i, kids, { op, at2: la, ...extra });
     // OPEN, FETCH, ... are not reserved: open(x); calls a procedure named open
     const softKw = ['OPEN', 'FETCH', 'CLOSE', 'PIPE', 'SET', 'LOCK', 'EXECUTE', 'SAVEPOINT', 'COMMIT', 'ROLLBACK', 'MERGE'];
-    if (kind === 'ident' && !this.isOp(a + 1, ':=') && !this.isOp(a + 1, '.') && !this.isOp(a + 1, '%')
-      && !(softKw.includes(u) && (this.isOp(a + 1, '(') || this.isOp(a + 1, ';')) && u !== 'COMMIT' && u !== 'ROLLBACK')) {
+    const kw = kind === 'ident' && !this.isOp(a + 1, ':=') && !this.isOp(a + 1, '.') && !this.isOp(a + 1, '%')
+      && !(softKw.includes(u) && (this.isOp(a + 1, '(') || this.isOp(a + 1, ';')) && u !== 'COMMIT' && u !== 'ROLLBACK');
+    if (kw) {
       switch (u) {
         case 'IF': return this.ifStmt(a, la);
         case 'CASE': return this.caseStmt(a, la);
@@ -661,10 +661,9 @@ class Parser {
           this.i = semi + 1;
           return st('return', kids);
         }
-        case 'RAISE': case 'GOTO': {
+        case 'RAISE': case 'GOTO': case 'CLOSE':
           this.i = this.need(this.i, SEMI) + 1;
           return st(u.toLowerCase());
-        }
         case 'NULL':
           if (this.isOp(a + 1, ';')) {
             this.i += 2;
@@ -688,26 +687,15 @@ class Parser {
           this.i = semi + 1;
           return st('fetch', kids);
         }
-        case 'CLOSE': {
-          this.i = this.need(this.i, SEMI) + 1;
-          return st('close');
-        }
         case 'PIPE': {
           const semi = this.need(this.i, SEMI);
           const kids = this.isOp(a + 2, '(') && this.close(a + 2) < semi ? [this.region(a + 3, this.close(a + 2))] : [];
           this.i = semi + 1;
           return st('pipe', kids);
         }
-        default:
-          if (SQL_STMT.has(u) || (u === 'SET' && this.upAt(a + 1) === 'TRANSACTION')) {
-            const semi = this.need(this.i, SEMI);
-            const q = this.sqlStatement(a, semi);
-            this.i = semi + 1;
-            return st('sql', [q]);
-          }
       }
     }
-    if (kind === 'op' && u === '(' && this.isQuery(a + 1)) {
+    if ((kw && (SQL_STMT.has(u) || (u === 'SET' && this.upAt(a + 1) === 'TRANSACTION'))) || (kind === 'op' && u === '(' && this.isQuery(a + 1))) {
       const semi = this.need(this.i, SEMI);
       const q = this.sqlStatement(a, semi);
       this.i = semi + 1;
@@ -716,15 +704,9 @@ class Parser {
     // assignment or procedure call
     const semi = this.need(this.i, SEMI);
     const asg = this.find(a, ASSIGN, semi);
-    if (asg >= 0) {
-      const target = this.region(a, asg);
-      const value = this.region(asg + 1, semi);
-      this.i = semi + 1;
-      return st('assign', [target, value], { at: asg });
-    }
-    const call = this.region(a, semi);
+    const kids = asg >= 0 ? [this.region(a, asg), this.region(asg + 1, semi)] : [this.region(a, semi)];
     this.i = semi + 1;
-    return st('call', [call]);
+    return asg >= 0 ? st('assign', kids, { at: asg }) : st('call', kids);
   }
 
   private ifStmt(a: number, la: number): Node {
@@ -937,6 +919,12 @@ class Parser {
         continue;
       }
       const u = x.up;
+      const next = SQL_STATE.get(u);
+      if (next !== undefined) {
+        state = next;
+        k++;
+        continue;
+      }
       const nx = this.upAt(k + 1);
       switch (u) {
         case 'SELECT': {
@@ -951,9 +939,7 @@ class Parser {
             k += 4;
             continue;
           }
-          k = this.condAt(k + 1, b, out);
-          state = 'cond';
-          continue;
+        // falls through
         case 'HAVING': case 'ON':
           k = this.condAt(k + 1, b, out);
           state = 'cond';
@@ -990,50 +976,22 @@ class Parser {
             continue;
           }
           break;
-        case 'VALUES':
-          state = 'values';
-          k++;
-          continue;
         case 'RETURNING': case 'RETURN':
           k = this.list(k + 1, b, out, false);
           state = 'into';
           continue;
-        case 'INTO': case 'COLLECT':
-          state = 'into';
-          k++;
-          continue;
-        case 'FROM': case 'USING': case 'JOIN': case 'APPLY':
-          state = 'from';
-          k++;
-          continue;
         case 'OFFSET':
-          k = this.exprAt(k + 1, b, out);
+          k = this.condAt(k + 1, b, out, () => this.additive());
           continue;
         case 'FETCH':
           if (nx === 'FIRST' || nx === 'NEXT') {
-            k = this.exprAt(k + 2, b, out);
+            k = this.condAt(k + 2, b, out, () => this.additive());
             continue;
           }
           break;
         case 'FOR':
           if (nx === 'UPDATE') return out;
           break;
-        case 'MODEL': case 'PIVOT': case 'UNPIVOT': case 'MATCH_RECOGNIZE': case 'WINDOW':
-          state = 'skip';
-          k++;
-          continue;
-        case 'INSERT': case 'UPDATE': case 'DELETE': case 'MERGE':
-          state = 'target';
-          k++;
-          continue;
-        case 'WITH':
-          state = 'with';
-          k++;
-          continue;
-        case 'UNION': case 'INTERSECT': case 'MINUS': case 'EXCEPT':
-          state = '';
-          k++;
-          continue;
         case 'TABLE': case 'LATERAL': case 'THE':
           if (this.isOp(k + 1, '(')) {
             const m = this.match[k + 1];
@@ -1090,18 +1048,11 @@ class Parser {
     }
   }
 
-  private condAt(k: number, b: number, out: Node[]): number {
-    const n = this.parseAt(k, b, () => this.cond());
-    if (!n) return k;
-    out.push(n);
-    return n.b;
-  }
-
-  private exprAt(k: number, b: number, out: Node[]): number {
-    const n = this.parseAt(k, b, () => this.additive());
-    if (!n) return k;
-    out.push(n);
-    return n.b;
+  /** Parses a condition (or with f an expression) at k into out; returns the index after it. */
+  private condAt(k: number, b: number, out: Node[], f = () => this.cond()): number {
+    const n = this.parseAt(k, b, f);
+    if (n) out.push(n);
+    return n ? n.b : k;
   }
 
   /** UPDATE ... SET col = expr, (cols) = (subquery), ... */
@@ -1109,11 +1060,9 @@ class Parser {
     for (;;) {
       const eq = this.find(k, EQ, b);
       if (eq < 0) return k;
-      k = eq + 1;
-      const n = this.parseAt(k, b, () => this.cond());
-      if (!n) return k;
-      out.push(n);
-      k = n.b;
+      const n = this.condAt(eq + 1, b, out);
+      if (n === eq + 1) return n;
+      k = n;
       if (k < b && this.isOp(k, ',')) {
         k++;
         continue;
@@ -1432,7 +1381,7 @@ class Parser {
       }
       return null;
     }
-    if (x.kind === 'string' || x.kind === 'number') {
+    if (x.kind === 'string' || x.kind === 'number' || (x.kind === 'ident' && (x.up === 'NULL' || x.up === 'TRUE' || x.up === 'FALSE'))) {
       this.i++;
       return node('lit', a, this.i);
     }
@@ -1440,10 +1389,6 @@ class Parser {
     if (x.kind !== 'ident') return null;
     const u = x.up;
     const next = this.t[a + 1];
-    if (u === 'NULL' || u === 'TRUE' || u === 'FALSE') {
-      this.i++;
-      return node('lit', a, this.i);
-    }
     if ((u === 'DATE' || u === 'TIMESTAMP') && next?.kind === 'string') {
       this.i += 2;
       return node('lit', a, this.i);

@@ -46,10 +46,9 @@ export function tokenize(src: string, opts: LexOptions = {}): Token[] {
   let line = 1;
   let lineStart = 0;
 
-  const push = (kind: TokenKind, start: number, end: number, startLine: number, startCol: number) => {
-    const text = src.slice(start, end);
-    tokens.push({ kind, text, up: kind === 'ident' ? text.toUpperCase() : text, start, end, line: startLine, col: startCol });
-  };
+  let start = 0;
+  let startLine = 1;
+  let startCol = 1;
 
   /** Advance pos to `to`, keeping line bookkeeping correct. */
   const advance = (to: number) => {
@@ -61,19 +60,24 @@ export function tokenize(src: string, opts: LexOptions = {}): Token[] {
     }
     pos = to;
   };
+  /** The token from start to `to`. */
+  const emit = (kind: TokenKind, to: number) => {
+    advance(to);
+    const text = src.slice(start, pos);
+    tokens.push({ kind, text, up: kind === 'ident' ? text.toUpperCase() : text, start, end: pos, line: startLine, col: startCol });
+  };
 
   while (pos < src.length) {
     const ch = src[pos];
-    const start = pos;
-    const startLine = line;
-    const startCol = pos - lineStart + 1;
+    start = pos;
+    startLine = line;
+    startCol = pos - lineStart + 1;
 
     // whitespace
     if (/\s/.test(ch)) {
       let k = pos;
       while (k < src.length && /\s/.test(src[k])) k++;
-      advance(k);
-      push('trivia', start, pos, startLine, startCol);
+      emit('trivia', k);
       continue;
     }
 
@@ -81,15 +85,13 @@ export function tokenize(src: string, opts: LexOptions = {}): Token[] {
     if (ch === '-' && src[pos + 1] === '-') {
       let k = src.indexOf('\n', pos);
       if (k < 0) k = src.length;
-      advance(k);
-      push('trivia', start, pos, startLine, startCol);
+      emit('trivia', k);
       continue;
     }
     if (ch === '/' && src[pos + 1] === '*') {
       const k = src.indexOf('*/', pos + 2);
       if (k < 0 && !opts.tolerant) throw new LexError('Unterminated comment', startLine, startCol);
-      advance(k < 0 ? src.length : k + 2);
-      push('trivia', start, pos, startLine, startCol);
+      emit('trivia', k < 0 ? src.length : k + 2);
       continue;
     }
 
@@ -101,8 +103,7 @@ export function tokenize(src: string, opts: LexOptions = {}): Token[] {
       const close = Q_CLOSERS[open] ?? open;
       const k = src.indexOf(close + "'", openPos + 1);
       if (k < 0 && !opts.tolerant) throw new LexError('Unterminated q-quoted string', startLine, startCol);
-      advance(k < 0 ? src.length : k + 2);
-      push('string', start, pos, startLine, startCol);
+      emit('string', k < 0 ? src.length : k + 2);
       continue;
     }
 
@@ -129,8 +130,7 @@ export function tokenize(src: string, opts: LexOptions = {}): Token[] {
         }
         k++;
       }
-      advance(k + 1);
-      push('string', start, pos, startLine, startCol);
+      emit('string', k + 1);
       continue;
     }
 
@@ -138,8 +138,7 @@ export function tokenize(src: string, opts: LexOptions = {}): Token[] {
     if (ch === '"') {
       const k = src.indexOf('"', pos + 1);
       if (k < 0 && !opts.tolerant) throw new LexError('Unterminated quoted identifier', startLine, startCol);
-      advance(k < 0 ? src.length : k + 1);
-      push('qident', start, pos, startLine, startCol);
+      emit('qident', k < 0 ? src.length : k + 1);
       continue;
     }
 
@@ -157,8 +156,7 @@ export function tokenize(src: string, opts: LexOptions = {}): Token[] {
         while (k < src.length && isDigit(src[k])) k++;
       }
       if (/[fFdD]/.test(src[k] ?? '') && !isIdentPart(src[k + 1] ?? '')) k++;
-      advance(k);
-      push('number', start, pos, startLine, startCol);
+      emit('number', k);
       continue;
     }
 
@@ -166,20 +164,17 @@ export function tokenize(src: string, opts: LexOptions = {}): Token[] {
     if (isIdentStart(ch)) {
       let k = pos + 1;
       while (k < src.length && isIdentPart(src[k])) k++;
-      advance(k);
-      push('ident', start, pos, startLine, startCol);
+      emit('ident', k);
       continue;
     }
 
     // operators
     const two = src.slice(pos, pos + 2);
     if (MULTI_OPS.includes(two)) {
-      advance(pos + 2);
-      push('op', start, pos, startLine, startCol);
+      emit('op', pos + 2);
       continue;
     }
-    advance(pos + 1);
-    push('op', start, pos, startLine, startCol);
+    emit('op', pos + 1);
   }
   return tokens;
 }

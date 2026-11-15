@@ -19,7 +19,7 @@ import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import oracledb from 'oracledb';
 import {
-  dbIdent, ensureJournal, journalEntries, loadObject, restoreJournal, type JournalEntry, lockRun, RUN_LOCK, objectErrors, replaceSourceDetailed, restoreAll, runScript, sha256, splitScript, touches,
+  dbIdent, ensureJournal, journalEntries, loadObject, restoreJournal, lockRun, RUN_LOCK, objectErrors, replaceSourceDetailed, restoreAll, runScript, sha256, splitScript, touches,
   type ChangedLines, type SourceObject,
 } from '@pltest/core';
 import type { CoverageExport } from '@pltest/coverage';
@@ -28,7 +28,7 @@ import { expand, mutatedUnit, objectName, objectOwner, unitKey, withoutCreate, w
 import { findPoints } from './find.js';
 import { buildSchema, livePlan, locate, planDiff, positionOf, switchable, type PlanRow, type SchemaUnit } from './schema.js';
 import {
-  activate, aborted, failed, firstFailure, firstFailureMessage, firstLine, hits, installControl, installRuntime, isMemory,
+  activate, aborted, failed, firstFailure, firstLine, hits, installControl, installRuntime, isMemory,
   loops, newSession, parseDbUrl, resetPackages, runTests, setLoopLimits,
   type ConnectConfig, type RunResult, type Session, type TestResult,
 } from './session.js';
@@ -173,10 +173,6 @@ class Worker {
   monitor!: oracledb.Connection;
   test!: Session;
   db: ConnectConfig;
-  limitMs = 0;
-  passing: string[] = [];
-  excluded = 0;
-  flaky = new Set<string>();
   loopLimits?: Map<number, number>;
   schema?: SchemaUnit[];
   lastUnit = '';
@@ -287,11 +283,7 @@ class Worker {
     // put the journaled originals back first, or this run would take the changed code for the
     // original, restore that at the end and forget the entry with the true one
     await ensureJournal(this.deploy);
-    const left = await journalEntries(this.deploy);
-    if (left.length) {
-      this.logf(`Worker${this.name}: ${left.length} Objekte eines abgebrochenen Laufs werden aus dem Journal wiederhergestellt`);
-      await this.restoreLeftovers(left);
-    }
+    await this.restoreLeftovers('eines abgebrochenen Laufs werden aus dem Journal wiederhergestellt');
   }
 
   /** Closes the connections; a new database: objects, grants and the schema name are to be found again. */
@@ -337,9 +329,12 @@ class Worker {
    * parameters (ccflags, length semantics, …) that install scripts on the deploy connection
    * must not inherit.
    */
-  private async restoreLeftovers(entries: JournalEntry[]): Promise<void> {
+  private async restoreLeftovers(what: string): Promise<void> {
     const c = await oracledb.getConnection(this.db);
     try {
+      const entries = await journalEntries(c);
+      if (!entries.length) return;
+      this.logf(`Worker${this.name}: ${entries.length} Objekte ${what}`);
       await restoreJournal(c, entries, (m) => (m.includes('✗') ? this.logf(`WARNUNG${this.name}: ${m.trim()}`) : undefined));
       // an original that did not go back (a session of the dead run still holds the unit, say):
       // this run would take the changed code for the original and lose the true one at its end
@@ -358,18 +353,8 @@ class Worker {
     try {
       // only while the schema is still this run's (a lost lock: another run restored and owns it)
       await this.ensureLock();
-      if (this.foreign) return [];
-      const c = await oracledb.getConnection(this.db);
-      try {
-        const left = await journalEntries(c);
-        if (left.length) {
-          this.logf(`Worker${this.name}: ${left.length} Objekte aus dem Journal wiederhergestellt`);
-          await this.restoreLeftovers(left);
-        }
-        return [];
-      } finally {
-        await c.close().catch(() => {});
-      }
+      if (!this.foreign) await this.restoreLeftovers('aus dem Journal wiederhergestellt');
+      return [];
     } catch (e) {
       // the lock went to another run: it restored this run's journal, the schema is its own now
       if (this.foreign) return [];
@@ -552,7 +537,7 @@ class Worker {
    * look select from them), before it the configured paths.
    */
   testPaths(): string[] {
-    return this.passing.length ? this.passing : this.run.cfg.tests;
+    return this.run.passing.length ? this.run.passing : this.run.cfg.tests;
   }
 
   /**
@@ -581,7 +566,7 @@ class Worker {
    * single tests of the run).
    */
   sideEffect(res: Result, run: RunResult, tests?: string[]): void {
-    const single = new Set(this.passing);
+    const single = new Set(this.run.passing);
     const own = !this.run.testsCommit || (!!tests && tests.every((t) => single.has(t)) && !tests.some((t) => this.run.committers.has(t)));
     if (run.committed && own && !res.sideEffect) {
       res.sideEffect = true;
@@ -595,7 +580,7 @@ class Worker {
   /** A test call is running (a signal breaks it off). */
   inTests = false;
 
-  async runTests(paths: string[], limitMs = this.limitMs): Promise<RunResult> {
+  async runTests(paths: string[], limitMs = this.run.limitMs): Promise<RunResult> {
     // after Ctrl-C no test run starts (a repair, a second look), and one broken off counts for
     // nothing: callers take the error as "no result" (a CI kill follows within seconds)
     const stopped = () => {
@@ -637,8 +622,9 @@ class Worker {
   async naive(m: Mutant): Promise<Result> {
     const res = newResult(m);
     const t0 = performance.now();
+    const compile = () => this.compileUnit(unitKey(m), m.unitRef.type, m.unitRef.name, withoutCreate(mutatedUnit(m)));
     try {
-      const errs = await this.compileUnit(unitKey(m), m.unitRef.type, m.unitRef.name, withoutCreate(mutatedUnit(m)));
+      const errs = await compile();
       if (errs.length) {
         res.status = 'COMPILE_ERROR';
         res.detail = errs.slice(0, 3).map((e) => `${e.line}:${e.position} ${e.text}`).join('; ');
@@ -648,7 +634,7 @@ class Worker {
       const sel = await this.run.selection(this, m);
       if (sel) {
         // configured paths may be suites: select from the single tests of the baseline
-        tests = this.passing.filter((t) => sel.includes(t));
+        tests = this.run.passing.filter((t) => sel.includes(t));
         res.coveredBy = tests;
         if (!tests.length) {
           Object.assign(res, { status: 'NOT_COVERED', detail: 'laut Coverage von keinem Test ausgeführt' });
@@ -663,13 +649,13 @@ class Worker {
       // a side effect changed the data: the second look would run on it (dispatch resets the database next)
       if (this.run.opt.confirm !== false && !res.sideEffect && wantsConfirm(res, tests)) {
         let ready = true;
-        const rp = dirty ? await this.repair(tests, unitKey(m)) : { restored: false, repaired: false };
-        if (dirty && !rp.repaired) ready = false; // no clean data for the second look
-        if (rp.repaired) dirty = false;
-        if (rp.restored && ready) {
+        if (dirty) {
+          // no clean data for the second look unless repaired
+          const rp = await this.repair(tests, unitKey(m));
+          ready = rp.repaired;
+          dirty = !rp.repaired;
           // the second look must start from the data as without mutants: repaired, now the mutant again
-          const again = await this.compileUnit(unitKey(m), m.unitRef.type, m.unitRef.name, withoutCreate(mutatedUnit(m)))
-            .catch((e: Error) => [{ line: 0, position: 0, text: firstLine(e) }]);
+          const again = rp.restored && ready ? await compile().catch((e: Error) => [{ line: 0, position: 0, text: firstLine(e) }]) : [];
           if (again.length) {
             this.logf(`Gegenprobe${this.name}, Mutant ${m.id}: kompiliert nicht mehr (${again[0].text}), Urteil ungeprüft`);
             ready = false;
@@ -696,7 +682,7 @@ class Worker {
     const ran: string[] = [];
     let committed = false;
     try {
-      const tests = (covering ?? []).filter((t) => !this.flaky.has(t));
+      const tests = (covering ?? []).filter((t) => !this.run.flaky.has(t));
       if (!tests.length) {
         res.status = 'NOT_COVERED';
         return;
@@ -763,7 +749,7 @@ class Worker {
     try {
       await resetPackages(this.test);
       const ran = kill ? [res.killedBy!] : tests;
-      const run = await this.runTests(ran, kill ? this.limitMs : 2 * this.limitMs);
+      const run = await this.runTests(ran, kill ? this.run.limitMs : 2 * this.run.limitMs);
       this.sideEffect(res, run, ran);
       // a lost connection says nothing about the mutant
       if (!lostConnection(run.err)) this.judgeAgain(res, run, ran);
@@ -777,11 +763,11 @@ class Worker {
   /** Second look at a verdict on this worker; see confirmVerdicts. */
   async confirm(r: Result): Promise<void> {
     const timeout = r.status === 'TIMEOUT';
-    const tests = !timeout ? [r.killedBy!] : (r.coveredBy ?? this.testPaths()).filter((t) => !this.flaky.has(t));
+    const tests = !timeout ? [r.killedBy!] : (r.coveredBy ?? this.testPaths()).filter((t) => !this.run.flaky.has(t));
     if (!tests.length) return;
     try {
       await activate(this.test, r.id);
-      const run = await this.runTests(tests, timeout ? 2 * this.limitMs : this.limitMs);
+      const run = await this.runTests(tests, timeout ? 2 * this.run.limitMs : this.run.limitMs);
       const guard = await aborted(this.test).catch(() => false);
       if (this.dirty(run)) await this.repair(tests);
       const had = r.sideEffect;
@@ -805,7 +791,7 @@ class Worker {
     const again = newResult(r.mutant);
     again.sideEffect = r.sideEffect; // already noted
     this.classify(again, run, tests);
-    r.unstable = `Zeitgrenze knapp: zweiter Versuch${where} ${again.status} nach ${Math.round(run.elapsedMs)} ms (Grenze ${Math.round(this.limitMs)} ms)`;
+    r.unstable = `Zeitgrenze knapp: zweiter Versuch${where} ${again.status} nach ${Math.round(run.elapsedMs)} ms (Grenze ${Math.round(this.run.limitMs)} ms)`;
     Object.assign(r, { status: again.status, killedBy: again.killedBy, detail: again.detail });
   }
 
@@ -997,9 +983,9 @@ class Run {
     }
     // all workers retired with work left: nothing more can run, but what ran stays in the report
     if (!stop() && this.workers.every((w) => w.retired)) {
-      const left = ms.map((m, i) => (results[i] ? undefined : m)).filter((m): m is Mutant => !!m);
-      if (left.length) {
-        this.logf(`alle Worker-Datenbanken ausgefallen: ${left.length} Mutanten ohne Urteil`);
+      const left = ms.filter((_, i) => !results[i]).length;
+      if (left) {
+        this.logf(`alle Worker-Datenbanken ausgefallen: ${left} Mutanten ohne Urteil`);
         // a partial report: marked, and the CLI ends with an error code
         this.abort ??= 'alle Worker-Datenbanken ausgefallen';
       }
@@ -1025,24 +1011,22 @@ class Run {
     if (plain) this.plain.add(key);
   }
 
-  /** Tests found unreliable leave the run, on w and the primary (shareBaseline copies from it, also onto w). */
-  exclude(w: Worker, bad: Set<string>): void {
-    const keep = w.passing.filter((t) => !bad.has(t));
-    const excluded = w.excluded + w.passing.length - keep.length;
-    for (const x of new Set([w, this.primary])) {
-      x.excluded = excluded;
-      x.passing = keep;
-    }
-    for (const f of bad) w.flaky.add(f);
-    this.shareBaseline();
+  /** The baseline, the same for all workers: time limit, the single tests that pass, how many were excluded, tests found unreliable. */
+  limitMs = 0;
+  passing: string[] = [];
+  excluded = 0;
+  flaky = new Set<string>();
+
+  /** Tests found unreliable leave the run. */
+  exclude(bad: Set<string>): void {
+    const keep = this.passing.filter((t) => !bad.has(t));
+    this.excluded += this.passing.length - keep.length;
+    this.passing = keep;
+    for (const f of bad) this.flaky.add(f);
   }
 
   /** The baseline committed: commits under mutants are no side effect of theirs. */
   testsCommit = false;
-
-  shareBaseline() {
-    for (const h of this.workers.slice(1)) Object.assign(h, { limitMs: this.primary.limitMs, passing: this.primary.passing, excluded: this.primary.excluded, flaky: this.primary.flaky });
-  }
 
   /** Baseline twice; tests failing in either run are excluded (most do DDL or depend on state). */
   async baseline(): Promise<{ ms: number; tests: TestResult[] }> {
@@ -1066,8 +1050,8 @@ class Run {
     const ok = last.filter((t) => !failedNames.has(t.name) && !t.ignored);
     for (const [n, msg] of failedNames) this.logf(`ausgeschlossen, scheitert ohne Mutanten: ${n}: ${msg.split(/\s+/).join(' ').slice(0, 60)}`);
     if (!ok.length) throw new Error('Baseline: kein Test besteht ohne Mutanten');
-    w.excluded = failedNames.size;
-    w.passing = ok.map((t) => t.name);
+    this.excluded = failedNames.size;
+    this.passing = ok.map((t) => t.name);
     if (this.testsCommit && !this.committers.size) {
       // which of them commit: each alone, once
       for (const t of ok) {
@@ -1077,8 +1061,7 @@ class Run {
       }
       this.logf(`${this.committers.size} Tests committen: ${[...this.committers].map((t) => t.split('.').pop()).join(', ')}`);
     }
-    w.limitMs = slowest * (this.opt.timeoutFactor ?? 5) + 2000;
-    this.shareBaseline();
+    this.limitMs = slowest * (this.opt.timeoutFactor ?? 5) + 2000;
     return { ms: slowest, tests: ok };
   }
 
@@ -1103,7 +1086,7 @@ class Run {
           // a test that fails without a mutant is unreliable; a timeout or a lost connection says nothing
           if (!run.err && !run.timedOut && failed(run)) {
             flaky.add(name);
-            this.logf(`unzuverlässig, scheitert auch ohne Mutant: ${name}: ${firstFailureMessage(run).slice(0, 60)}`);
+            this.logf(`unzuverlässig, scheitert auch ohne Mutant: ${name}: ${firstFailure(run, 'message').slice(0, 60)}`);
           } else if (run.err || run.timedOut) {
             this.logf(`Nachprüfung von ${name} ohne Ergebnis: ${run.timedOut ? 'Zeitüberschreitung' : firstLine(run.err!)}`);
           }
@@ -1116,9 +1099,7 @@ class Run {
     if (!flaky.size) return;
     rep.flakyTests.push(...[...flaky].sort());
     rep.flakyTests.sort();
-    this.exclude(w, flaky);
-    rep.tests = w.passing.length;
-    rep.excludedTests = w.excluded;
+    this.exclude(flaky);
     // every kill of a test found unreliable, also one checked earlier (another recheck call)
     const again = rep.results.filter((r) => r.status === 'KILLED' && flaky.has(r.killedBy ?? ''));
     this.logf(`${again.length} Mutanten werden ohne die unzuverlässigen Tests wiederholt`);
@@ -1175,11 +1156,6 @@ function unstableSummary(rs: Result[]): string {
   return `${kills} Erkennungen nicht wiederholbar, ${slow} Zeitüberschreitungen knapp`;
 }
 
-/** Oracle mode: what the second looks right after each verdict (Worker.confirmHere) found. */
-function logConfirmed(run: Run, results: Result[]): void {
-  if (run.opt.confirm !== false) run.logf(`Gegenprobe (einzeln kompiliert): ${unstableSummary(results)}`);
-}
-
 /**
  * Schema mode: second look at verdicts that may hang on circumstances. Every kill by a test runs again
  * with that test alone on another worker (the next one; the same one without others), on
@@ -1222,6 +1198,12 @@ export function createdUnit(stmt: string): string {
   // (a package spec is no unit of mutants)
   const c = createStatement(stmt);
   return c && c.type !== 'PACKAGE' ? `${c.type}|${objectName(c.name)}` : '';
+}
+
+/** Waits for all, then throws the first failure. */
+async function settled(ps: Promise<unknown>[]): Promise<void> {
+  const bad = (await Promise.allSettled(ps)).find((o): o is PromiseRejectedResult => o.status === 'rejected');
+  if (bad) throw bad.reason;
 }
 
 /** Executes a complete run. */
@@ -1277,10 +1259,8 @@ export async function runMutation(opt: Options): Promise<Report> {
   process.on('SIGINT', onSig);
   process.on('SIGTERM', onSig);
   try {
-    // all settled before anything fails: a worker still opening would otherwise keep its lock and connections
-    const opened = await Promise.allSettled(run.workers.map((w) => w.open()));
-    const failedOpen = opened.find((o): o is PromiseRejectedResult => o.status === 'rejected');
-    if (failedOpen) throw failedOpen.reason;
+    // (a worker still opening would otherwise keep its lock and connections)
+    await settled(run.workers.map((w) => w.open()));
     if (run.workers.length > 1) run.logf(`${run.workers.length} Worker-Datenbanken`);
     // the switched code names the run's schema (its context, its plmut_ctl): one for all workers
     const homes = new Set(await Promise.all(run.workers.map((w) => w.currentSchema())));
@@ -1309,8 +1289,8 @@ export async function runMutation(opt: Options): Promise<Report> {
     const rep = mode === 'naive' ? await runNaive(run, ms, stop) : await runSchema(run, ms, stop);
     if (run.abort) rep.aborted = run.abort;
     else if (run.interrupted) rep.aborted = 'Abbruch angefordert (Strg-C)';
-    rep.mode = mode;
-    rep.skippedVariants = skipped;
+    if (run.repairs) run.logf(`${run.repairs} Testläufe haben Daten nach einem Mutanten wiederhergestellt`);
+    Object.assign(rep, { mode, skippedVariants: skipped, limitMs: run.limitMs, tests: run.passing.length, excludedTests: run.excluded });
     rep.elapsedMs = performance.now() - t0;
     rep.results.sort((a, b) => a.id - b.id);
     report = rep;
@@ -1337,9 +1317,8 @@ export async function runMutation(opt: Options): Promise<Report> {
   }
 }
 
-function emptyReport(run: Run, baselineMs: number, tests: number): Report {
-  const w = run.primary;
-  return { mode: '', baselineMs, limitMs: w.limitMs, tests, excludedTests: w.excluded, flakyTests: [], skippedVariants: 0, results: [], elapsedMs: 0 };
+function emptyReport(baselineMs: number): Report {
+  return { mode: '', baselineMs, limitMs: 0, tests: 0, excludedTests: 0, flakyTests: [], skippedVariants: 0, results: [], elapsedMs: 0 };
 }
 
 async function naiveList(run: Run, ms: Mutant[], stop: () => boolean): Promise<Result[]> {
@@ -1359,15 +1338,21 @@ async function naiveList(run: Run, ms: Mutant[], stop: () => boolean): Promise<R
   return out;
 }
 
+/** Mutants compiled one by one into rep, their killing tests rechecked; then what the second looks (Worker.confirmHere) found. */
+async function naivePhase(run: Run, rep: Report, ms: Mutant[], stop: () => boolean): Promise<void> {
+  const one = await naiveList(run, ms, stop);
+  rep.results.push(...one);
+  const ids = new Set(one.map((r) => r.id));
+  await run.recheckKillers(rep, (again) => naiveList(run, again, stop), stop, ids);
+  if (run.opt.confirm !== false) run.logf(`Gegenprobe (einzeln kompiliert): ${unstableSummary(rep.results.filter((r) => ids.has(r.id)))}`);
+}
+
 async function runNaive(run: Run, ms: Mutant[], stop: () => boolean): Promise<Report> {
   const base = await run.baseline();
   run.checkpoint();
-  const rep = emptyReport(run, base.ms, base.tests.length);
-  run.logf(`Baseline: ${base.tests.length} Tests in ${Math.round(base.ms)}ms, Zeitgrenze ${Math.round(run.primary.limitMs)}ms`);
-  rep.results = await naiveList(run, ms, stop);
-  await run.recheckKillers(rep, (again) => naiveList(run, again, stop), stop);
-  logConfirmed(run, rep.results);
-  if (run.repairs) run.logf(`${run.repairs} Testläufe haben Daten nach einem Mutanten wiederhergestellt`);
+  const rep = emptyReport(base.ms);
+  run.logf(`Baseline: ${base.tests.length} Tests in ${Math.round(base.ms)}ms, Zeitgrenze ${Math.round(run.limitMs)}ms`);
+  await naivePhase(run, rep, ms, stop);
   return rep;
 }
 
@@ -1384,11 +1369,9 @@ async function runSchema(run: Run, ms: Mutant[], stop: () => boolean): Promise<R
   const t0 = performance.now();
   await installControl(w.deploy);
   const plans = await capBranches(run);
-  run.checkpoint();
   let rounds = await compileSchema(run);
   run.checkpoint();
   rounds += await isolateViews(run);
-  run.checkpoint();
   rounds += await checkPlans(run, plans);
   run.checkpoint();
   // (a unit left out stays original on every worker)
@@ -1397,11 +1380,7 @@ async function runSchema(run: Run, ms: Mutant[], stop: () => boolean): Promise<R
   // loop guard ids run over all units, the ones left out too
   const loopCount = built.reduce((n, u) => n + u.loops, 0);
   w.schema = units;
-  // all settled before anything fails: restoring while another worker still compiles would miss units
-  const settled = async (ps: Promise<unknown>[]) => {
-    const bad = (await Promise.allSettled(ps)).find((o): o is PromiseRejectedResult => o.status === 'rejected');
-    if (bad) throw bad.reason;
-  };
+  // (restoring while another worker still compiles would miss units)
   await settled(run.workers.slice(1).map(async (h) => {
     h.schema = units;
     await h.installSchema(units);
@@ -1415,16 +1394,14 @@ async function runSchema(run: Run, ms: Mutant[], stop: () => boolean): Promise<R
   await activate(w.test, 0);
   const base = await run.baseline();
   run.checkpoint();
-  const rep = emptyReport(run, base.ms, base.tests.length);
-  run.logf(`Baseline mit Schema: ${base.tests.length} Tests in ${Math.round(base.ms)}ms, Zeitgrenze ${Math.round(w.limitMs)}ms`);
+  const rep = emptyReport(base.ms);
+  run.logf(`Baseline mit Schema: ${base.tests.length} Tests in ${Math.round(base.ms)}ms, Zeitgrenze ${Math.round(run.limitMs)}ms`);
 
   // (with the recorded view points, which run one by one on the recording's reach)
   const covering = await record(run, base.tests, units.flatMap((u) => [...u.mutants.map((m) => m.id), ...u.recorded]), loopCount);
   run.checkpoint();
   run.covering = covering;
   run.recorded = new Set(units.flatMap((u) => u.recorded));
-  rep.tests = w.passing.length;
-  rep.excludedTests = w.excluded;
   for (const h of run.workers.slice(1)) {
     h.loopLimits = w.loopLimits;
     await setLoopLimits(h.test, w.loopLimits!);
@@ -1453,14 +1430,8 @@ async function runSchema(run: Run, ms: Mutant[], stop: () => boolean): Promise<R
   if (fallback.length && !stop()) {
     await run.restoreEverywhere();
     run.logf(`${fallback.length} Mutanten ohne Schema, einzeln kompiliert`);
-    const one = await naiveList(run, fallback, stop);
-    rep.results.push(...one);
-    // their kills too: a test that fails on its own makes no kill (the switched ones were checked above)
-    const ids = new Set(one.map((r) => r.id));
-    await run.recheckKillers(rep, (again) => naiveList(run, again, stop), stop, ids);
-    logConfirmed(run, rep.results.filter((r) => ids.has(r.id)));
+    await naivePhase(run, rep, fallback, stop);
   }
-  if (run.repairs) run.logf(`${run.repairs} Testläufe haben Daten nach einem Mutanten wiederhergestellt`);
   return rep;
 }
 
@@ -1772,20 +1743,15 @@ async function record(run: Run, tests: TestResult[], ids: number[], loopCount: n
   const flakyNow = r.tests.filter((t) => t.failed);
   for (const t of flakyNow) run.logf(`unzuverlässig, scheitert im Aufzeichnungslauf: ${t.name}: ${t.message.split(/\s+/).join(' ').slice(0, 60)}`);
   if (flakyNow.length) {
-    // (w.passing are the names of tests: both come from the baseline)
-    run.exclude(w, new Set(flakyNow.map((t) => t.name)));
-    tests = tests.filter((t) => !w.flaky.has(t.name));
+    // (run.passing are the names of tests: both come from the baseline)
+    run.exclude(new Set(flakyNow.map((t) => t.name)));
+    tests = tests.filter((t) => !run.flaky.has(t.name));
   }
   const h = await hits(w.test);
   const dur = new Map(tests.map((t) => [t.name, t.durationMs]));
   const all = tests.map((t) => t.name);
   const byId = new Map<number, Set<string>>();
-  const add = (id: number, name: string) => {
-    let s = byId.get(id);
-    if (!s) byId.set(id, (s = new Set()));
-    s.add(name);
-  };
-  for (const [test, ids] of h) for (const id of ids) (test === '' ? all : [test]).forEach((n) => add(id, n));
+  for (const [test, ids] of h) for (const id of ids) for (const n of test === '' ? all : [test]) (byId.get(id) ?? byId.set(id, new Set()).get(id)!).add(n);
   const covering = new Map<number, string[]>();
   for (const [id, set] of byId) {
     covering.set(id, [...set].sort((a, b) => (dur.get(a) ?? 0) - (dur.get(b) ?? 0) || (a < b ? -1 : a > b ? 1 : 0)));

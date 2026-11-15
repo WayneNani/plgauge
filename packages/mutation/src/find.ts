@@ -210,28 +210,27 @@ const EQUIV_ZERO_RIGHT: Record<string, string> = { '<>': '>', '=': '<=', '>': '<
 const EQUIV_ZERO_LEFT: Record<string, string> = { '<>': '<', '=': '>=', '<': '<>', '>=': '=' };
 const NON_NEGATIVE_CALL = /^(LENGTH|LENGTHB|LENGTHC|COUNT|INSTR|INSTRB|ABS|DBMS_LOB\.GETLENGTH|CARDINALITY)\s*\(/i;
 const NON_NEGATIVE_NAME = /^[\w$#."]+\.COUNT(\s*\(\s*\))?$|^[\w$#."]+%ROWCOUNT$/is;
-/** One call of a function that never returns a negative number, as the whole expression (not LENGTH(a) - LENGTH(b)). */
-const NON_NEGATIVE = {
-  /** plsql: x.COUNT is a collection method there; in SQL it may be a column named count. */
-  test(e: string, plsql = true): boolean {
-    if (plsql && NON_NEGATIVE_NAME.test(e)) return true;
-    const m = NON_NEGATIVE_CALL.exec(e);
-    if (!m || !e.endsWith(')')) return false;
-    let d = 0;
-    let quote = false;
-    for (let i = m[0].length - 1; i < e.length; i++) {
-      const c = e[i];
-      if (c === "'") quote = !quote;
-      else if (quote) continue;
-      else if (c === '(') d++;
-      else if (c === ')' && --d === 0) return i === e.length - 1;
-    }
-    return false;
-  },
-};
+/**
+ * One call of a function that never returns a negative number, as the whole expression (not LENGTH(a) - LENGTH(b)).
+ * plsql: x.COUNT is a collection method there; in SQL it may be a column named count.
+ */
+function nonNegative(e: string, plsql: boolean): boolean {
+  if (plsql && NON_NEGATIVE_NAME.test(e)) return true;
+  const m = NON_NEGATIVE_CALL.exec(e);
+  if (!m || !e.endsWith(')')) return false;
+  let d = 0;
+  let quote = false;
+  for (let i = m[0].length - 1; i < e.length; i++) {
+    const c = e[i];
+    if (c === "'") quote = !quote;
+    else if (quote) continue;
+    else if (c === '(') d++;
+    else if (c === ')' && --d === 0) return i === e.length - 1;
+  }
+  return false;
+}
 
-const isStringLiteral = (e: string) =>
-  (e.length >= 2 && e.startsWith("'") && e.endsWith("'") && e.indexOf("'", 1) === e.length - 1) || /^'([^']|'')*'$/s.test(e);
+const isStringLiteral = (e: string) => /^'([^']|'')*'$/s.test(e);
 const isLiteral = (e: string) => isStringLiteral(e) || /^-?\d+(\.\d+)?$/.test(e) || /^(NULL|TRUE|FALSE)$/i.test(e);
 
 /** The operators of stage 1 (PL/SQL and SQL expressions), as in plmut. */
@@ -529,12 +528,8 @@ class Finder {
           this.point('SUB', 'bool', n, env, 'sql', '', [this.text(n.kids[0])]);
         }
         break;
-      case 'pred':
-        if (env.ctx === 'sql') this.sub(n, parent, env);
-        break;
-      case 'handler':
-        this.exc(n, env);
-        break;
+      case 'pred': if (env.ctx === 'sql') this.sub(n, parent, env); break;
+      case 'handler': this.exc(n, env); break;
       case 'branch':
         if (n.name === 'if') {
           const [cond, seq] = n.kids;
@@ -543,27 +538,13 @@ class Finder {
           return;
         }
         break;
-      case 'range':
-        if (n.name === '') this.curBounds(n, env);
-        break;
-      case 'cmp':
-        this.ror(n, env);
-        break;
-      case 'logic':
-        this.lcr(n, env);
-        break;
-      case 'bin':
-        this.aor(n, parent, env);
-        break;
-      case 'isnull':
-        this.nulCondition(n, env);
-        break;
-      case 'call':
-        this.callOps(n, env);
-        break;
-      case 'name':
-        this.curAttribute(n, env);
-        break;
+      case 'range': if (n.name === '') this.curBounds(n, env); break;
+      case 'cmp': this.ror(n, env); break;
+      case 'logic': this.lcr(n, env); break;
+      case 'bin': this.aor(n, parent, env); break;
+      case 'isnull': this.nulCondition(n, env); break;
+      case 'call': this.callOps(n, env); break;
+      case 'name': this.curAttribute(n, env); break;
     }
     if (n.k === 'sql' || n.k === 'query') {
       // UNION ALL blocks (views, cursor declarations) switch the points of their own select list in
@@ -595,21 +576,9 @@ class Finder {
    * no mutants of its own and expressions around it stay derivable. Undefined without keys.
    */
   private groupedRanges(q: Node): [number, number][] | undefined {
-    const nested = q.kids.filter((k) => k.k === 'query' || k.k === 'sql');
     const [qa, end] = this.bare(q);
-    const base = qa - q.a;
     const top: number[] = [];
-    let d = 0;
-    for (let k = q.a; k < q.b; k++) {
-      const r = nested.find((x) => x.a <= k && k < x.b);
-      if (r) {
-        k = r.b - 1;
-        continue;
-      }
-      if (this.t[k].text === '(') d++;
-      else if (this.t[k].text === ')') d--;
-      else if (d === base) top.push(k);
-    }
+    this.ownTokens(q, (k, d) => d === qa - q.a && top.push(k));
     const ENDS = new Set(['HAVING', 'ORDER', 'UNION', 'INTERSECT', 'MINUS', 'EXCEPT', 'FETCH', 'OFFSET', 'WINDOW', 'MODEL', 'FOR', 'LOG', ';']);
     const split = (a: number, b: number): [number, number][] => {
       const out: [number, number][] = [];
@@ -645,19 +614,13 @@ class Finder {
       }
       return [kw + 2, to] as [number, number];
     };
-    for (let i = 0; i < top.length; i++) {
-      if (this.t[top[i]].up === 'GROUP' && this.t[top[i + 1]]?.up === 'BY') flatten(...listAfter(top[i]));
-    }
-    const distinct = top.some((k, i) => this.t[k].up === 'SELECT' && ['DISTINCT', 'UNIQUE'].includes(this.t[top[i + 1]]?.up));
-    if (distinct) {
-      for (let i = 0; i < top.length; i++) {
-        if (this.t[top[i]].up === 'ORDER' && this.t[top[i + 1]]?.up === 'BY') {
-          for (const [x, y] of split(...listAfter(top[i]))) {
-            let e = y;
-            while (e > x + 1 && ['ASC', 'DESC', 'NULLS', 'FIRST', 'LAST'].includes(this.t[e - 1].up)) e--;
-            keys.push([x, e]);
-          }
-        }
+    const after = (kw: string, next: string[]) => top.filter((k, i) => this.t[k].up === kw && next.includes(this.t[top[i + 1]]?.up));
+    for (const k of after('GROUP', ['BY'])) flatten(...listAfter(k));
+    if (after('SELECT', ['DISTINCT', 'UNIQUE']).length) {
+      for (const [x, y] of after('ORDER', ['BY']).flatMap((k) => split(...listAfter(k)))) {
+        let e = y;
+        while (e > x + 1 && ['ASC', 'DESC', 'NULLS', 'FIRST', 'LAST'].includes(this.t[e - 1].up)) e--;
+        keys.push([x, e]);
       }
     }
     // significant tokens: qualifiers (x. before a name) left out
@@ -1084,28 +1047,31 @@ class Finder {
 
   /** Token ranges [a, b) of the select lists of a query (its own, not those of nested queries). */
   private selectLists(q: Node): [number, number][] {
-    const nested = q.kids.filter((k) => k.k === 'query' || k.k === 'sql');
     const out: [number, number][] = [];
-    let d = 0;
     let start = -1;
+    this.ownTokens(q, (k, d) => {
+      const x = this.t[k];
+      if (x.kind !== 'ident' || d !== (this.t[q.a].text === '(' ? 1 : 0)) return;
+      if (x.up === 'SELECT') start = k + 1;
+      else if (start >= 0 && ['FROM', 'INTO', 'BULK'].includes(x.up)) {
+        out.push([start, k]);
+        start = -1;
+      }
+    });
+    return out;
+  }
+
+  /** Calls f with every token of q outside its nested queries but parentheses, and the parenthesis depth there. */
+  private ownTokens(q: Node, f: (k: number, depth: number) => void): void {
+    const nested = q.kids.filter((k) => k.k === 'query' || k.k === 'sql');
+    let d = 0;
     for (let k = q.a; k < q.b; k++) {
       const r = nested.find((x) => x.a <= k && k < x.b);
-      if (r) {
-        k = r.b - 1;
-        continue;
-      }
-      const x = this.t[k];
-      if (x.kind === 'op' && x.text === '(') d++;
-      else if (x.kind === 'op' && x.text === ')') d--;
-      else if (x.kind === 'ident' && d === (this.t[q.a].text === '(' ? 1 : 0)) {
-        if (x.up === 'SELECT') start = k + 1;
-        else if (start >= 0 && ['FROM', 'INTO', 'BULK'].includes(x.up)) {
-          out.push([start, k]);
-          start = -1;
-        }
-      }
+      if (r) k = r.b - 1;
+      else if (this.t[k].text === '(') d++;
+      else if (this.t[k].text === ')') d--;
+      else f(k, d);
     }
-    return out;
   }
 
   private stmt(n: Node, env: Env) {
@@ -1114,11 +1080,7 @@ class Finder {
       if (!this.inConditional(this.t[n.at!].end)) this.loops.push({ unit: this.unit, at });
     }
     // SBR: simple statements; RETURN, NULL and control flow stay
-    let cat = '';
-    if (this.raises(n)) cat = 'fehlerpfad';
-    if (sbrTarget(n)) {
-      this.point('SBR', 'stmt', n, env, 'plsql', cat, ['NULL;']);
-    }
+    if (sbrTarget(n)) this.point('SBR', 'stmt', n, env, 'plsql', this.raises(n) ? 'fehlerpfad' : '', ['NULL;']);
   }
 
   /** RAISE or RAISE_APPLICATION_ERROR (a statement). */
@@ -1192,16 +1154,10 @@ class Finder {
       repl = ['TRUE', 'FALSE'];
     }
     let equivalent: string | undefined;
-    if (right === '0' && NON_NEGATIVE.test(left, env.ctx === 'plsql')) equivalent = EQUIV_ZERO_RIGHT[op];
-    if (left === '0' && NON_NEGATIVE.test(right, env.ctx === 'plsql')) equivalent = EQUIV_ZERO_LEFT[op];
-    const mutants: string[] = [];
-    for (const r of repl) {
-      if (r === equivalent) {
-        this.skipped++;
-        continue;
-      }
-      mutants.push(r === 'TRUE' || r === 'FALSE' ? r : before + r + after);
-    }
+    if (right === '0' && nonNegative(left, env.ctx === 'plsql')) equivalent = EQUIV_ZERO_RIGHT[op];
+    if (left === '0' && nonNegative(right, env.ctx === 'plsql')) equivalent = EQUIV_ZERO_LEFT[op];
+    if (equivalent && repl.includes(equivalent)) this.skipped++;
+    const mutants = repl.filter((r) => r !== equivalent).map((r) => (r === 'TRUE' || r === 'FALSE' ? r : before + r + after));
     this.point('ROR', 'bool', c, env, env.ctx, env.guard ? 'pruefung' : '', mutants);
   }
 
