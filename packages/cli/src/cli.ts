@@ -2,19 +2,19 @@
 /**
  * plgauge – coverage and mutation testing for PL/SQL
  *
- *   plgauge coverage --config plcov.json [--out report]  measure coverage, write report ("run" is the old name)
- *   plgauge coverage [dir] --db oracle://…               same for a project with plgauge.json/plmut.json (its units, its tests)
+ *   plgauge coverage --config coverage-config.json [--out report]  measure coverage, write report ("run" is the old name)
+ *   plgauge coverage [dir] --db oracle://…               same for a project with plgauge.json (its units, its tests)
  *   plgauge instrument <file.sql> [--no-sql]             print instrumented source (offline)
- *   plgauge deploy <file.sql ...> --config plcov.json    run SQL*Plus-style scripts (demo setup)
+ *   plgauge deploy <file.sql ...> --config coverage-config.json    run SQL*Plus-style scripts (demo setup)
  *   plgauge report <coverage.json> [--mutation run.json] re-render HTML from saved JSON; with mutation results: joint report
  *   plgauge export <coverage.json> [--format F] [--src dir] [--out file]
- *                                                       exchange format plcov-coverage/1 (json) or for CI:
+ *                                                       exchange format plgauge-coverage/1 (json) or for CI:
  *                                                       cobertura, sonar, lcov, junit; --src maps objects to files
- *   plgauge merge a.json b.json … --out merged.json      merge runs (plcov-coverage/1)
+ *   plgauge merge a.json b.json … --out merged.json      merge runs (plgauge-coverage/1)
  *   plgauge check <coverage.json|run.json> --min-stmt N --min-branch N --min-cond N --min-mcdc N --min-score N
  *                                                       CI thresholds; exit code 3 if one is missed
- *   plgauge corpus <dir ...> [--db plcov.json]           robustness check on a corpus of PL/SQL files
- *   plgauge restore --config plcov.json [--list]         put back code left changed by a killed run (journal)
+ *   plgauge corpus <dir ...> [--db coverage-config.json]           robustness check on a corpus of PL/SQL files
+ *   plgauge restore --config coverage-config.json [--list]         put back code left changed by a killed run (journal)
  *   plgauge mutate run [dir] [--mode schema|naive] …     mutation testing of a project with plgauge.json
  *        --diff origin/main                             only mutants on lines changed since the merge base (also coverage, check)
  *   plgauge mutate points|schema [dir]                   list mutants / print the schema rewrite (offline)
@@ -59,7 +59,7 @@ const flag = (name: string) => {
 /** A coverage JSON of either kind as exchange format. */
 function loadExport(file: string): CoverageExport {
   const j = JSON.parse(readFileSync(file, 'utf8'));
-  return j.format === 'plcov-coverage/1' ? (j as CoverageExport) : toCoverageExport(j as RunReport);
+  return j.format === 'plgauge-coverage/1' ? (j as CoverageExport) : toCoverageExport(j as RunReport);
 }
 
 /** A numeric option: undefined if absent; a value that is no number stops with a message (NaN would pass every check). */
@@ -101,7 +101,7 @@ function scoreGate(results: { status: string }[], min: number | undefined, abort
 function loadConfig(path: string | undefined): RunConfig {
   if (!path) throw new Error('--config fehlt');
   const cfg = JSON.parse(readFileSync(path, 'utf8')) as RunConfig;
-  cfg.password = process.env.PLGAUGE_PASSWORD ?? process.env.PLCOV_PASSWORD ?? cfg.password;
+  cfg.password = process.env.PLGAUGE_PASSWORD ?? cfg.password;
   return cfg;
 }
 
@@ -110,19 +110,19 @@ async function main() {
     case 'coverage':
     case 'run': {
       const configFile = opt('config');
-      const db = opt('db') ?? process.env.PLMUT_DB?.split(',')[0];
+      const db = opt('db') ?? process.env.PLGAUGE_DB?.split(',')[0];
       const skipInstall = flag('skip-install');
       const th = thresholds();
       const diffRef = opt('diff');
       const src = opt('src');
-      const out = resolve(opt('out') ?? 'plcov-report');
+      const out = resolve(opt('out') ?? 'plgauge-report');
       const project = configFile || !db ? undefined : args.shift() ?? '.';
       const cfg = project === undefined ? loadConfig(configFile) : await projectCoverageConfig(project, db!, !skipInstall, (m) => console.error(m));
       const report = await runCoverage(cfg);
       let exp = toCoverageExport(report);
       mkdirSync(out, { recursive: true });
       writeFileSync(join(out, 'coverage.json'), JSON.stringify(report, null, 1));
-      writeFileSync(join(out, 'plcov-coverage.json'), JSON.stringify(exp, null, 1));
+      writeFileSync(join(out, 'plgauge-coverage.json'), JSON.stringify(exp, null, 1));
       writeFileSync(join(out, 'index.html'), renderHtml(report));
       console.error(`Bericht: ${join(out, 'index.html')}`);
       if (!report.equivalent) {
@@ -147,7 +147,7 @@ async function main() {
     case 'report': {
       const file = args.shift();
       if (!file) throw new Error('coverage.json fehlt');
-      const out = resolve(opt('out') ?? 'plcov-report');
+      const out = resolve(opt('out') ?? 'plgauge-report');
       const mutation = opt('mutation');
       const report = JSON.parse(readFileSync(file, 'utf8')) as RunReport;
       mkdirSync(out, { recursive: true });
@@ -162,7 +162,7 @@ async function main() {
       const src = opt('src');
       const exp = loadExport(file);
       const map = src ? sourceMap(sqlFiles(src), (p) => relative(process.cwd(), p)) : undefined;
-      const ext: Record<string, string> = { json: 'plcov-coverage.json', cobertura: 'cobertura.xml', sonar: 'sonar-coverage.xml', lcov: 'lcov.info', junit: 'junit.xml' };
+      const ext: Record<string, string> = { json: 'plgauge-coverage.json', cobertura: 'cobertura.xml', sonar: 'sonar-coverage.xml', lcov: 'lcov.info', junit: 'junit.xml' };
       if (!ext[format]) throw new Error(`unbekanntes Format ${format}: ${Object.keys(ext).join(', ')}`);
       const out = resolve(opt('out') ?? ext[format]);
       const text = format === 'json' ? JSON.stringify(exp, null, 1) : format === 'cobertura' ? toCobertura(exp, map)
@@ -176,7 +176,7 @@ async function main() {
       break;
     }
     case 'merge': {
-      const out = resolve(opt('out') ?? 'plcov-coverage.json');
+      const out = resolve(opt('out') ?? 'plgauge-coverage.json');
       if (args.length < 2) throw new Error('merge braucht mindestens zwei Dateien');
       const m = mergeExports(args.splice(0).map(loadExport));
       writeFileSync(out, JSON.stringify(m, null, 1));
@@ -268,7 +268,7 @@ async function main() {
       const opSet = ops && ops !== 'all' ? new Set(ops.split(',').map((o) => o.trim().toUpperCase())) : undefined;
       const sampleN = numOpt('sample') ?? 0;
       const seed = numOpt('seed') ?? 1;
-      const db = opt('db') ?? process.env.PLMUT_DB ?? '';
+      const db = opt('db') ?? process.env.PLGAUGE_DB ?? '';
       const mode = (opt('mode') ?? 'schema') as 'schema' | 'naive';
       const factor = numOpt('timeout-factor') ?? 5;
       if (factor <= 0) throw new Error('--timeout-factor muss größer als 0 sein');
@@ -321,7 +321,7 @@ async function main() {
     case 'crosscheck': {
       const cov = opt('coverage');
       const mut = opt('mutation');
-      if (!cov || !mut) throw new Error('Verwendung: plgauge crosscheck --coverage plcov-coverage.json --mutation run.json');
+      if (!cov || !mut) throw new Error('Verwendung: plgauge crosscheck --coverage plgauge-coverage.json --mutation run.json');
       const idx = new CoverageIndex(JSON.parse(readFileSync(cov, 'utf8')) as CoverageExport);
       const res = (JSON.parse(readFileSync(mut, 'utf8')).results ?? []) as LinkedResult[];
       if (!res.some((r) => r.coveredBy)) throw new Error('Mutationslauf ohne aufgezeichnete Tests (Schema-Modus von plgauge nötig)');
@@ -333,7 +333,7 @@ async function main() {
     case 'restore': {
       const configFile = opt('config');
       // every database of a mutation run with several workers (each keeps its own journal)
-      const dbs = (opt('db') ?? process.env.PLMUT_DB ?? '').split(',').map((u) => u.trim()).filter(Boolean);
+      const dbs = (opt('db') ?? process.env.PLGAUGE_DB ?? '').split(',').map((u) => u.trim()).filter(Boolean);
       const fromUrls = !configFile && dbs.length > 0;
       const cfgs: (ConnectConfig & Partial<RunConfig>)[] = fromUrls ? dbs.map((u) => parseDbUrl(u)) : [loadConfig(configFile)];
       const listOnly = flag('list');

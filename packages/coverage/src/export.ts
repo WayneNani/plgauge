@@ -1,5 +1,5 @@
 /**
- * Exchange format "plcov-coverage/1": per-test coverage for other tools (e.g. plmut).
+ * Exchange format "plgauge-coverage/1": per-test coverage for other tools (e.g. the oracle mode of plgauge mutate).
  *
  * Coordinates: lines and columns are 1-based and refer to the unit's source as stored in
  * ALL_SOURCE (line 1 = "package body …", without CREATE OR REPLACE). The post-processed text
@@ -15,7 +15,7 @@ import type { RunReport } from './run.js';
 import type { Span } from './model.js';
 
 export interface CoverageExport {
-  format: 'plcov-coverage/1';
+  format: 'plgauge-coverage/1';
   generated: string;
   database: string;
   schema: string;
@@ -53,7 +53,7 @@ const range = (s: Span): Range => ({ line: s.line, col: s.col, endLine: s.endLin
 
 export function toCoverageExport(r: RunReport): CoverageExport {
   return {
-    format: 'plcov-coverage/1',
+    format: 'plgauge-coverage/1',
     generated: r.generated,
     database: r.database,
     schema: r.schema,

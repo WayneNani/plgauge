@@ -38,7 +38,7 @@ END h;
     "LCR: k = 'A' OR k = 'B' → TRUE",
     "LCR: k = 'A' OR k = 'B' → k = 'A'",
     "LCR: k = 'A' OR k = 'B' → k = 'B'",
-    "RET:  → RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');",
+    "RET:  → RAISE_APPLICATION_ERROR(-20998, 'plgauge: RET');",
     'RET:  → RETURN NULL;',
     'ROR: LENGTH(s) > 0 → FALSE',
     'ROR: LENGTH(s) > 0 → LENGTH(s) >= 0',

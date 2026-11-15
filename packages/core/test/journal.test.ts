@@ -1,5 +1,5 @@
 /**
- * Restore journal against a real database (skipped unless PLCOV_DB is set):
+ * Restore journal against a real database (skipped unless PLGAUGE_COV_DB is set):
  * a changed object whose run "died" (no restoreAll) is put back from the journal.
  */
 import { test } from 'node:test';
@@ -7,10 +7,10 @@ import assert from 'node:assert/strict';
 import oracledb from 'oracledb';
 import { ensureJournal, journalEntries, loadObject, replaceSource, replaceSourceDetailed, restoreAll, restoreJournal, viewFromDictionary, viewQuery } from '@plgauge/core';
 
-const db = process.env.PLCOV_DB;
+const db = process.env.PLGAUGE_COV_DB;
 const m = db ? /^([^/]+)\/([^@]+)@(.+)$/.exec(db) : null;
 
-test('the journal restores code left changed by a killed run', { skip: !m && 'PLCOV_DB not set' }, async () => {
+test('the journal restores code left changed by a killed run', { skip: !m && 'PLGAUGE_COV_DB not set' }, async () => {
   const conn = await oracledb.getConnection({ user: m![1], password: m![2], connectString: m![3] });
   try {
     const owner = m![1].toUpperCase();
@@ -62,7 +62,7 @@ const withConn = async (f: (conn: oracledb.Connection, owner: string) => Promise
 };
 const quiet = (out: string[]) => (s: string) => out.push(s);
 
-test('a dead run\'s view is restored, a view changed since keeps the newer text', { skip: !m && 'PLCOV_DB not set' }, async () => {
+test('a dead run\'s view is restored, a view changed since keeps the newer text', { skip: !m && 'PLGAUGE_COV_DB not set' }, async () => {
   await withConn(async (conn, owner) => {
     const text = async () => (await conn.execute<[string]>(`select text from user_views where view_name = 'PLGAUGE_JV'`)).rows![0][0];
     const mine = async () => (await journalEntries(conn)).filter((e) => e.name === 'PLGAUGE_JV');
@@ -89,7 +89,7 @@ test('a dead run\'s view is restored, a view changed since keeps the newer text'
   });
 });
 
-test('a unit dropped after the dead run is not created again', { skip: !m && 'PLCOV_DB not set' }, async () => {
+test('a unit dropped after the dead run is not created again', { skip: !m && 'PLGAUGE_COV_DB not set' }, async () => {
   await withConn(async (conn, owner) => {
     await conn.execute(`create or replace function plgauge_journal_gone return number is begin return 1; end;`);
     const obj = await loadObject(conn, owner, 'PLGAUGE_JOURNAL_GONE', 'FUNCTION');
@@ -104,7 +104,7 @@ test('a unit dropped after the dead run is not created again', { skip: !m && 'PL
   });
 });
 
-test('a unit keeps its PLSQL_WARNINGS through change and restore', { skip: !m && 'PLCOV_DB not set' }, async () => {
+test('a unit keeps its PLSQL_WARNINGS through change and restore', { skip: !m && 'PLGAUGE_COV_DB not set' }, async () => {
   await withConn(async (conn, owner) => {
     const warnings = async () => (await conn.execute<[string]>(`select plsql_warnings from user_plsql_object_settings where name = 'PLGAUGE_JOURNAL_WARN'`)).rows![0][0];
     try {
@@ -122,7 +122,7 @@ test('a unit keeps its PLSQL_WARNINGS through change and restore', { skip: !m &&
   });
 });
 
-test('viewFromDictionary rebuilds read-only, check-option and invoker-rights views as they were', { skip: !m && 'PLCOV_DB not set' }, async () => {
+test('viewFromDictionary rebuilds read-only, check-option and invoker-rights views as they were', { skip: !m && 'PLGAUGE_COV_DB not set' }, async () => {
   await withConn(async (conn, owner) => {
     const views = {
       PLGAUGE_JV1: `select 1 a from dual with read only`,
@@ -143,7 +143,7 @@ test('viewFromDictionary rebuilds read-only, check-option and invoker-rights vie
   });
 });
 
-test('a dead run\'s view mutant written with SELECT * is restored (the dictionary expands it)', { skip: !m && 'PLCOV_DB not set' }, async () => {
+test('a dead run\'s view mutant written with SELECT * is restored (the dictionary expands it)', { skip: !m && 'PLGAUGE_COV_DB not set' }, async () => {
   await withConn(async (conn, owner) => {
     const text = async () => (await conn.execute<[string]>(`select text from user_views where view_name = 'PLGAUGE_JS'`)).rows![0][0];
     const mine = async () => (await journalEntries(conn)).filter((e) => e.name === 'PLGAUGE_JS');
@@ -168,7 +168,7 @@ test('a dead run\'s view mutant written with SELECT * is restored (the dictionar
   });
 });
 
-test('a compile rejected at once leaves no journal entry when the object was never changed', { skip: !m && 'PLCOV_DB not set' }, async () => {
+test('a compile rejected at once leaves no journal entry when the object was never changed', { skip: !m && 'PLGAUGE_COV_DB not set' }, async () => {
   await withConn(async (conn, owner) => {
     const mine = async () => (await journalEntries(conn)).filter((e) => e.name === 'PLGAUGE_JU');
     try {
@@ -189,7 +189,7 @@ test('a compile rejected at once leaves no journal entry when the object was nev
   });
 });
 
-test('a disabled trigger (DISABLE written in its file) stays disabled and valid, a dead run\'s mutant of it is restored', { skip: !m && 'PLCOV_DB not set' }, async () => {
+test('a disabled trigger (DISABLE written in its file) stays disabled and valid, a dead run\'s mutant of it is restored', { skip: !m && 'PLGAUGE_COV_DB not set' }, async () => {
   await withConn(async (conn, owner) => {
     const state = async () => (await conn.execute<[string, string]>(`select t.status, o.status from user_triggers t join user_objects o on o.object_name = t.trigger_name and o.object_type = 'TRIGGER' where t.trigger_name = 'PLGAUGE_JT'`)).rows![0];
     const mine = async () => (await journalEntries(conn)).filter((e) => e.name === 'PLGAUGE_JT');
@@ -213,7 +213,7 @@ test('a disabled trigger (DISABLE written in its file) stays disabled and valid,
   });
 });
 
-test('a view dropped after a run died mid-compile (pending) is not created again', { skip: !m && 'PLCOV_DB not set' }, async () => {
+test('a view dropped after a run died mid-compile (pending) is not created again', { skip: !m && 'PLGAUGE_COV_DB not set' }, async () => {
   await withConn(async (conn, owner) => {
     await conn.execute(`create or replace view plgauge_jp as select 1 a from dual`);
     const obj = await loadObject(conn, owner, 'PLGAUGE_JP', 'VIEW');
@@ -228,7 +228,7 @@ test('a view dropped after a run died mid-compile (pending) is not created again
   });
 });
 
-test('a unit compiled for debugging stays so through change and restore', { skip: !m && 'PLCOV_DB not set' }, async () => {
+test('a unit compiled for debugging stays so through change and restore', { skip: !m && 'PLGAUGE_COV_DB not set' }, async () => {
   await withConn(async (conn, owner) => {
     const debug = async () => (await conn.execute<[string]>(`select plsql_debug from user_plsql_object_settings where name = 'PLGAUGE_JOURNAL_DBG'`)).rows![0][0];
     try {
@@ -246,7 +246,7 @@ test('a unit compiled for debugging stays so through change and restore', { skip
   });
 });
 
-test('a unit compiled with implicit BOOLEAN conversion keeps it through change and restore', { skip: !m && 'PLCOV_DB not set' }, async () => {
+test('a unit compiled with implicit BOOLEAN conversion keeps it through change and restore', { skip: !m && 'PLGAUGE_COV_DB not set' }, async () => {
   await withConn(async (conn, owner) => {
     const state = async () => (await conn.execute<[string, string]>(`select s.plsql_implicit_conversion_bool, o.status from user_plsql_object_settings s join user_objects o on o.object_name = s.name and o.object_type = s.type where s.name = 'PLGAUGE_JOURNAL_ICB'`)).rows![0];
     try {

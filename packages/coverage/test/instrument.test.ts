@@ -152,7 +152,7 @@ test('MC/DC: detects independence pairs and proposes the missing vector', () => 
   assert.deepEqual(res.metrics.branch, { covered: 2, total: 2 });
 });
 
-// Constructs that IslandSQL 0.26 nests wrongly (reported by plmut); plcov must split them correctly.
+// Constructs that IslandSQL 0.26 nests wrongly (reported by plmut); the instrumenter must split them correctly.
 test('regression corpus: tricky boolean structures', () => {
   const cases: [string, string[]][] = [
     ['x between a and b and y', ['x between a and b', 'y']],

@@ -1,4 +1,4 @@
-package body plcov_torture is
+package body plgauge_torture is
 
   function side(p boolean) return boolean is
   begin
@@ -101,4 +101,4 @@ package body plcov_torture is
       || ',' || loops(7) || ':' || loops(0);
   end;
 
-end plcov_torture;
+end plgauge_torture;

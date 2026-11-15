@@ -1,5 +1,5 @@
 /**
- * Coverage for CI systems, built from the exchange format plcov-coverage/1 (so merged
+ * Coverage for CI systems, built from the exchange format plgauge-coverage/1 (so merged
  * runs work the same): Cobertura XML, SonarQube Generic Coverage, LCOV and JUnit.
  *
  * Cobertura, Sonar and LCOV know lines and branches only. Statement lines become lines,
@@ -222,7 +222,7 @@ export function mergeExports(list: CoverageExport[]): CoverageExport {
     if (cur?.[i]) Object.assign(p, { hits: p.hits + cur[i].hits, tests: uniq([...p.tests, ...cur[i].tests]) });
   });
   for (const e of list) {
-    if (e.format !== 'plcov-coverage/1') throw new Error(`unbekanntes Format ${e.format}`);
+    if (e.format !== 'plgauge-coverage/1') throw new Error(`unbekanntes Format ${e.format}`);
     const m = remap(e);
     const mi = (ix: number[]) => ix.map((k) => m[k]);
     for (const o of e.objects) {

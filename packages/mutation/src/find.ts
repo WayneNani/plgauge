@@ -475,7 +475,7 @@ class Finder {
       }
       case 'decl': {
         // a constant whose name gives a size (VARCHAR2(c_len)) must stay static: a switch in its
-        // value (it reads plmut$a) would make every such use fail to compile (PLS-00491)
+        // value (it reads plgauge$a) would make every such use fail to compile (PLS-00491)
         const name = this.t[n.a + 1]?.up === 'CONSTANT' ? this.norm(n.a) : undefined;
         // (the whole text: a size may come in a $IF branch the preprocessing left out)
         this.fixed ??= fixedConstants(this.orig);
@@ -903,11 +903,11 @@ class Finder {
       map.push(to);
     }
     let prefix: string;
-    if (/^\s*\(?\s*(SELECT|WITH)\b/i.test(content)) prefix = 'OPEN plmut$c FOR ';
+    if (/^\s*\(?\s*(SELECT|WITH)\b/i.test(content)) prefix = 'OPEN plgauge$c FOR ';
     else if (/^\s*(INSERT|UPDATE|DELETE|MERGE)\b/i.test(content)) prefix = '';
     else return;
     if (/;\s*$/.test(content)) return;
-    const head = `CREATE PROCEDURE plmut$dyn IS BEGIN\n${prefix}`;
+    const head = `CREATE PROCEDURE plgauge$dyn IS BEGIN\n${prefix}`;
     const text = `${head}${content};\nEND;\n`;
     const inner = new Finder(this.path, text).run();
     if (inner.errors.length || inner.units.length !== 1) return;
@@ -1099,7 +1099,7 @@ class Finder {
     const repl = sp.op === 'FUNCTION' && !bare ? 'RETURN NULL;' : 'RETURN;';
     this.points.push({
       unit: this.unit, op: 'RET', kind: 'insert', sub: env.sub, ctx: 'plsql', cat: 'funktion', start: at, end: at, orig: '',
-      mutants: [` ${repl}`, " RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');"],
+      mutants: [` ${repl}`, " RAISE_APPLICATION_ERROR(-20998, 'plgauge: RET');"],
       ...(env.naiveOnly ? { naiveOnly: env.naiveOnly } : {}),
     });
   }

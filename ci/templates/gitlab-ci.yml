@@ -18,7 +18,7 @@ plsql:
     - git clone --depth 1 --branch "$PLGAUGE_REF" "$PLGAUGE_REPO" /opt/plgauge && (cd /opt/plgauge && npm ci)
     - export PLGAUGE=/opt/plgauge/bin/plgauge
     # the database container runs next to the job: reach it through the dind host
-    - export PLMUT_DB=$(/opt/plgauge/ci/setup-db.sh | tail -1 | sed 's/127.0.0.1/docker/')
+    - export PLGAUGE_DB=$(/opt/plgauge/ci/setup-db.sh | tail -1 | sed 's/127.0.0.1/docker/')
   script:
     - $PLGAUGE coverage . --out coverage --min-branch 70 --min-stmt 80
     - $PLGAUGE export coverage/coverage.json --format cobertura --src . --out coverage/cobertura.xml

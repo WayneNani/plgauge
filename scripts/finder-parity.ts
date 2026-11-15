@@ -33,7 +33,8 @@ const ts = findPoints(java.map((f) => join(root, f.path))).map((f) => {
 const ms = Date.now() - t0;
 /** Java left methods of type bodies and standalone subprograms unnamed, and restarted names below them. */
 const subImproved = (j: string, t: string) => j === '' || t.endsWith('.' + j);
-const key = (p: P) => `${p.start}|${p.end}|${p.op}|${p.mutants.join('§')}`;
+// the frozen output still carries the old tool name in the RET message
+const key = (p: P) => `${p.start}|${p.end}|${p.op}|${p.mutants.join('§').replaceAll("'plmut: RET'", "'plgauge: RET'")}`;
 const stats = { same: 0, subNamed: 0, attr: 0, javaOnly: 0, tsOnly: 0, unitsDiff: 0, loopsDiff: 0, errJ: 0, errT: 0, skippedJ: 0, skippedT: 0 };
 const byCat = new Map<string, { n: number; ex: string[] }>();
 const note = (cat: string, ex: string) => {

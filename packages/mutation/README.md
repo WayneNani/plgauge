@@ -85,14 +85,14 @@ Bind-Platzhalter verlören (`USING` übergibt ihn weiter, sonst ORA-01006). Der 
 (`CASE aktiv WHEN 17 THEN '<Variante>' … ELSE '<Original>' END`, die Kopien eines Literals zusammen höchstens 256 KB);
 jede Variante ist eine eigene Anweisung, die erst beim Ausführen geparst wird, also leidet kein Plan.
 
-Views: `CREATE VIEW` in einer Datei unter `mutate` wird mutiert wie das SQL in PL/SQL, mit beiden Stufen. Ausgenommen sind Views mit INSTEAD-OF-Trigger: `CREATE OR REPLACE VIEW` löscht den Trigger, und das Zurückspielen des Originals bringt ihn nicht wieder. Was `CREATE OR REPLACE` sonst verliert, stellt jedes Kompilieren wieder her: Tabellen- und Spaltenkommentare einer View, den Status DISABLED eines Triggers; Materialized Views auf einer zurückgespielten View werden neu kompiliert. Im Schema-Modus stehen die Varianten mehrzeiliger Anweisungen und Ausdrücke vor dem Original: Zeilennummern (`$$PLSQL_LINE`, Fehler-Backtraces) verschieben sich dahinter; Tests, die sie prüfen, laufen mit `--mode naive`. Stellen in SQL-Makros (`SQL_MACRO`: ihr Rumpf läuft nur beim harten Parsen der aufrufenden Anweisung) und in RESULT_CACHE-Funktionen laufen einzeln (der Ergebnis-Cache gilt für alle Sitzungen und überdauert das Umschalten); Mutanten in Code, den eine solche Funktion aufruft, kann ihr Cache im Schema-Modus verdecken. `plmut_ctl` trägt `PRAGMA RESTRICT_REFERENCES(… TRUST)`, damit Einheiten mit diesem Pragma geschaltet werden können. Eine View, die sich ohne DBMS_METADATA nicht originalgetreu nachbauen lässt (Editioning-, Objekt-, Duality-View, benannte Constraints, unsichtbare Spalten), wird nicht angefasst. Das Schema
+Views: `CREATE VIEW` in einer Datei unter `mutate` wird mutiert wie das SQL in PL/SQL, mit beiden Stufen. Ausgenommen sind Views mit INSTEAD-OF-Trigger: `CREATE OR REPLACE VIEW` löscht den Trigger, und das Zurückspielen des Originals bringt ihn nicht wieder. Was `CREATE OR REPLACE` sonst verliert, stellt jedes Kompilieren wieder her: Tabellen- und Spaltenkommentare einer View, den Status DISABLED eines Triggers; Materialized Views auf einer zurückgespielten View werden neu kompiliert. Im Schema-Modus stehen die Varianten mehrzeiliger Anweisungen und Ausdrücke vor dem Original: Zeilennummern (`$$PLSQL_LINE`, Fehler-Backtraces) verschieben sich dahinter; Tests, die sie prüfen, laufen mit `--mode naive`. Stellen in SQL-Makros (`SQL_MACRO`: ihr Rumpf läuft nur beim harten Parsen der aufrufenden Anweisung) und in RESULT_CACHE-Funktionen laufen einzeln (der Ergebnis-Cache gilt für alle Sitzungen und überdauert das Umschalten); Mutanten in Code, den eine solche Funktion aufruft, kann ihr Cache im Schema-Modus verdecken. `plgauge_ctl` trägt `PRAGMA RESTRICT_REFERENCES(… TRUST)`, damit Einheiten mit diesem Pragma geschaltet werden können. Eine View, die sich ohne DBMS_METADATA nicht originalgetreu nachbauen lässt (Editioning-, Objekt-, Duality-View, benannte Constraints, unsichtbare Spalten), wird nicht angefasst. Das Schema
 schaltet sie blockweise; Blöcke sind die Abfrage der View, `WITH`-Elemente und Inline-Views in `FROM` (Unterabfragen in
 Bedingungen bleiben in ihrem Block, damit der Optimizer sie weiter in Joins auflösen kann; rekursive `WITH`-Elemente
 sind kein Block). Ein Block mit Mutanten wird zu
 
 ```sql
 SELECT * FROM (<Block>) WHERE NVL(V, '0') NOT IN ('<IDs der Zweige>')
-                          AND (NVL(V, '0') <> '-1' OR (SELECT plmut_ctl.hit(<IDs>) FROM dual) = 0)
+                          AND (NVL(V, '0') <> '-1' OR (SELECT plgauge_ctl.hit(<IDs>) FROM dual) = 0)
 UNION ALL SELECT * FROM (<Block mit Mutant 17>) WHERE V = '17' …
 ```
 
@@ -156,7 +156,7 @@ nicht wiederholt: Das kostete so viel wie der Lauf selbst.
 ## Benutzung
 
 ```bash
-export PLMUT_DB=oracle://user:pw@host:port/service          # mehrere Worker: kommagetrennt
+export PLGAUGE_DB=oracle://user:pw@host:port/service          # mehrere Worker: kommagetrennt
 npx plgauge mutate points examples/shop_pricing              # Mutanten anzeigen, offline
 npx plgauge mutate run examples/shop_pricing --report report.html
 npx plgauge mutate run eval/pljson --mode naive --sample 200 --seed 7 --json naive.json
@@ -165,15 +165,15 @@ npx plgauge mutate compare a.json b.json                     # auch gegen JSON d
 
 Für die CI: `--diff origin/main` (nur Mutanten auf Zeilen, die sich seit der Merge-Basis geändert haben) und
 `--min-score 60` (Exit-Code 3 darunter). Weitere Optionen: `--ops ROR,SBR`, `--timeout-factor 5`, `--skip-install`, `-q`, `--no-confirm`,
-`--coverage plcov-coverage.json` (Orakel-Modus: nur die Tests, die die Anweisung um den Mutanten
+`--coverage plgauge-coverage.json` (Orakel-Modus: nur die Tests, die die Anweisung um den Mutanten
 ausgeführt haben).
-Projektdatei `plgauge.json` (oder `plmut.json`): `install` (Skripte, gelesen wie von SQL*Plus mit Standardeinstellungen:
+Projektdatei `plgauge.json`: `install` (Skripte, gelesen wie von SQL*Plus mit Standardeinstellungen:
 `/` und `RUN` führen die letzte Anweisung aus, auch ein zweites Mal; eine Leerzeile oder `.` beendet die Eingabe von SQL
 ohne Ausführung, außer bei `SET SQLBLANKLINES ON`; `EXIT` beendet das Skript; Substitutionsvariablen – `&x`, `DEFINE` – werden nicht ersetzt), `mutate` (Globs der Dateien),
 `tests` (utPLSQL-Pfade).
 
 Mehrere Schemas: Eine Einheit, die mit Schema geschrieben ist (`CREATE OR REPLACE PACKAGE BODY app_util.calc …`), wird in
-diesem Schema mutiert. Das Laufzeitpaket `plmut_ctl` bleibt beim angemeldeten Benutzer und wird qualifiziert aufgerufen;
+diesem Schema mutiert. Das Laufzeitpaket `plgauge_ctl` bleibt beim angemeldeten Benutzer und wird qualifiziert aufgerufen;
 der Lauf vergibt `EXECUTE` darauf. Rechte wie bei der Coverage (`CREATE ANY PROCEDURE`, `EXECUTE ANY PROCEDURE`). Der
 Kontext für Schleifengrenzen heißt pro Schema anders, so stören sich Läufe verschiedener Benutzer in einer Datenbank
 nicht – solange sie nicht dieselben fremden Einheiten mutieren: Sperre und Journal liegen im Schema des Laufs, ein Lauf
@@ -188,9 +188,9 @@ Coverage und Mutation lesen dieselbe Projektdatei, und die Ergebnisse passen zue
 ```bash
 npx plgauge coverage examples/shop_pricing --out cov          # misst genau die Einheiten des Projekts
 npx plgauge mutate run examples/shop_pricing --json run.json
-npx plgauge crosscheck --coverage cov/plcov-coverage.json --mutation run.json
+npx plgauge crosscheck --coverage cov/plgauge-coverage.json --mutation run.json
 npx plgauge report cov/coverage.json --mutation run.json --out joint
-npx plgauge mutate run examples/shop_pricing --mode naive --coverage cov/plcov-coverage.json
+npx plgauge mutate run examples/shop_pricing --mode naive --coverage cov/plgauge-coverage.json
 ```
 
 - **Gegenprobe** (`crosscheck`): Jeder Test, der im Aufzeichnungslauf einen Mutanten erreicht, muss

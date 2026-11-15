@@ -24,7 +24,7 @@ END;
 `;
 
 const exp = (hitsThen: number, tests: number[]): CoverageExport => ({
-  format: 'plcov-coverage/1', generated: '2026-11-13T00:00:00Z', database: '', schema: 'S', coordinates: 'all_source',
+  format: 'plgauge-coverage/1', generated: '2026-11-13T00:00:00Z', database: '', schema: 'S', coordinates: 'all_source',
   tests: [
     { path: 's.t.a', setup: false, status: 'passed', ms: 3, baselineRuns: 1 },
     { path: 's.t.b', setup: false, status: 'failed', ms: 4, baselineRuns: 1 },

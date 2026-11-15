@@ -1,6 +1,6 @@
 /**
- * Offline stand-in for DBMS_PREPROCESSOR, used when plcov works on files instead of a database
- * (corpus check, `plcov instrument`). Like plmut, it keeps the LAST branch of every
+ * Offline stand-in for DBMS_PREPROCESSOR, used when plgauge works on files instead of a database
+ * (corpus check, `plgauge instrument`). Like plmut, it keeps the LAST branch of every
  * $IF ... $ELSIF ... $ELSE ... $END block and replaces directives and all other branches with
  * spaces, keeping every line break. Offsets, lines and columns therefore stay valid for the file.
  * $ERROR ... $END is blanked completely. In the database flow the real DBMS_PREPROCESSOR is used.

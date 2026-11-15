@@ -8,7 +8,7 @@ import type { CoverageExport } from '@plgauge/coverage';
 import { CoverageIndex, crossCheck, expand, findPoints, splitUnit, unitLineOf, type LinkedResult } from '@plgauge/mutation';
 
 const exp = (statements: { line: number; endLine: number; col?: number; endCol?: number; tests: number[] }[]): CoverageExport => ({
-  format: 'plcov-coverage/1', generated: '', database: '', schema: 'S', coordinates: 'all_source',
+  format: 'plgauge-coverage/1', generated: '', database: '', schema: 'S', coordinates: 'all_source',
   tests: [
     { path: 's.t.a', setup: false, status: 'passed', ms: 1, baselineRuns: 1 },
     { path: 's.t.b', setup: false, status: 'passed', ms: 1, baselineRuns: 1 },

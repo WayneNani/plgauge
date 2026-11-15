@@ -1,7 +1,7 @@
 # @plgauge/coverage – Branch-, Bedingungs- und MC/DC-Coverage für PL/SQL (vormals plcov)
 
 utPLSQL misst Coverage heute über `DBMS_PROFILER` und `DBMS_PLSQL_CODE_COVERAGE` und meldet daraus eine **Zeilen**-Quote.
-plcov ist ein Prototyp, der stattdessen den Quellcode **instrumentiert**, wie JaCoCo oder Istanbul. So misst er Anweisungen, Branches
+plgauge ist ein Prototyp, der stattdessen den Quellcode **instrumentiert**, wie JaCoCo oder Istanbul. So misst er Anweisungen, Branches
 (auch implizite `ELSE`-Zweige), Teilbedingungen (WAHR / FALSCH / **NULL**), MC/DC und Schleifen (0 / 1 / n Durchläufe).
 Als Test-Runner dienen die vorhandenen utPLSQL-Tests.
 
@@ -19,8 +19,8 @@ Gemessen wird dieselbe Testsuite (10 utPLSQL-Tests) auf Oracle AI Database 26ai 
 - `order_pricing`: utPLSQL meldet 100 %, obwohl die Zweige `WHEN 'AT'` und `WHEN 'CH'` nie liefen und
   `if p_weight_kg > 20 then … end if;` (eine Zeile) nie WAHR war. Der Profiler zählt die Zeile schon, wenn nur die Bedingung ausgewertet wird.
 - MC/DC findet fehlende Testfälle und schlägt sie konkret vor, z. B. „`p_vip` = WAHR, `p_amount > 1000` = FALSCH → Ergebnis FALSCH“.
-- `archive_orders`: Der Exception-Handler ist mit `pragma coverage('NOT_FEASIBLE')` markiert. plcov rechnet ihn heraus, utPLSQL zählt ihn als nicht abgedeckt.
-- Alle 10 Tests liefern mit und ohne Instrumentierung dasselbe Ergebnis. plcov prüft das bei jedem Lauf automatisch.
+- `archive_orders`: Der Exception-Handler ist mit `pragma coverage('NOT_FEASIBLE')` markiert. plgauge rechnet ihn heraus, utPLSQL zählt ihn als nicht abgedeckt.
+- Alle 10 Tests liefern mit und ohne Instrumentierung dasselbe Ergebnis. plgauge prüft das bei jedem Lauf automatisch.
 
 ## Schnellstart
 
@@ -37,7 +37,7 @@ docker exec ora23 bash -lc 'cd /tmp/utplsql_source && echo exit | sqlplus -S sys
 
 # 3. Demo-Code und Tests einspielen, messen
 npm install
-npx plgauge deploy --config examples/order_pricing/plcov.json examples/order_pricing/src/*.sql examples/order_pricing/src/*.pks examples/order_pricing/src/*.pkb examples/order_pricing/src/*.prc examples/order_pricing/test/*.pks examples/order_pricing/test/*.pkb
+npx plgauge deploy --config examples/order_pricing/coverage-config.json examples/order_pricing/src/*.sql examples/order_pricing/src/*.pks examples/order_pricing/src/*.pkb examples/order_pricing/src/*.prc examples/order_pricing/test/*.pks examples/order_pricing/test/*.pkb
 npm run demo -- --out examples/order_pricing/report
 ```
 
@@ -47,7 +47,7 @@ Seit der Zusammenführung heißt der Befehl `plgauge` (`npx plgauge …` oder `b
 
 | Befehl | Zweck |
 |---|---|
-| `plgauge coverage --config plcov.json [--out dir]` | Kompletter Lauf: Baseline, utPLSQL-Coverage, Instrumentieren, Testlauf, Wiederherstellen, Bericht |
+| `plgauge coverage --config coverage-config.json [--out dir]` | Kompletter Lauf: Baseline, utPLSQL-Coverage, Instrumentieren, Testlauf, Wiederherstellen, Bericht |
 | `plgauge coverage <projekt> --db oracle://…` | Dasselbe für ein Projekt mit `plgauge.json`: genau dessen Einheiten und Tests |
 | `plgauge instrument datei.sql [--no-sql]` | Zeigt offline, wie instrumentierter Code aussieht |
 | `plgauge report coverage.json [--mutation run.json] [--out dir]` | Bericht neu erzeugen; mit Mutationsergebnissen der gemeinsame Bericht |
@@ -55,11 +55,11 @@ Seit der Zusammenführung heißt der Befehl `plgauge` (`npx plgauge …` oder `b
 | `plgauge merge a.json b.json … --out merged.json` | Läufe zusammenführen (z. B. Unit- und Integrationstests) |
 | `plgauge check datei --min-stmt N --min-branch N --min-cond N --min-mcdc N` | Schwellen für die CI, Exit-Code 3 bei Unterschreitung (auch direkt bei `coverage`) |
 | `--diff origin/main` (bei `coverage`, `check`) | Schwellen nur auf den seit der Merge-Basis geänderten Zeilen |
-| `plgauge corpus verzeichnis… [--db plcov.json]` | Robustheitstest des Parsers auf einem Korpus, optional mit Kompilierprüfung |
-| `plgauge deploy --config plcov.json dateien…` | SQL*Plus-artige Skripte einspielen (für die Demo) |
-| `plgauge restore --config plcov.json [--list]` | Code zurücksetzen, den ein abgebrochener Lauf verändert hinterlassen hat |
+| `plgauge corpus verzeichnis… [--db coverage-config.json]` | Robustheitstest des Parsers auf einem Korpus, optional mit Kompilierprüfung |
+| `plgauge deploy --config coverage-config.json dateien…` | SQL*Plus-artige Skripte einspielen (für die Demo) |
+| `plgauge restore --config coverage-config.json [--list]` | Code zurücksetzen, den ein abgebrochener Lauf verändert hinterlassen hat |
 
-`plcov.json`: `user`, `password` (oder Umgebungsvariable `PLCOV_PASSWORD`), `connectString`, `schema`, `tests` (utPLSQL-Pfade),
+`coverage-config.json`: `user`, `password` (oder Umgebungsvariable `PLGAUGE_PASSWORD`), `connectString`, `schema`, `tests` (utPLSQL-Pfade),
 optional `include` / `exclude` (Regex auf Objektnamen), `sqlProbes` (`"auto"` = ab 23ai), `perTest` (Standard `true`) und
 `baselineRuns` (Standard 2).
 
@@ -86,11 +86,11 @@ für die Prüfung „gleiches Verhalten mit und ohne Instrumentierung“. Abweic
 
 ## Coverage pro Test und Austauschformat
 
-plcov ordnet jeden Treffer dem laufenden utPLSQL-Test zu. Die Zuordnung läuft über `SYS_CONTEXT('UT3_INFO', 'TEST_NAME')`, gelesen einmal pro
+plgauge ordnet jeden Treffer dem laufenden utPLSQL-Test zu. Die Zuordnung läuft über `SYS_CONTEXT('UT3_INFO', 'TEST_NAME')`, gelesen einmal pro
 Anweisungssonde, in einem einzigen `ut_runner.run`. Treffer außerhalb eines Tests (`beforeall`/`afterall`) landen in einem eigenen
 Setup-Eintrag `#owner.package`. Im Bericht zeigt die Trefferzahl einer Zeile per Tooltip die Tests, die sie erreichen.
 
-`plcov-coverage.json` (Format `plcov-coverage/1`) ist für andere Werkzeuge gedacht, z. B. das Mutation-Testing-Projekt plmut:
+`plgauge-coverage.json` (Format `plgauge-coverage/1`) ist für andere Werkzeuge gedacht, z. B. den Orakel-Modus von `plgauge mutate`:
 - **Koordinaten:** wie in ALL_SOURCE, 1-basiert. Zeile 1 ist die Zeile mit dem Typ-Schlüsselwort (`package body …`), ohne `CREATE`.
 - **Tests:** Pfade klein geschrieben (`owner.package.procedure`). Mögliche Status: passed, failed, error, skipped, excluded (schon ohne Instrumentierung rot), flaky (Ergebnis wechselt ohne Instrumentierung) und unknown.
 - **Pro Objekt:**
@@ -155,7 +155,7 @@ cov$.s(1);if cov$.d(1,cov$.o(1) and (cov$.c(1,1,p_vip) and cov$.c(1,2,p_amount >
   (Kompilieren ~50–120 ms, Testlauf). Die Sprache ist für die Performance nicht entscheidend.
 - **Coverage pro Test** kostet zusätzlich etwa 50 % im Lasttest (103–133 ms statt 78–84 ms), weil pro Anweisung einmal `SYS_CONTEXT` gelesen wird.
 - **Datenbank-Overhead:** Probes zählen nur in Package-Speicher (assoziative Arrays mit Ganzzahl-Schlüsseln). Geschrieben wird einmal am
-  Ende per autonomer Transaktion. Im sondenreichsten Test (20 000 Aufrufe einer trivialen Funktion) liegt plcov bei 48–90 ms gegenüber
+  Ende per autonomer Transaktion. Im sondenreichsten Test (20 000 Aufrufe einer trivialen Funktion) liegt plgauge bei 48–90 ms gegenüber
   6 ms ohne und 30–50 ms mit utPLSQL-eigener Coverage. Bei Code mit echtem SQL-Anteil fällt der relative Overhead deutlich kleiner aus.
 - Laufzeit-Package `cov$` wird mit `plsql_optimize_level = 3` kompiliert, wenn erlaubt nativ.
 
@@ -163,7 +163,7 @@ cov$.s(1);if cov$.d(1,cov$.o(1) and (cov$.c(1,1,p_vip) and cov$.c(1,2,p_amount >
 
 ```bash
 npm test                                                   # Parser, Instrumentierung, MC/DC (offline)
-PLCOV_DB=demo/demo@localhost:1521/FREEPDB1 npm test        # zusätzlich Äquivalenztest gegen echte DB
+PLGAUGE_COV_DB=demo/demo@localhost:1521/FREEPDB1 npm test        # zusätzlich Äquivalenztest gegen echte DB
 npm run typecheck
 ```
 
@@ -185,7 +185,7 @@ Laufzeit und Objekte liegen in `schema`.
 
 ## Grenzen
 
-- Treffer aus anderen Sessions: Während des Messlaufs steht der Lauf in `plcov_runs`. Eine andere Session des
+- Treffer aus anderen Sessions: Während des Messlaufs steht der Lauf in `plgauge_runs`. Eine andere Session des
   Schema-Benutzers, die instrumentierten Code ausführt (ein Scheduler-Job, den ein Test startet), zählt unter dem Eintrag
   `#background` und schreibt ihre Treffer beim Abmelden (Trigger `cov$_logoff`, nur während des Laufs vorhanden – den eines abgebrochenen Laufs
   entfernt der nächste Lauf oder `plgauge restore` –, braucht `CREATE TRIGGER`) und alle 1000 Anweisungen. Der Lauf wartet bis zu einer Minute auf laufende Jobs. Sessions anderer

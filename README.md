@@ -19,7 +19,7 @@ Umsetzungsplan: Claude Doc „PL/SQL-Testwerkzeuge – Umsetzungsplan für das g
 | Paket | Inhalt |
 | --- | --- |
 | `packages/core` | Lexer, Präprozessor, Skripte, Datenbank (Objekte laden, kompilieren, wiederherstellen), Wiederherstellungs-Journal, utPLSQL-Lauf |
-| `packages/coverage` | Instrumentierung, Laufzeitpaket `cov$`, Metriken und MC/DC, Export `plcov-coverage/1`, Korpus-Prüfung |
+| `packages/coverage` | Instrumentierung, Laufzeitpaket `cov$`, Metriken und MC/DC, Export `plgauge-coverage/1`, Korpus-Prüfung |
 | `packages/mutation` | Mutation Testing: Stellen-Finder auf dem Kernparser, Schema- und Orakel-Umschreiber, Lauf, Berichte |
 | `packages/report` | HTML-Bericht |
 | `packages/cli` | Befehl `plgauge` |
@@ -33,19 +33,19 @@ Node.js 26 (LTS), eine Oracle-Datenbank 23ai/26ai (Coverage ab 19c) mit utPLSQL 
 
 ```bash
 npm install
-npm test                      # offline; mit PLCOV_DB=user/pw@host:port/service auch gegen die Datenbank
+npm test                      # offline; mit PLGAUGE_COV_DB=user/pw@host:port/service auch gegen die Datenbank
 npm run typecheck
-npx plgauge coverage --config examples/order_pricing/plcov.json --out report
-npx plgauge restore --config examples/order_pricing/plcov.json --list
-export PLMUT_DB=oracle://user:pw@host:port/service
+npx plgauge coverage --config examples/order_pricing/coverage-config.json --out report
+npx plgauge restore --config examples/order_pricing/coverage-config.json --list
+export PLGAUGE_DB=oracle://user:pw@host:port/service
 npx plgauge mutate run examples/shop_pricing --json run.json
-npx plgauge coverage examples/shop_pricing --out cov          # Coverage eines Projekts, ohne plcov.json
+npx plgauge coverage examples/shop_pricing --out cov          # Coverage eines Projekts, ohne coverage-config.json
 npx plgauge report cov/coverage.json --mutation run.json      # gemeinsamer Bericht
-npx plgauge crosscheck --coverage cov/plcov-coverage.json --mutation run.json
+npx plgauge crosscheck --coverage cov/plgauge-coverage.json --mutation run.json
 npm run parity:finder && npm run parity:coverage             # Abgleich mit den alten Fassungen (Korpus nötig)
 ```
 
-Ein Projekt ist ein Verzeichnis mit `plgauge.json` (früher `plmut.json`): Installationsskripte, die
+Ein Projekt ist ein Verzeichnis mit `plgauge.json`: Installationsskripte, die
 Dateien, deren Einheiten gemessen und mutiert werden, und die utPLSQL-Tests. Beide Werkzeuge lesen
 dieselbe Datei; `plgauge coverage <projekt>` misst genau diese Einheiten.
 

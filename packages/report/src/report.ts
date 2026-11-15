@@ -143,7 +143,7 @@ export function renderHtml(r: RunReport, opts: { mutation?: { results: MutationR
       ${slowest && slowInstr ? `<div class="fact">
         <span class="fact-k">Laufzeit-Overhead</span>
         <span class="fact-v">${factor !== null ? `× ${factor.toLocaleString('de-DE', { maximumFractionDigits: 1 })}` : '–'}</span>
-        <span class="fact-d">Sondenreichster Test „${esc(slowest.name)}“: ${fmtMs(slowest.time * 1000)} ohne Coverage${slowUt ? `, ${fmtMs(slowUt.time * 1000)} mit utPLSQL-Coverage` : ''}, ${fmtMs(slowInstr.time * 1000)} mit plcov.</span>
+        <span class="fact-d">Sondenreichster Test „${esc(slowest.name)}“: ${fmtMs(slowest.time * 1000)} ohne Coverage${slowUt ? `, ${fmtMs(slowUt.time * 1000)} mit utPLSQL-Coverage` : ''}, ${fmtMs(slowInstr.time * 1000)} mit plgauge.</span>
       </div>` : ''}
       <div class="fact">
         <span class="fact-k">Testläufe gesamt</span>
@@ -168,7 +168,7 @@ export function renderHtml(r: RunReport, opts: { mutation?: { results: MutationR
   const testNames = (r.tests ?? []).map((t) => (t.setup ? t.description : `${t.description} <span style="opacity:.7">(${t.path.split('.').slice(1).join('.')})</span>`));
   const sections = objs.map((o, idx) => renderObject(o, idx, tip, testNames, muts ? mutOf(o) ?? new Map() : undefined)).join('');
 
-  return `<title>plcov ${esc(r.schema)}</title>
+  return `<title>plgauge ${esc(r.schema)}</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -367,7 +367,7 @@ aside.findings { background: var(--surface); border: 1px solid var(--line); bord
   ${sections}
 
   <section class="method" aria-label="Methode">
-    <div><h4>So wird gemessen</h4><p>plcov liest den kompilierten Quelltext, setzt Sonden an jede Anweisung, Entscheidung und Teilbedingung und kompiliert den Code neu. Die Sonden fügen keine Zeilen ein, Fehlermeldungen behalten ihre Zeilennummern. Danach laufen die utPLSQL-Tests, und der Originalcode wird wiederhergestellt.</p></div>
+    <div><h4>So wird gemessen</h4><p>plgauge liest den kompilierten Quelltext, setzt Sonden an jede Anweisung, Entscheidung und Teilbedingung und kompiliert den Code neu. Die Sonden fügen keine Zeilen ein, Fehlermeldungen behalten ihre Zeilennummern. Danach laufen die utPLSQL-Tests, und der Originalcode wird wiederhergestellt.</p></div>
     <div><h4>NULL und Kurzschluss</h4><p>Jede Teilbedingung wird als WAHR, FALSCH oder NULL gezählt. Die Sonden geben den Wert unverändert zurück, deshalb bleiben Kurzschlussauswertung und NULL-Semantik erhalten. MC/DC wertet nicht ausgewertete Teilbedingungen als Platzhalter (unique cause mit Kurzschluss).</p></div>
     <div><h4>Grenzen des Prototyps</h4><p>Bedingungen in WHERE-, ON- und HAVING-Klauseln werden bewusst nicht instrumentiert, weil das den Ausführungsplan verändern würde. Dynamisches SQL, mit wrap verschlüsselter Code und Compound-Trigger werden nicht gemessen. Treffer aus anderen Sessions (Jobs, parallele Abfragen) fehlen noch.</p></div>
   </section>

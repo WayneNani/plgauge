@@ -1,7 +1,7 @@
 /**
  * The example project against a real database, in both modes: every verdict must
  * match examples/shop_pricing/expected.tsv, written by hand before the first run of
- * plmut. Needs PLMUT_DB (oracle://user:pw@host:port/service); skipped otherwise.
+ * the Go version. Needs PLGAUGE_DB (oracle://user:pw@host:port/service); skipped otherwise.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -14,7 +14,7 @@ import { journalEntries, loadObject, lockRun, replaceSource, RUN_LOCK } from '@p
 import { CoverageIndex, crossCheck, parseDbUrl, projectCoverageConfig, runMutation, type Result } from '@plgauge/mutation';
 import { runCoverage, toCoverageExport } from '@plgauge/coverage';
 
-const db = process.env.PLMUT_DB?.split(',')[0];
+const db = process.env.PLGAUGE_DB?.split(',')[0];
 const dir = fileURLToPath(new URL('../../../examples/shop_pricing', import.meta.url));
 
 function expected(): Map<string, string> {
@@ -41,7 +41,7 @@ function check(results: Result[]) {
   assert.deepEqual(wrong, []);
 }
 
-test('example: coverage, cross-check with the recording run, oracle mode with coverage selection', { skip: !db && 'PLMUT_DB nicht gesetzt', timeout: 900_000 }, async () => {
+test('example: coverage, cross-check with the recording run, oracle mode with coverage selection', { skip: !db && 'PLGAUGE_DB nicht gesetzt', timeout: 900_000 }, async () => {
   const cov = toCoverageExport(await runCoverage(await projectCoverageConfig(dir, db!, true), () => {}));
   assert.ok(cov.tests.filter((t) => !t.setup).length >= 14, 'Tests mit Einzelzuordnung');
   const schema = await runMutation({ dir, dbUrls: [db!], mode: 'schema' });
@@ -55,7 +55,7 @@ test('example: coverage, cross-check with the recording run, oracle mode with co
 });
 
 for (const mode of ['naive', 'schema'] as const) {
-  test(`example verdicts as expected (${mode})`, { skip: !db && 'PLMUT_DB nicht gesetzt', timeout: 600_000 }, async () => {
+  test(`example verdicts as expected (${mode})`, { skip: !db && 'PLGAUGE_DB nicht gesetzt', timeout: 600_000 }, async () => {
     const want = expected();
     const rep = await runMutation({ dir, dbUrls: [db!], mode });
     assert.equal(rep.results.length, want.size, 'Zahl der Mutanten');
@@ -74,9 +74,9 @@ for (const mode of ['naive', 'schema'] as const) {
 }
 
 // Several schemas (A4): units written as other_schema.name. Needs CREATE ANY PROCEDURE and
-// EXECUTE ANY PROCEDURE for the user of PLMUT_DB and a second schema, e.g. PLMUT_LIB_SCHEMA=DEMO_LIB.
-const lib = process.env.PLMUT_LIB_SCHEMA;
-test('several schemas: a unit of another schema is mutated in both modes', { skip: (!db || !lib) && 'PLMUT_DB / PLMUT_LIB_SCHEMA nicht gesetzt', timeout: 600_000 }, async () => {
+// EXECUTE ANY PROCEDURE for the user of PLGAUGE_DB and a second schema, e.g. PLGAUGE_LIB_SCHEMA=DEMO_LIB.
+const lib = process.env.PLGAUGE_LIB_SCHEMA;
+test('several schemas: a unit of another schema is mutated in both modes', { skip: (!db || !lib) && 'PLGAUGE_DB / PLGAUGE_LIB_SCHEMA nicht gesetzt', timeout: 600_000 }, async () => {
   const L = lib!.toLowerCase();
   const p = mkdtempSync(join(tmpdir(), 'plgauge-multi-'));
   mkdirSync(join(p, 'src'));
@@ -121,7 +121,7 @@ END;
 });
 
 // Cursor declarations (UNION ALL), cursor FOR loops (duplicated) and dynamic SQL (literal switched in place)
-test('cursors, cursor FOR loops and dynamic SQL: everything switched, same verdicts in both modes', { skip: !db && 'PLMUT_DB nicht gesetzt', timeout: 900_000 }, async () => {
+test('cursors, cursor FOR loops and dynamic SQL: everything switched, same verdicts in both modes', { skip: !db && 'PLGAUGE_DB nicht gesetzt', timeout: 900_000 }, async () => {
   const p = mkdtempSync(join(tmpdir(), 'plgauge-qsql-'));
   mkdirSync(join(p, 'src'));
   writeFileSync(join(p, 'src', 'q.sql'), `CREATE TABLE IF NOT EXISTS plgauge_q_t (id NUMBER, v NUMBER)
@@ -199,7 +199,7 @@ END;
   assert.ok(schema.results.filter((r) => r.op === 'ROR' && r.status === 'KILLED').length >= 6);
 });
 
-test('a run first puts back what a crashed run left in the journal', { skip: !db && 'PLMUT_DB nicht gesetzt', timeout: 600_000 }, async () => {
+test('a run first puts back what a crashed run left in the journal', { skip: !db && 'PLGAUGE_DB nicht gesetzt', timeout: 600_000 }, async () => {
   const conn = await oracledb.getConnection(parseDbUrl(db!));
   try {
     const owner = (await conn.execute<[string]>(`select user from dual`)).rows![0][0];
@@ -215,7 +215,7 @@ test('a run first puts back what a crashed run left in the journal', { skip: !db
   }
 });
 
-test('a second run on the same schema stops at once instead of restoring the first run’s code', { skip: !db && 'PLMUT_DB nicht gesetzt', timeout: 600_000 }, async () => {
+test('a second run on the same schema stops at once instead of restoring the first run’s code', { skip: !db && 'PLGAUGE_DB nicht gesetzt', timeout: 600_000 }, async () => {
   const conn = await oracledb.getConnection(parseDbUrl(db!));
   try {
     // the lock as a running run holds it
@@ -230,7 +230,7 @@ test('a second run on the same schema stops at once instead of restoring the fir
 });
 
 // CREATE OR REPLACE VIEW drops INSTEAD OF triggers: such a view must not be touched
-test('a view with an INSTEAD OF trigger is not mutated and keeps its trigger', { skip: !db && 'PLMUT_DB nicht gesetzt', timeout: 600_000 }, async () => {
+test('a view with an INSTEAD OF trigger is not mutated and keeps its trigger', { skip: !db && 'PLGAUGE_DB nicht gesetzt', timeout: 600_000 }, async () => {
   const p = mkdtempSync(join(tmpdir(), 'plgauge-trg-'));
   mkdirSync(join(p, 'src'));
   writeFileSync(join(p, 'src', 'v.sql'), `CREATE TABLE IF NOT EXISTS plgauge_trg_t (id NUMBER, s VARCHAR2(10))
@@ -269,7 +269,7 @@ END;
 });
 
 // CREATE OR REPLACE drops a view's comments and enables a disabled trigger: both come back
-test('a mutated view keeps its comments, a mutated disabled trigger stays disabled', { skip: !db && 'PLMUT_DB nicht gesetzt', timeout: 600_000 }, async () => {
+test('a mutated view keeps its comments, a mutated disabled trigger stays disabled', { skip: !db && 'PLGAUGE_DB nicht gesetzt', timeout: 600_000 }, async () => {
   const p = mkdtempSync(join(tmpdir(), 'plgauge-keep-'));
   mkdirSync(join(p, 'src'));
   writeFileSync(join(p, 'src', 'v.sql'), `CREATE TABLE IF NOT EXISTS plgauge_keep_t (id NUMBER, s VARCHAR2(10))
@@ -315,7 +315,7 @@ END;
 });
 
 // a dead run's journal must not overwrite what someone compiled into the unit since
-test('a leftover journal entry does not overwrite newer work in the unit', { skip: !db && 'PLMUT_DB nicht gesetzt', timeout: 600_000 }, async () => {
+test('a leftover journal entry does not overwrite newer work in the unit', { skip: !db && 'PLGAUGE_DB nicht gesetzt', timeout: 600_000 }, async () => {
   const conn = await oracledb.getConnection(parseDbUrl(db!));
   try {
     const owner = (await conn.execute<[string]>(`select user from dual`)).rows![0][0];

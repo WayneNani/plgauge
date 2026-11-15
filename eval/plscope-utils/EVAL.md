@@ -76,9 +76,9 @@ Bedingungen auf dem Dictionary (Eigentümer, Typ, Name) prüfen die Tests nur mi
 - **PL/Scope-Einstellung beim Neukompilieren.** Mutierte und wiederhergestellte Einheiten wurden ohne ihre
   `PLSCOPE_SETTINGS` übersetzt, ihre PL/Scope-Daten verschwanden, und 3 Tests scheiterten. Jetzt übernimmt der Kern die
   Einstellung wie schon Optimierungsstufe und `PLSQL_CCFLAGS`.
-- **Rollen im Testlauf.** Der Testläufer `plmut_rt` hatte Definer-Rechte, darin sind Rollen abgeschaltet. 7 Tests, deren
+- **Rollen im Testlauf.** Der Testläufer `plgauge_rt` hatte Definer-Rechte, darin sind Rollen abgeschaltet. 7 Tests, deren
   Setup per DDL eine Prozedur anlegt (`CREATE PROCEDURE` über die Rolle RESOURCE), scheiterten mit ORA-01031, direkt mit
-  `ut.run` dagegen nicht. `plmut_rt` hat jetzt Invoker-Rechte.
+  `ut.run` dagegen nicht. `plgauge_rt` hat jetzt Invoker-Rechte.
 - **Zwei Regeln gegen Äquivalente**, beide aus diesem Lauf. Ein innerer Join wird nicht zu `LEFT JOIN`, wenn `WHERE` eine
   Spalte der verbundenen Tabelle vergleicht (die Nullzeilen fallen sowieso weg). `ORDER BY` wird als Ganzes umgedreht
   statt pro Element. Pro Element war ein konstanter erster Schlüssel äquivalent, und von 22 Überlebenden kamen 15 aus
@@ -317,7 +317,7 @@ knappe Zeitgrenzen).
 ```bash
 corpus/fetch.sh                                  # plscope-utils nach corpus/.cache
 # Installation pro Datenbank: eval/plscope-utils/README.md
-PLMUT_DB=oracle://plscope_eval:…@…/FREEPDB1,… npx plgauge mutate run eval/plscope-utils --json run.json --report run.html
+PLGAUGE_DB=oracle://plscope_eval:…@…/FREEPDB1,… npx plgauge mutate run eval/plscope-utils --json run.json --report run.html
 npx tsx scripts/eval-summary.ts run.json survivors.tsv
 npx tsx scripts/sql-compile-check.ts db.json corpus/.cache/utplsql-3.2.2/source   # db.json: {user, password, connectString}
 ```

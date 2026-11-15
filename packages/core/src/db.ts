@@ -455,7 +455,7 @@ export async function restoreJournal(conn: oracledb.Connection, entries: Journal
     // compile, the one before, or the original itself
     const comparable = e.currentSha?.startsWith('x') && e.pending === 0;
     if (comparable && cur && ![e.currentSha, e.prevSha, codeFingerprint(e.object.type, e.object.original)].includes(cur.sha)
-      && !/plmut_ctl\.|plmut\$a|cov\$\./i.test(cur.text)) {
+      && !/plgauge_ctl\.|plgauge\$a|cov\$\./i.test(cur.text)) {
       say(`  ✗ ${e.owner}.${e.name} wurde nach dem abgebrochenen Lauf geändert: Journal-Eintrag verworfen, die neuere Fassung bleibt`);
       await journalForget(conn, e.object);
       continue;

@@ -1,6 +1,6 @@
 /**
- * Integration test against a real database (skipped unless PLCOV_DB is set):
- *   PLCOV_DB=demo/demo@localhost:1521/FREEPDB1 npm test
+ * Integration test against a real database (skipped unless PLGAUGE_COV_DB is set):
+ *   PLGAUGE_COV_DB=demo/demo@localhost:1521/FREEPDB1 npm test
  * Compiles an instrumented package full of edge cases and checks that its
  * behaviour is identical to the original.
  */
@@ -12,26 +12,26 @@ import { instrument } from '@plgauge/coverage';
 import { newIds } from '@plgauge/coverage';
 import { installRuntime } from '@plgauge/coverage';
 
-const db = process.env.PLCOV_DB;
+const db = process.env.PLGAUGE_COV_DB;
 const m = db ? /^([^/]+)\/([^@]+)@(.+)$/.exec(db) : null;
 
-test('instrumented code behaves exactly like the original', { skip: !m && 'PLCOV_DB not set' }, async () => {
+test('instrumented code behaves exactly like the original', { skip: !m && 'PLGAUGE_COV_DB not set' }, async () => {
   const conn = await oracledb.getConnection({ user: m![1], password: m![2], connectString: m![3] });
   try {
     await installRuntime(conn);
-    await conn.execute(`create or replace package plcov_torture is
+    await conn.execute(`create or replace package plgauge_torture is
       g_calls number := 0;
       function check_all return varchar2;
     end;`);
     const body = readFileSync(new URL('./fixtures/torture.pkb', import.meta.url), 'utf8');
-    const check = async () => (await conn.execute<[string]>(`select plcov_torture.check_all from dual`)).rows![0][0];
+    const check = async () => (await conn.execute<[string]>(`select plgauge_torture.check_all from dual`)).rows![0][0];
 
     await conn.execute(`create or replace ${body}`);
     const expected = await check();
 
     const r = instrument(body, m![1].toUpperCase(), newIds(), { sqlProbes: true });
     await conn.execute(`create or replace ${r.instrumented}`);
-    const errs = await conn.execute(`select line, text from user_errors where name = 'PLCOV_TORTURE'`);
+    const errs = await conn.execute(`select line, text from user_errors where name = 'PLGAUGE_TORTURE'`);
     assert.deepEqual(errs.rows, [], 'instrumented package compiles');
     await conn.execute(`begin cov$.reset; cov$.per_test(true); end;`);
     const actual = await check();
@@ -41,22 +41,22 @@ test('instrumented code behaves exactly like the original', { skip: !m && 'PLCOV
 
     // the probes really recorded something: shortcircuit decision 1 saw (T,T)->T and (F,-)->F
     await conn.execute(`begin cov$.flush('torture'); end;`);
-    const v = await conn.execute<[string]>(`select k from plcov_hits where run_id = 'torture' and kind = 'V' and k like '1|%'`);
+    const v = await conn.execute<[string]>(`select k from plgauge_hits where run_id = 'torture' and kind = 'V' and k like '1|%'`);
     assert.ok(v.rows!.length >= 3, 'condition vectors recorded');
     // per-test mode outside utPLSQL: everything lands in the "#" setup bucket
-    const pt = await conn.execute<[string, number]>(`select test, count(*) from plcov_hits where run_id = 'torture' and kind = 's' group by test`);
+    const pt = await conn.execute<[string, number]>(`select test, count(*) from plgauge_hits where run_id = 'torture' and kind = 's' group by test`);
     assert.deepEqual(pt.rows!.map((r) => r[0]), ['#']);
-    await conn.execute(`delete from plcov_hits where run_id = 'torture'`);
+    await conn.execute(`delete from plgauge_hits where run_id = 'torture'`);
     await conn.commit();
   } finally {
-    await conn.execute(`drop package plcov_torture`).catch(() => undefined);
+    await conn.execute(`drop package plgauge_torture`).catch(() => undefined);
     await conn.close();
   }
 });
 
-test('simple CASE expressions, FOR filters (21c) and compound triggers: measured, behaviour unchanged', { skip: !m && 'PLCOV_DB not set' }, async () => {
+test('simple CASE expressions, FOR filters (21c) and compound triggers: measured, behaviour unchanged', { skip: !m && 'PLGAUGE_COV_DB not set' }, async () => {
   const conn = await oracledb.getConnection({ user: m![1], password: m![2], connectString: m![3] });
-  const body = `package body plcov_constructs is
+  const body = `package body plgauge_constructs is
   function word(n number) return varchar2 is
   begin
     return case n when 1 then 'eins' when 2 then 'zwei' else 'viel' end
@@ -79,14 +79,14 @@ test('simple CASE expressions, FOR filters (21c) and compound triggers: measured
     l varchar2(400);
   begin
     for k in 1 .. 4 loop l := l || word(k) || ',' || in_sql(k) || ';'; end loop;
-    delete from plcov_constructs_t;
-    insert into plcov_constructs_t values (1);
-    update plcov_constructs_t set n = 2;
-    for r in (select n from plcov_constructs_t) loop l := l || r.n; end loop;
+    delete from plgauge_constructs_t;
+    insert into plgauge_constructs_t values (1);
+    update plgauge_constructs_t set n = 2;
+    for r in (select n from plgauge_constructs_t) loop l := l || r.n; end loop;
     return l || filtered;
   end;
 end;`;
-  const trigger = `trigger plcov_constructs_trg for insert or update on plcov_constructs_t compound trigger
+  const trigger = `trigger plgauge_constructs_trg for insert or update on plgauge_constructs_t compound trigger
   g_rows pls_integer := 0;
   before each row is
   begin
@@ -97,14 +97,14 @@ end;`;
   begin
     if g_rows > 5 then raise_application_error(-20001, 'zu viele'); end if;
   end after statement;
-end plcov_constructs_trg;`;
+end plgauge_constructs_trg;`;
   try {
     await installRuntime(conn);
-    await conn.execute(`create table plcov_constructs_t (n number)`).catch(() => undefined);
-    await conn.execute(`create or replace package plcov_constructs is function check_all return varchar2; end;`);
+    await conn.execute(`create table plgauge_constructs_t (n number)`).catch(() => undefined);
+    await conn.execute(`create or replace package plgauge_constructs is function check_all return varchar2; end;`);
     // check_all changes a table: call it from PL/SQL, not from a query
     const check = async () => {
-      const r = await conn.execute(`begin :r := plcov_constructs.check_all; end;`, { r: { dir: oracledb.BIND_OUT, type: oracledb.STRING, maxSize: 400 } });
+      const r = await conn.execute(`begin :r := plgauge_constructs.check_all; end;`, { r: { dir: oracledb.BIND_OUT, type: oracledb.STRING, maxSize: 400 } });
       return (r.outBinds as { r: string }).r;
     };
     await conn.execute(`create or replace ${body}`);
@@ -119,35 +119,35 @@ end plcov_constructs_trg;`;
     assert.deepEqual([...rb.map.gaps, ...rt.map.gaps], []);
     await conn.execute(`create or replace ${rb.instrumented}`);
     await conn.execute(`create or replace ${rt.instrumented}`);
-    const errs = await conn.execute(`select name, line, text from user_errors where name in ('PLCOV_CONSTRUCTS', 'PLCOV_CONSTRUCTS_TRG')`);
+    const errs = await conn.execute(`select name, line, text from user_errors where name in ('PLGAUGE_CONSTRUCTS', 'PLGAUGE_CONSTRUCTS_TRG')`);
     assert.deepEqual(errs.rows, [], 'instrumented code compiles');
     await conn.execute(`begin cov$.reset; end;`);
     assert.equal(await check(), expected);
     await conn.execute(`begin cov$.flush('constructs'); end;`);
-    const hit = new Set((await conn.execute<[string]>(`select k from plcov_hits where run_id = 'constructs' and kind = 'B'`)).rows!.map((r) => Number(r[0])));
+    const hit = new Set((await conn.execute<[string]>(`select k from plgauge_hits where run_id = 'constructs' and kind = 'B'`)).rows!.map((r) => Number(r[0])));
     // every branch of the three simple CASE expressions (3 + 2 + 3, implicit ELSE included) was taken
     const simple = rb.map.constructs.filter((c) => c.kind === 'case-expr').flatMap((c) => c.branches.map((b) => b.probe!));
     assert.equal(simple.length, 8);
     assert.deepEqual(simple.filter((p) => !hit.has(p)), []);
     // FOR WHEN / WHILE decisions and the compound trigger's statements were recorded
     assert.ok(rb.map.decisions.some((d) => d.kind === 'for-when') && rb.map.decisions.some((d) => d.kind === 'for-while'));
-    const stmts = new Set((await conn.execute<[string]>(`select k from plcov_hits where run_id = 'constructs' and kind = 'S'`)).rows!.map((r) => Number(r[0])));
+    const stmts = new Set((await conn.execute<[string]>(`select k from plgauge_hits where run_id = 'constructs' and kind = 'S'`)).rows!.map((r) => Number(r[0])));
     // all statements of both timing points ran, except raise_application_error (never more than 5 rows)
     assert.deepEqual(rt.map.statements.filter((s) => !stmts.has(s.id)).map((s) => s.kind), ['call']);
     assert.equal(rt.map.statements.length, 6);
-    await conn.execute(`delete from plcov_hits where run_id = 'constructs'`);
+    await conn.execute(`delete from plgauge_hits where run_id = 'constructs'`);
     await conn.commit();
   } finally {
-    await conn.execute(`drop table plcov_constructs_t`).catch(() => undefined);
-    await conn.execute(`drop package plcov_constructs`).catch(() => undefined);
+    await conn.execute(`drop table plgauge_constructs_t`).catch(() => undefined);
+    await conn.execute(`drop package plgauge_constructs`).catch(() => undefined);
     await conn.close();
   }
 });
 
 // Several schemas (A4): needs a second schema and CREATE ANY PROCEDURE, EXECUTE ANY PROCEDURE for the
-// connected user, e.g. PLCOV_LIB_SCHEMA=DEMO_LIB (ci/setup-db.sh creates it as APP_LIB).
-const lib = process.env.PLCOV_LIB_SCHEMA;
-test('several schemas: code of another schema is measured, the runtime stays with the user', { skip: (!m || !lib) && 'PLCOV_DB / PLCOV_LIB_SCHEMA not set', timeout: 300_000 }, async () => {
+// connected user, e.g. PLGAUGE_LIB_SCHEMA=DEMO_LIB (ci/setup-db.sh creates it as APP_LIB).
+const lib = process.env.PLGAUGE_LIB_SCHEMA;
+test('several schemas: code of another schema is measured, the runtime stays with the user', { skip: (!m || !lib) && 'PLGAUGE_COV_DB / PLGAUGE_LIB_SCHEMA not set', timeout: 300_000 }, async () => {
   const conn = await oracledb.getConnection({ user: m![1], password: m![2], connectString: m![3] });
   const L = lib!.toUpperCase();
   try {
@@ -193,7 +193,7 @@ test('several schemas: code of another schema is measured, the runtime stays wit
 });
 
 // Other sessions (A8): a scheduler job started by a test. Needs CREATE JOB.
-test('hits of a scheduler job started by a test are collected under #background', { skip: !m && 'PLCOV_DB not set', timeout: 300_000 }, async () => {
+test('hits of a scheduler job started by a test are collected under #background', { skip: !m && 'PLGAUGE_COV_DB not set', timeout: 300_000 }, async () => {
   const conn = await oracledb.getConnection({ user: m![1], password: m![2], connectString: m![3] });
   const canJob = (await conn.execute<[number]>(`select count(*) from session_privs where privilege = 'CREATE JOB'`)).rows![0][0] > 0;
   if (!canJob) {

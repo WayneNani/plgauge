@@ -62,16 +62,16 @@ anteil	EXC	DBMS_OUTPUT.PUT_LINE('anteil: Ganzes ist 0');\n      RAISE_APPLICATIO
 anteil	SBR	DBMS_OUTPUT.PUT_LINE('anteil: Ganzes ist 0');	NULL;	SURVIVED	Ausgabe wird nicht geprüft
 anteil	SBR	RAISE_APPLICATION_ERROR(-20002, 'Ganzes ist 0');	NULL;	KILLED	ORA-06503 statt -20002
 storniere	ROR	p_modus = 'final'	TRUE	SURVIVED	Test merkt den Commit nicht; Nebenwirkung
-rabatt	RET		 RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');	KILLED	wirft -20998
-versandkosten	RET		 RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');	KILLED	wirft -20998
-endpreis	RET		 RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');	KILLED	wirft -20998
-buche	RET		 RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');	KILLED	wirft -20998
-storniere	RET		 RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');	KILLED	wirft -20998
-umsatz	RET		 RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');	KILLED	wirft -20998
-treuepunkte	RET		 RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');	KILLED	wirft -20998
-anteil	RET		 RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');	KILLED	wirft -20998
-raten	RET		 RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');	KILLED	wirft -20998
-bestellnummer	RET		 RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');	KILLED	wirft -20998
+rabatt	RET		 RAISE_APPLICATION_ERROR(-20998, 'plgauge: RET');	KILLED	wirft -20998
+versandkosten	RET		 RAISE_APPLICATION_ERROR(-20998, 'plgauge: RET');	KILLED	wirft -20998
+endpreis	RET		 RAISE_APPLICATION_ERROR(-20998, 'plgauge: RET');	KILLED	wirft -20998
+buche	RET		 RAISE_APPLICATION_ERROR(-20998, 'plgauge: RET');	KILLED	wirft -20998
+storniere	RET		 RAISE_APPLICATION_ERROR(-20998, 'plgauge: RET');	KILLED	wirft -20998
+umsatz	RET		 RAISE_APPLICATION_ERROR(-20998, 'plgauge: RET');	KILLED	wirft -20998
+treuepunkte	RET		 RAISE_APPLICATION_ERROR(-20998, 'plgauge: RET');	KILLED	wirft -20998
+anteil	RET		 RAISE_APPLICATION_ERROR(-20998, 'plgauge: RET');	KILLED	wirft -20998
+raten	RET		 RAISE_APPLICATION_ERROR(-20998, 'plgauge: RET');	KILLED	wirft -20998
+bestellnummer	RET		 RAISE_APPLICATION_ERROR(-20998, 'plgauge: RET');	KILLED	wirft -20998
 bestellnummer	RET		 RETURN NULL;	KILLED	NULL statt B-2345
 bestellnummer	AOR	'B-' || LPAD(MOD(p_id, 10000), 4, '0')	'B-'	KILLED	nur B-
 bestellnummer	AOR	MOD(p_id, 10000)	(p_id) * (10000)	KILLED	B-1234 statt B-2345

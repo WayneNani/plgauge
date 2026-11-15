@@ -1,5 +1,5 @@
 {
- "format": "plcov-coverage/1",
+ "format": "plgauge-coverage/1",
  "generated": "2026-11-13T19:41:45.644Z",
  "database": "Oracle AI Database 26ai Free Release 23.26.3.0.0 - Develop, Learn, and Run for Free",
  "schema": "DEMO",

@@ -3,7 +3,7 @@ create or replace package body test_order_pricing is
   procedure warm_up_rates is
     l_fee number;
   begin
-    -- runs outside any test: plcov reports these hits as suite setup
+    -- runs outside any test: plgauge reports these hits as suite setup
     l_fee := order_pricing.shipping_fee('DE', 1);
   end;
 

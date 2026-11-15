@@ -12,7 +12,7 @@
  * Several databases (workers) share the mutants; the first one decides schema,
  * baseline and coverage. Every code change goes through the core's restore journal.
  */
-import { existsSync, globSync, readFileSync } from 'node:fs';
+import { globSync, readFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { join, resolve } from 'node:path';
@@ -35,7 +35,7 @@ import {
 
 export type Status = 'KILLED' | 'SURVIVED' | 'TIMEOUT' | 'MEMORY' | 'NOT_COVERED' | 'COMPILE_ERROR' | 'ERROR';
 
-/** Project file plmut.json. */
+/** Project file plgauge.json. */
 export interface Config {
   /** Scripts, in order, relative to the project. */
   install: string[];
@@ -59,7 +59,7 @@ export interface Options {
   sample?: number;
   seed?: number;
   log?: (m: string) => void;
-  /** Measured coverage (plcov-coverage/1): the oracle mode runs only the tests around each mutant. */
+  /** Measured coverage (plgauge-coverage/1): the oracle mode runs only the tests around each mutant. */
   coverage?: CoverageExport;
   /** Diff mode: only mutants on these lines (core changedLines). */
   diff?: ChangedLines;
@@ -115,10 +115,9 @@ export interface Report {
   unrestored?: string[];
 }
 
-/** The project file: plgauge.json, or plmut.json from before the merge. */
+/** The project file plgauge.json. */
 export function loadConfig(dir: string): Config {
-  const file = existsSync(join(dir, 'plgauge.json')) ? 'plgauge.json' : 'plmut.json';
-  const c = JSON.parse(readFileSync(join(dir, file), 'utf8')) as Partial<Config>;
+  const c = JSON.parse(readFileSync(join(dir, 'plgauge.json'), 'utf8')) as Partial<Config>;
   return { install: c.install ?? [], mutate: c.mutate ?? [], tests: c.tests ?? [] };
 }
 
@@ -404,7 +403,7 @@ class Worker {
   /**
    * The database object of a unit, loaded once (it goes into the restore journal). A unit
    * written with a schema (other_schema.name) lives there (A4); the schema mode then gives
-   * that schema the right to call plmut_ctl.
+   * that schema the right to call plgauge_ctl.
    */
   async object(key: string, type: string, name: string): Promise<SourceObject> {
     let o = this.objects.get(key);
@@ -416,7 +415,7 @@ class Worker {
       const same = [...this.objects.values()].find((x) => x.owner === owner && x.name === objectName(name) && x.type === type);
       o = same ?? (await loadObject(this.deploy, owner, objectName(name), type));
       if (owner !== user && !this.granted.has(owner)) {
-        await this.deploy.execute(`grant execute on plmut_ctl to ${dbIdent(owner)}`).catch(() => {});
+        await this.deploy.execute(`grant execute on plgauge_ctl to ${dbIdent(owner)}`).catch(() => {});
         this.granted.add(owner);
       }
       this.objects.set(key, o);
@@ -1214,7 +1213,7 @@ export async function runMutation(opt: Options): Promise<Report> {
     run.logf('keine Mutanten: nichts zu tun');
     return { ...emptyReport(0), mode, skippedVariants: skipped, elapsedMs: performance.now() - t0 };
   }
-  if (!opt.dbUrls.length) throw new Error('keine Datenbank: --db oder PLMUT_DB setzen');
+  if (!opt.dbUrls.length) throw new Error('keine Datenbank: --db oder PLGAUGE_DB setzen');
   opt.dbUrls.forEach((u, i) => run.workers.push(new Worker(u, opt.dbUrls.length > 1 ? ` w${i + 1}` : '', run)));
   let report: Report | undefined;
   const onSig = () => {
@@ -1231,7 +1230,7 @@ export async function runMutation(opt: Options): Promise<Report> {
     // (a worker still opening would otherwise keep its lock and connections)
     await settled(run.workers.map((w) => w.open()));
     if (run.workers.length > 1) run.logf(`${run.workers.length} Worker-Datenbanken`);
-    // the switched code names the run's schema (its context, its plmut_ctl): one for all workers
+    // the switched code names the run's schema (its context, its plgauge_ctl): one for all workers
     const homes = new Set(await Promise.all(run.workers.map((w) => w.currentSchema())));
     if (homes.size > 1) throw new Error(`Worker-Datenbanken mit verschiedenen Schemas (${[...homes].join(', ')}) werden nicht unterstützt: alle Worker brauchen denselben Benutzer bzw. dasselbe CURRENT_SCHEMA`);
     run.checkpoint();
@@ -1694,11 +1693,11 @@ async function compileSchema(run: Run, only: (su: SchemaUnit) => boolean = () =>
 async function record(run: Run, tests: TestResult[], ids: number[], loopCount: number): Promise<Map<number, string[]>> {
   const w = run.primary;
   await activate(w.test, -1);
-  await w.test.conn.execute(`begin plmut_ctl.arm; end;`);
+  await w.test.conn.execute(`begin plgauge_ctl.arm; end;`);
   const r = await w.runTests(w.testPaths(), 10 * 60_000);
   if (r.err) throw new Error(`Aufzeichnungslauf: ${firstLine(r.err)}`);
   // a test reset all package state (DBMS_SESSION.RESET_PACKAGE): the hits are gone with it
-  const intact = (await w.test.conn.execute<[number]>(`select plmut_ctl.intact from dual`)).rows?.[0]?.[0] === 1;
+  const intact = (await w.test.conn.execute<[number]>(`select plgauge_ctl.intact from dual`)).rows?.[0]?.[0] === 1;
   // A test that passed the baseline but fails now depends on state or order.
   const flakyNow = r.tests.filter((t) => t.failed);
   for (const t of flakyNow) run.logf(`unzuverlässig, scheitert im Aufzeichnungslauf: ${t.name}: ${t.message.split(/\s+/).join(' ').slice(0, 60)}`);

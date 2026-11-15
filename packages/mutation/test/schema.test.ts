@@ -24,7 +24,7 @@ function testFile(): SourceFile {
     path: 'p.pkb', errors: [], skipped: 0, src: Buffer.from(src),
     units: [{ type: 'PACKAGE BODY', name: 'p', start: 0, end: Buffer.byteLength(src), decl: at(' AS\n') + 3 }],
     points: [
-      p({ op: 'RET', kind: 'insert', start: at('BEGIN') + 5, end: at('BEGIN') + 5, mutants: [' RETURN NULL;', " RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');"] }),
+      p({ op: 'RET', kind: 'insert', start: at('BEGIN') + 5, end: at('BEGIN') + 5, mutants: [' RETURN NULL;', " RAISE_APPLICATION_ERROR(-20998, 'plgauge: RET');"] }),
       p({ op: 'SBR', kind: 'stmt', start: at(sel), end: at(sel) + sel.length, orig: sel, mutants: ['NULL;'] }),
       p({ op: 'ROR', kind: 'bool', ctx: 'sql', start: at('x > a'), end: at('x > a') + 5, orig: 'x > a', mutants: ['x >= a'], scope: [at(sel), at(sel) + sel.length] }),
       p({ op: 'AOR', kind: 'value', start: at('a - b'), end: at('a - b') + 5, orig: 'a - b', mutants: ['a + b'] }),
@@ -42,12 +42,12 @@ test('schema: switches for every kind, nested and left-associative', () => {
   const got = sus[0].text;
   assert.ok(got.startsWith('PACKAGE BODY p AS'), 'without CREATE OR REPLACE');
   for (const want of [
-    'plmut$a CONSTANT PLS_INTEGER := plmut_ctl.active;',
-    "BEGIN IF plmut$a = -1 THEN plmut_ctl.reach(1, 2); END IF; IF plmut$a = 1 THEN RETURN NULL; END IF; IF plmut$a = 2 THEN RAISE_APPLICATION_ERROR(-20998, 'plmut: RET'); END IF;",
+    'plgauge$a CONSTANT PLS_INTEGER := plgauge_ctl.active;',
+    "BEGIN IF plgauge$a = -1 THEN plgauge_ctl.reach(1, 2); END IF; IF plgauge$a = 1 THEN RETURN NULL; END IF; IF plgauge$a = 2 THEN RAISE_APPLICATION_ERROR(-20998, 'plgauge: RET'); END IF;",
     // SQL: the statement once per variant, the original (with the SBR switch) untouched
-    'IF plmut$a = -1 THEN plmut_ctl.reach(4, 1); END IF; IF plmut$a = 4 THEN SELECT COUNT(*) INTO n FROM t WHERE x >= a; ELSE IF plmut$a = -1 THEN plmut_ctl.reach(3, 1); END IF; IF plmut$a <> 3 THEN SELECT COUNT(*) INTO n FROM t WHERE x > a; END IF; END IF;',
-    'LOOP IF plmut$a <> 0 THEN plmut_ctl.tick(1); END IF; EXIT;',
-    'RETURN (CASE CASE plmut$a WHEN -1 THEN plmut_ctl.hit(6, 1) ELSE plmut$a END WHEN 6 THEN (a - b - c) ELSE ((CASE CASE plmut$a WHEN -1 THEN plmut_ctl.hit(5, 1) ELSE plmut$a END WHEN 5 THEN (a + b) ELSE (a - b) END) + c) END);',
+    'IF plgauge$a = -1 THEN plgauge_ctl.reach(4, 1); END IF; IF plgauge$a = 4 THEN SELECT COUNT(*) INTO n FROM t WHERE x >= a; ELSE IF plgauge$a = -1 THEN plgauge_ctl.reach(3, 1); END IF; IF plgauge$a <> 3 THEN SELECT COUNT(*) INTO n FROM t WHERE x > a; END IF; END IF;',
+    'LOOP IF plgauge$a <> 0 THEN plgauge_ctl.tick(1); END IF; EXIT;',
+    'RETURN (CASE CASE plgauge$a WHEN -1 THEN plgauge_ctl.hit(6, 1) ELSE plgauge$a END WHEN 6 THEN (a - b - c) ELSE ((CASE CASE plgauge$a WHEN -1 THEN plgauge_ctl.hit(5, 1) ELSE plgauge$a END WHEN 5 THEN (a + b) ELSE (a - b) END) + c) END);',
   ]) assert.ok(got.includes(want), `fehlt: ${want}\nin:\n${got}`);
   assert.equal(sus[0].loops, 1);
 });
@@ -76,7 +76,7 @@ test('schema: switches do not fuse with neighbouring names', () => {
   };
   const got = buildSchema(expand([f]))[0].text;
   assert.ok(!got.includes('ELSEIF'), got);
-  assert.ok(got.includes('ELSE IF plmut_ctl.active() = -1'), got);
+  assert.ok(got.includes('ELSE IF plgauge_ctl.active() = -1'), got);
 });
 
 test('oracle rewriter applies exactly one mutant', () => {
@@ -104,7 +104,7 @@ test('schema: SQL points duplicate their statement; errors in a copy drop that v
     ],
   };
   const su = buildSchema(expand([f]))[0];
-  assert.match(su.text, /IF plmut_ctl\.active\(\) = -1 THEN plmut_ctl\.reach\(2, 2\); plmut_ctl\.reach\(4, 1\); END IF; IF plmut_ctl\.active\(\) = 2 THEN UPDATE t SET b = 2 WHERE id = 3; ELSIF plmut_ctl\.active\(\) = 3 THEN UPDATE t SET a = 1 WHERE id = 3; ELSIF plmut_ctl\.active\(\) = 4 THEN UPDATE t SET a = 1, b = 2 WHERE FALSE; ELSE IF .*reach\(1, 1\).* <> 1 THEN UPDATE t SET a = 1, b = 2 WHERE id = 3; END IF; END IF;/);
+  assert.match(su.text, /IF plgauge_ctl\.active\(\) = -1 THEN plgauge_ctl\.reach\(2, 2\); plgauge_ctl\.reach\(4, 1\); END IF; IF plgauge_ctl\.active\(\) = 2 THEN UPDATE t SET b = 2 WHERE id = 3; ELSIF plgauge_ctl\.active\(\) = 3 THEN UPDATE t SET a = 1 WHERE id = 3; ELSIF plgauge_ctl\.active\(\) = 4 THEN UPDATE t SET a = 1, b = 2 WHERE FALSE; ELSE IF .*reach\(1, 1\).* <> 1 THEN UPDATE t SET a = 1, b = 2 WHERE id = 3; END IF; END IF;/);
   const i = su.text.indexOf('SET a = 1 WHERE');
   const line = 1 + (su.text.slice(0, i).match(/\n/g)?.length ?? 0);
   assert.equal(locate(su, line, i - su.text.lastIndexOf('\n', i - 1) + 1)?.mutantId, 3);
@@ -121,10 +121,10 @@ test('schema: a view block gets one UNION ALL branch per variant; select lists s
   const ms = expand(findPoints([path]));
   assert.deepEqual(ms.map((m) => `${m.id} ${m.op} ${m.mutated}`), ['1 AOR a - 1', '2 ROR a <= 3', '3 ROR a <> 3', '4 ROR FALSE', '5 WHR TRUE']);
   const su = buildSchema(ms, new Set(), new Set(), 'DEMO')[0];
-  const V = "SYS_CONTEXT('PLMUT_CTX_", c = (s: string) => s.replaceAll("SYS_CONTEXT('PLMUT_CTX_4FF006CA6B88', 'ACTIVE')", 'V');
+  const V = "SYS_CONTEXT('PLGAUGE_CTX_", c = (s: string) => s.replaceAll("SYS_CONTEXT('PLGAUGE_CTX_4FF006CA6B88', 'ACTIVE')", 'V');
   assert.ok(su.text.includes(V), su.text);
   assert.equal(c(su.text), 'view v as\n  SELECT * FROM (select (CASE V WHEN \'1\' THEN (a - 1) ELSE (a + 1) END) as b from t where a < 3)' +
-    " WHERE NVL(V, '0') NOT IN ('2', '3', '4', '5') AND (NVL(V, '0') <> '-1' OR (SELECT plmut_ctl.hit_sql(1, 5) FROM dual) = 0)" +
+    " WHERE NVL(V, '0') NOT IN ('2', '3', '4', '5') AND (NVL(V, '0') <> '-1' OR (SELECT plgauge_ctl.hit_sql(1, 5) FROM dual) = 0)" +
     " UNION ALL SELECT * FROM (select a + 1 as b from t where a <= 3) WHERE V = '2'" +
     " UNION ALL SELECT * FROM (select a + 1 as b from t where a <> 3) WHERE V = '3'" +
     " UNION ALL SELECT * FROM (select a + 1 as b from t where FALSE) WHERE V = '4'" +
@@ -141,7 +141,7 @@ test('schema: a view block gets one UNION ALL branch per variant; select lists s
   // dropped and unswitched points are not switched; the block still records the unswitched ones
   const part = buildSchema(ms, new Set([2, 3, 4]), new Set([ms[0].point]), 'DEMO')[0];
   const rest = c(part.text);
-  assert.ok(rest.startsWith("view v as\n  SELECT * FROM (select a + 1 as b from t where a < 3) WHERE NVL(V, '0') NOT IN ('5') AND (NVL(V, '0') <> '-1' OR (SELECT plmut_ctl.hit_sql(1, 1) + plmut_ctl.hit_sql(5, 1) FROM dual) = 0) UNION ALL"), rest);
+  assert.ok(rest.startsWith("view v as\n  SELECT * FROM (select a + 1 as b from t where a < 3) WHERE NVL(V, '0') NOT IN ('5') AND (NVL(V, '0') <> '-1' OR (SELECT plgauge_ctl.hit_sql(1, 1) + plgauge_ctl.hit_sql(5, 1) FROM dual) = 0) UNION ALL"), rest);
   assert.deepEqual(part.recorded, [1]);
 });
 
@@ -153,7 +153,7 @@ test('schema: view points without a block are recorded by the main block (no tes
   assert.ok(loose.length > 0);
   const su = buildSchema(ms, new Set(), new Set(loose.map((m) => m.point)), 'DEMO')[0];
   assert.deepEqual(su.recorded, loose.map((m) => m.id));
-  assert.ok(su.text.includes(`plmut_ctl.hit_sql(${Math.min(...ms.map((m) => m.id))}`), su.text);
+  assert.ok(su.text.includes(`plgauge_ctl.hit_sql(${Math.min(...ms.map((m) => m.id))}`), su.text);
 });
 
 test('schema: an ordered view keeps its main query unwrapped; a failing wrapper marks its block broken', () => {
@@ -184,7 +184,7 @@ test('schema: a duplicated PL/SQL statement charges an error in its scaffold to 
     ],
   };
   const su = buildSchema(expand([f]))[0];
-  const i = su.text.indexOf('IF plmut_ctl.active() = -1');
+  const i = su.text.indexOf('IF plgauge_ctl.active() = -1');
   const line = 1 + (su.text.slice(0, i).match(/\n/g)?.length ?? 0);
   const rg = locate(su, line, i - su.text.lastIndexOf('\n', i - 1) + 1);
   assert.equal(rg?.mutantId, 0);
@@ -214,19 +214,19 @@ END k;
   const ms = expand(findPoints([path]));
   assert.deepEqual(ms.map((m) => `${m.id} ${m.op} ${m.mutated.trim()}`), [
     '1 AOR a - 1', '2 ROR a >= 2', '3 ROR a <> 2', '4 ROR FALSE', '5 WHR TRUE', "6 ROR TRUE", "7 ROR FALSE",
-    '8 RET RETURN;', "9 RET RAISE_APPLICATION_ERROR(-20998, 'plmut: RET');", '10 ROR a <= 5', '11 ROR a <> 5', '12 ROR FALSE', '13 WHR TRUE',
+    '8 RET RETURN;', "9 RET RAISE_APPLICATION_ERROR(-20998, 'plgauge: RET');", '10 ROR a <= 5', '11 ROR a <> 5', '12 ROR FALSE', '13 WHR TRUE',
   ]);
   const su = buildSchema(ms, new Set(), new Set(), 'DEMO')[0];
-  const t = su.text.replaceAll("SYS_CONTEXT('PLMUT_CTX_4FF006CA6B88', 'ACTIVE')", 'V');
+  const t = su.text.replaceAll("SYS_CONTEXT('PLGAUGE_CTX_4FF006CA6B88', 'ACTIVE')", 'V');
   assert.ok(t.includes("CURSOR c IS SELECT * FROM (SELECT (CASE V WHEN '1' THEN (a - 1) ELSE (a + 1) END) AS b FROM t WHERE a > 2)" +
-    " WHERE NVL(V, '0') NOT IN ('2', '3', '4', '5') AND (NVL(V, '0') <> '-1' OR (SELECT plmut_ctl.hit(1, 5) FROM dual) = 0)" +
+    " WHERE NVL(V, '0') NOT IN ('2', '3', '4', '5') AND (NVL(V, '0') <> '-1' OR (SELECT plgauge_ctl.hit(1, 5) FROM dual) = 0)" +
     " UNION ALL SELECT * FROM (SELECT a + 1 AS b FROM t WHERE a >= 2) WHERE V = '2'"), t);
   assert.ok(t.includes("UNION ALL SELECT * FROM (SELECT a + 1 AS b FROM t WHERE TRUE) WHERE V = '5';"), t);
-  assert.ok(t.includes("l_sql VARCHAR2(100) := (CASE CASE plmut$a WHEN -1 THEN plmut_ctl.hit(6, 2) ELSE plmut$a END" +
+  assert.ok(t.includes("l_sql VARCHAR2(100) := (CASE CASE plgauge$a WHEN -1 THEN plgauge_ctl.hit(6, 2) ELSE plgauge$a END" +
     " WHEN 6 THEN 'delete from t where TRUE' WHEN 7 THEN 'delete from t where FALSE' ELSE 'delete from t where x = ''y''' END);"), t);
   // the copies keep the loop guard: a mutant must not make a copied loop run away
-  assert.match(t, /IF plmut\$a = -1 THEN plmut_ctl\.reach\(10, 3\); plmut_ctl\.reach\(13, 1\); END IF; IF plmut\$a = 10 THEN FOR r IN \(SELECT a FROM t WHERE a <= 5\) LOOP IF plmut\$a <> 0 THEN plmut_ctl\.tick\(1\); END IF;\s+NULL;\s+END LOOP; ELSIF/);
-  assert.match(t, /ELSE FOR r IN \(SELECT a FROM t WHERE a < 5\) LOOP IF plmut\$a <> 0 THEN plmut_ctl\.tick\(1\); END IF;\s+NULL;\s+END LOOP; END IF;/);
+  assert.match(t, /IF plgauge\$a = -1 THEN plgauge_ctl\.reach\(10, 3\); plgauge_ctl\.reach\(13, 1\); END IF; IF plgauge\$a = 10 THEN FOR r IN \(SELECT a FROM t WHERE a <= 5\) LOOP IF plgauge\$a <> 0 THEN plgauge_ctl\.tick\(1\); END IF;\s+NULL;\s+END LOOP; ELSIF/);
+  assert.match(t, /ELSE FOR r IN \(SELECT a FROM t WHERE a < 5\) LOOP IF plgauge\$a <> 0 THEN plgauge_ctl\.tick\(1\); END IF;\s+NULL;\s+END LOOP; END IF;/);
   // the oracle rewriter changes only the inside of the literal
   assert.ok(mutatedUnit(ms[5]).includes("l_sql VARCHAR2(100) := 'delete from t where TRUE';"));
   // a failing cursor wrapper takes its block out (oracle rewriter), the rest stays switched
@@ -241,7 +241,7 @@ END k;
 test('livePlan: dead branches and the schema scaffold drop out; a changed plan shows', () => {
   // EXPLAIN PLAN of a view wrapped with two branches (23ai expands the recording OR into a second copy)
   const r = (id: number, parent: number | null, op: string, filter: string | null = null): PlanRow => ({ id, parent, op, filter });
-  const V = "SYS_CONTEXT('PLMUT_CTX_X','ACTIVE')";
+  const V = "SYS_CONTEXT('PLGAUGE_CTX_X','ACTIVE')";
   const join = (base: number, parent: number, x = '"A"."X">3') => [
     r(base, parent, 'HASH JOIN'), r(base + 1, base, 'TABLE ACCESS FULL PT_B'), r(base + 2, base, 'TABLE ACCESS FULL PT_A', x),
   ];
@@ -277,7 +277,7 @@ test('livePlan: dead branches and the schema scaffold drop out; a changed plan s
   const plainNe = livePlan(ne('NOT EXISTS (SELECT 0 FROM "U" "U" WHERE "U"."X"=:B1)'));
   assert.equal(planDiff(plainNe, livePlan(ne(`NOT EXISTS (SELECT 0 FROM "U" "U" WHERE "U"."X"=:B1) AND NVL(${V},'0')<>'2'`))), undefined);
   // a view's own FROM dual stays; only the recording's dual (last child of a filter that reads DUAL) goes
-  const rec = `(NVL(${V},'0')<>'-1' OR  (SELECT "PLMUT_CTL"."HIT"(1,5) FROM "SYS"."DUAL" "DUAL")=0)`;
+  const rec = `(NVL(${V},'0')<>'-1' OR  (SELECT "PLGAUGE_CTL"."HIT"(1,5) FROM "SYS"."DUAL" "DUAL")=0)`;
   const dual = livePlan([r(0, null, 'SELECT STATEMENT'), r(1, 0, 'FAST DUAL')]);
   assert.equal(planDiff(dual, livePlan([r(0, null, 'SELECT STATEMENT'), r(1, 0, 'FILTER', `NVL(${V},'0')<>'2' AND ${rec}`), r(2, 1, 'FAST DUAL'), r(3, 1, 'FAST DUAL')])), undefined);
   // a kept filter of the original with the recording folded in loses only the recording dual
@@ -337,7 +337,7 @@ test('schema: a view whose points all run one by one keeps a recording wrapper; 
   assert.deepEqual(su.mutants, []);
   assert.deepEqual(su.recorded, ms.map((m) => m.id));
   assert.equal((su.text.match(/UNION ALL/g) ?? []).length, 0);
-  assert.ok(su.text.includes(`(SELECT plmut_ctl.hit_sql(1, ${ms.length}) FROM dual) = 0`), su.text);
+  assert.ok(su.text.includes(`(SELECT plgauge_ctl.hit_sql(1, ${ms.length}) FROM dual) = 0`), su.text);
   const plain = buildSchema(ms, new Set(), all, 'DEMO', new Set(), new Set([su.key]))[0];
   assert.equal(plain.text, plain.original);
   assert.deepEqual(plain.recorded, []);

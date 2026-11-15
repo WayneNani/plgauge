@@ -4,14 +4,14 @@
  * Probes only count in package memory (associative arrays); nothing is written
  * per hit. flush() persists the counters in one autonomous transaction.
  *
- * Other sessions (A8): while a run is registered in plcov_runs, a session that is not the
+ * Other sessions (A8): while a run is registered in plgauge_runs, a session that is not the
  * runner (a scheduler job started by a test, say) records its hits under the test name
  * "#background" and writes them itself: every 1000 statements and at logoff (trigger
  * cov$_logoff, only present during the run).
  */
 
 export const RUNS_TABLE = `
-create table plcov_runs (
+create table plgauge_runs (
   run_id  varchar2(64) primary key,
   started timestamp default systimestamp
 )`;
@@ -24,7 +24,7 @@ exception when others then null;
 end;`;
 
 export const HITS_TABLE = `
-create table plcov_hits (
+create table plgauge_hits (
   run_id  varchar2(64)  not null,
   kind    varchar2(1)   not null,
   k       varchar2(200) not null,
@@ -36,7 +36,7 @@ create table plcov_hits (
 
 export const RUNTIME_SPEC = `
 create or replace package cov$ authid definer is
-  /* plcov runtime: probe functions called by instrumented code. */
+  /* plgauge coverage runtime: probe functions called by instrumented code. */
   -- callable from code under PRAGMA RESTRICT_REFERENCES (PLS-00452 otherwise)
   pragma restrict_references(default, rnds, wnds, rnps, wnps, trust);
   function o(p_d pls_integer) return boolean;
@@ -297,7 +297,7 @@ create or replace package body cov$ is
     l_li t_num;   -- variables before the nested subprograms
     procedure put(p_kind varchar2, p_k varchar2, p_hits pls_integer, p_test varchar2 := null) is
     begin
-      insert into plcov_hits (run_id, kind, k, hits, test) values (p_run, p_kind, p_k, p_hits, p_test);
+      insert into plgauge_hits (run_id, kind, k, hits, test) values (p_run, p_kind, p_k, p_hits, p_test);
     end;
     function tfn(p pls_integer) return varchar2 is
     begin
@@ -350,8 +350,8 @@ create or replace package body cov$ is
   procedure start_run(p_run varchar2) is
     pragma autonomous_transaction;
   begin
-    delete from plcov_runs;
-    insert into plcov_runs (run_id) values (p_run);
+    delete from plgauge_runs;
+    insert into plgauge_runs (run_id) values (p_run);
     commit;
     g_runner := true;
     g_bg := false;
@@ -365,7 +365,7 @@ create or replace package body cov$ is
   procedure stop_run(p_run varchar2) is
     pragma autonomous_transaction;
   begin
-    delete from plcov_runs where run_id = p_run;
+    delete from plgauge_runs where run_id = p_run;
     commit;
   end;
 
@@ -383,9 +383,9 @@ create or replace package body cov$ is
   -- instrumented code's last statement (the first probe may come between it and their read)
   function registered_run return varchar2 is
     pragma autonomous_transaction;
-    l_run plcov_runs.run_id%type;
+    l_run plgauge_runs.run_id%type;
   begin
-    select max(run_id) into l_run from plcov_runs;
+    select max(run_id) into l_run from plgauge_runs;
     commit;
     return l_run;
   end;

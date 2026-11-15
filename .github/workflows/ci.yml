@@ -29,9 +29,8 @@ jobs:
       - name: Oracle 23ai Free and utPLSQL
         run: |
           url=$(PLGAUGE_USER=plmut ci/setup-db.sh | tail -1)
-          # PLCOV_DB in user/password@connect form, PLMUT_DB as URL
-          echo "PLMUT_DB=$url" >> "$GITHUB_ENV"
-          echo "PLMUT_LIB_SCHEMA=PLMUT_LIB" >> "$GITHUB_ENV"
-          echo "PLCOV_LIB_SCHEMA=PLMUT_LIB" >> "$GITHUB_ENV"
-          echo "PLCOV_DB=$(echo "$url" | sed -E 's#^oracle://([^:]+):([^@]+)@(.*)$#\1/\2@\3#')" >> "$GITHUB_ENV"
+          # PLGAUGE_COV_DB in user/password@connect form, PLGAUGE_DB as URL
+          echo "PLGAUGE_DB=$url" >> "$GITHUB_ENV"
+          echo "PLGAUGE_LIB_SCHEMA=PLMUT_LIB" >> "$GITHUB_ENV"
+          echo "PLGAUGE_COV_DB=$(echo "$url" | sed -E 's#^oracle://([^:]+):([^@]+)@(.*)$#\1/\2@\3#')" >> "$GITHUB_ENV"
       - run: npm test

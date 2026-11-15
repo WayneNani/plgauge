@@ -311,7 +311,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       await dropLogoff();
     }
     const hits = await loadHits(conn, runId);
-    await conn.execute(`delete from plcov_hits where run_id = :r`, { r: runId });
+    await conn.execute(`delete from plgauge_hits where run_id = :r`, { r: runId });
     await conn.commit();
 
     // (a check that failed above for a moment: the trigger goes now)
@@ -414,8 +414,7 @@ async function waitForJobs(conn: oracledb.Connection, say: (m: string) => void) 
 }
 
 export async function installRuntime(conn: oracledb.Connection) {
-  // a table from an older plcov version gets the test column
-  if (!(await tryExecute(conn, HITS_TABLE, 'ORA-00955'))) await tryExecute(conn, `alter table plcov_hits add (test varchar2(400))`, 'ORA-01430');
+  await tryExecute(conn, HITS_TABLE, 'ORA-00955');
   await tryExecute(conn, RUNS_TABLE, 'ORA-00955');
   await conn.execute(RUNTIME_SPEC);
   await conn.execute(RUNTIME_BODY.replace(/UT3_INFO/g, await utInfoContext(conn)));
@@ -429,7 +428,7 @@ export async function installRuntime(conn: oracledb.Connection) {
 
 async function loadHits(conn: oracledb.Connection, runId: string): Promise<Hits> {
   const res = await conn.execute<[string, string, number, string | null]>(
-    `select kind, k, sum(hits), test from plcov_hits where run_id = :r group by kind, k, test`, { r: runId },
+    `select kind, k, sum(hits), test from plgauge_hits where run_id = :r group by kind, k, test`, { r: runId },
   );
   const hits: Hits = { stmt: new Map(), branch: new Map(), cond: new Map(), dec: new Map(), vec: new Map(), loop: new Map(), perTest: new Map() };
   const forTest = (name: string): TestHits => {

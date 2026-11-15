@@ -1,5 +1,5 @@
 /**
- * Links mutation results with measured coverage (exchange format plcov-coverage/1).
+ * Links mutation results with measured coverage (exchange format plgauge-coverage/1).
  *
  * Coordinates: mutants have file lines; coverage has ALL_SOURCE lines, where line 1 is
  * the line of the unit keyword (PACKAGE BODY ..., without CREATE OR REPLACE). Every
@@ -35,7 +35,7 @@ export class CoverageIndex {
   flaky: Set<string>;
 
   constructor(public exp: CoverageExport) {
-    if (exp.format !== 'plcov-coverage/1') throw new Error(`unbekanntes Coverage-Format: ${exp.format}`);
+    if (exp.format !== 'plgauge-coverage/1') throw new Error(`unbekanntes Coverage-Format: ${exp.format}`);
     this.flaky = new Set(exp.tests.filter((t) => t.status === 'flaky').map((t) => t.path));
     for (const o of exp.objects) this.objects.set(`${o.type} ${o.name}`, o);
   }

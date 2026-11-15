@@ -87,6 +87,6 @@ Das betrifft 1 von 100 Fällen und lohnt sich erst, wenn es auf anderem Code hä
 ```bash
 corpus/fetch.sh                                  # console nach corpus/.cache
 # console in der Datenbank installieren: eval/console/README.md
-PLMUT_DB=oracle://console_eval:…@…/FREEPDB1 npx plgauge mutate run eval/console --json run.json --report run.html
+PLGAUGE_DB=oracle://console_eval:…@…/FREEPDB1 npx plgauge mutate run eval/console --json run.json --report run.html
 npx tsx scripts/eval-summary.ts run.json survivors.tsv
 ```

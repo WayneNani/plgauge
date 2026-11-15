@@ -1,5 +1,5 @@
 /**
- * A project: the directory with plgauge.json (or plmut.json from before the merge), its
+ * A project: the directory with plgauge.json, its
  * install scripts, the files whose units are mutated and the utPLSQL tests. Coverage of a
  * project measures exactly these units with exactly these tests.
  */

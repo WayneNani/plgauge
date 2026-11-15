@@ -13,7 +13,7 @@ export interface ConnectConfig {
   connectString: string;
 }
 
-/** Parses oracle://user:password@host:port/service (the PLMUT_DB form). */
+/** Parses oracle://user:password@host:port/service (the PLGAUGE_DB form). */
 export function parseDbUrl(url: string): ConnectConfig {
   const u = new URL(url);
   if (u.protocol !== 'oracle:') throw new Error(`keine oracle://-URL: ${url}`);
@@ -58,23 +58,23 @@ async function compileDdl(conn: oracledb.Connection, ddl: string, type: string, 
   if (err.rows?.length) throw new Error(`${type} ${name}: ${err.rows.map((r) => `${r[0]}: ${r[1].trim()}`).join('; ')}`);
 }
 
-/** Marker table and plmut_rt. */
+/** Marker table and plgauge_rt. */
 export async function installRuntime(conn: oracledb.Connection): Promise<void> {
   await conn.execute(MARKER_TABLE).catch(ignoring('ORA-00955'));
-  await compileDdl(conn, RT_SPEC, 'PACKAGE', 'PLMUT_RT');
-  await compileDdl(conn, RT_BODY, 'PACKAGE BODY', 'PLMUT_RT');
+  await compileDdl(conn, RT_SPEC, 'PACKAGE', 'PLGAUGE_RT');
+  await compileDdl(conn, RT_BODY, 'PACKAGE BODY', 'PLGAUGE_RT');
 }
 
-/** Context and plmut_ctl. */
+/** Context and plgauge_ctl. */
 export async function installControl(conn: oracledb.Connection): Promise<void> {
   const ctx = contextName((await conn.execute<[string]>(`select sys_context('USERENV','CURRENT_SCHEMA') from dual`)).rows![0][0]);
   try {
-    await conn.execute(CTX.replace(/plmut_ctx/i, ctx));
+    await conn.execute(CTX.replace(/plgauge_ctx/i, ctx));
   } catch (e) {
     throw new Error(`CREATE CONTEXT (Recht CREATE ANY CONTEXT nötig): ${(e as Error).message}`);
   }
-  await compileDdl(conn, CTL_SPEC.replace(/PLMUT_CTX/g, ctx), 'PACKAGE', 'PLMUT_CTL');
-  await compileDdl(conn, CTL_BODY.replace(/PLMUT_CTX/g, ctx).replace(/UT3_INFO/g, await utInfoContext(conn)), 'PACKAGE BODY', 'PLMUT_CTL');
+  await compileDdl(conn, CTL_SPEC.replace(/PLGAUGE_CTX/g, ctx), 'PACKAGE', 'PLGAUGE_CTL');
+  await compileDdl(conn, CTL_BODY.replace(/PLGAUGE_CTX/g, ctx).replace(/UT3_INFO/g, await utInfoContext(conn)), 'PACKAGE BODY', 'PLGAUGE_CTL');
 }
 
 export interface TestResult {
@@ -141,9 +141,9 @@ export async function runTests(s: Session, monitor: oracledb.Connection, paths: 
   const t0 = performance.now();
   const res: RunResult = { tests: [], elapsedMs: 0, timedOut: false, killed: false, committed: false };
   try {
-    const out = await clobCall(s, `BEGIN plmut_rt.run_tests(:p, :o); END;`, { p: { val: paths.join(','), type: oracledb.DB_TYPE_CLOB } });
+    const out = await clobCall(s, `BEGIN plgauge_rt.run_tests(:p, :o); END;`, { p: { val: paths.join(','), type: oracledb.DB_TYPE_CLOB } });
     // (a commit after a test that rolled back the whole transaction, marker included, is not seen)
-    res.committed = out.includes('##plmut[committed]');
+    res.committed = out.includes('##plgauge[committed]');
     res.tests = parseTeamCity(out);
     if (!res.tests.length) res.err = new Error('keine Tests im Report (Pfade prüfen)');
   } catch (e) {
@@ -165,7 +165,7 @@ export async function resetPackages(s: Session): Promise<void> {
 
 /** Sets the active mutant and discards package state. 0 = none, -1 = recording run. */
 export async function activate(s: Session, id: number): Promise<void> {
-  await s.conn.execute(`BEGIN plmut_ctl.activate(:id); END;`, { id });
+  await s.conn.execute(`BEGIN plgauge_ctl.activate(:id); END;`, { id });
   await resetPackages(s);
 }
 
@@ -178,7 +178,7 @@ async function clobCall(s: Session, block: string, binds: Record<string, oracled
 
 /** Per test name, the mutant IDs whose points the test reached ("" = outside a test). */
 export async function hits(s: Session): Promise<Map<string, number[]>> {
-  const out = await clobCall(s, `BEGIN plmut_ctl.dump_hits(:o); END;`);
+  const out = await clobCall(s, `BEGIN plgauge_ctl.dump_hits(:o); END;`);
   const m = new Map<string, number[]>();
   for (const line of out.split('\n')) {
     const k = line.lastIndexOf('|');
@@ -191,7 +191,7 @@ export async function hits(s: Session): Promise<Map<string, number[]>> {
 
 /** Iteration count per loop guard of the last run. */
 export async function loops(s: Session): Promise<Map<number, number>> {
-  const out = await clobCall(s, `BEGIN plmut_ctl.dump_loops(:o); END;`);
+  const out = await clobCall(s, `BEGIN plgauge_ctl.dump_loops(:o); END;`);
   const m = new Map<number, number>();
   for (const line of out.split('\n')) {
     const [a, b] = line.split('|');
@@ -202,12 +202,12 @@ export async function loops(s: Session): Promise<Map<number, number>> {
 
 /** Stores loop limits in the session's context, where they survive package resets. */
 export async function setLoopLimits(s: Session, limits: Map<number, number>): Promise<void> {
-  for (const [id, n] of limits) await s.conn.execute(`BEGIN plmut_ctl.set_limit(:id, :n); END;`, { id, n });
+  for (const [id, n] of limits) await s.conn.execute(`BEGIN plgauge_ctl.set_limit(:id, :n); END;`, { id, n });
 }
 
 /** Whether a loop guard fired since the last activation. */
 export async function aborted(s: Session): Promise<boolean> {
-  return (await s.conn.execute<[number]>(`SELECT plmut_ctl.aborted FROM dual`)).rows![0][0] === 1;
+  return (await s.conn.execute<[number]>(`SELECT plgauge_ctl.aborted FROM dual`)).rows![0][0] === 1;
 }
 
 export const isMemory = (e?: Error) => !!e && /ORA-04036|ORA-04030/.test(e.message);

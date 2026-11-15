@@ -68,7 +68,7 @@ const sqlOps = new Set(SQL_OPERATORS);
 const files = dirs.flatMap((d) => walk(d));
 // specs first (twice), so that bodies find their dependencies
 const specs = files.flatMap((f) => extractUnits(f, '/')).filter((u) => !BODY.test(u.kind.toUpperCase()));
-await conn.execute(CTL_SPEC.replace(/PLMUT_CTX/g, 'PLMUT_CTX'));
+await conn.execute(CTL_SPEC.replace(/PLGAUGE_CTX/g, 'PLGAUGE_CTX'));
 for (let pass = 0; pass < 2; pass++) for (const u of specs) await compile(u.kind.toUpperCase(), u.name, u.text);
 
 const res = {

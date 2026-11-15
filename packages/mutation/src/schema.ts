@@ -2,11 +2,11 @@
  * Schema rewriter, ported from plmut (internal/mutant/schema.go). All mutants of a
  * unit are compiled into one body; every point becomes a switch on the active ID:
  *
- *   bool, value (PL/SQL): (CASE CASE A WHEN -1 THEN plmut_ctl.hit(b, n) ELSE A END
+ *   bool, value (PL/SQL): (CASE CASE A WHEN -1 THEN plgauge_ctl.hit(b, n) ELSE A END
  *                          WHEN b THEN (m1) … ELSE (orig) END)
- *   stmt:                 IF A = -1 THEN plmut_ctl.reach(b, 1); END IF; IF A <> b THEN stmt END IF;
+ *   stmt:                 IF A = -1 THEN plgauge_ctl.reach(b, 1); END IF; IF A <> b THEN stmt END IF;
  *   insert:               IF A = -1 THEN reach; END IF; IF A = id THEN <variant> END IF; …
- *   loop guard:           IF A <> 0 THEN plmut_ctl.tick(loop); END IF;
+ *   loop guard:           IF A <> 0 THEN plgauge_ctl.tick(loop); END IF;
  *   SQL (any kind):       the enclosing PL/SQL statement, once per variant:
  *                         IF A = -1 THEN reach; END IF; IF A = id THEN <stmt'> ELSIF … ELSE stmt END IF;
  *                         A switch inside the SQL would hide predicates from the optimizer
@@ -19,15 +19,15 @@
  *   views, cursors:       every query block (the view's query, WITH elements, inline views
  *                         in FROM; the query of an unordered cursor declaration) with mutants becomes
  *                           SELECT * FROM (block) WHERE NVL(V, '0') NOT IN (ids of branches)
- *                             AND (NVL(V, '0') <> '-1' OR (SELECT plmut_ctl.hit(b, n) FROM dual) = 0)
+ *                             AND (NVL(V, '0') <> '-1' OR (SELECT plgauge_ctl.hit(b, n) FROM dual) = 0)
  *                           UNION ALL SELECT * FROM (block') WHERE V = 'id' …
  *                         with V = SYS_CONTEXT(<context of the runtime schema>, 'ACTIVE'). Every branch but one is
  *                         cut off by a filter on a constant. Points in select lists cannot
  *                         change the plan and are switched in place, (CASE V WHEN 'id' THEN
  *                         (m) … ELSE (orig) END), also conditions (23ai has SQL booleans).
  *
- * A is the package constant plmut$a in package bodies (read once per instantiation,
- * so the worker resets package state when it switches mutants), plmut_ctl.active()
+ * A is the package constant plgauge$a in package bodies (read once per instantiation,
+ * so the worker resets package state when it switches mutants), plgauge_ctl.active()
  * elsewhere. ID -1 is the recording run.
  */
 import { contextName } from './ddl.js';
@@ -92,7 +92,7 @@ interface Node {
 /**
  * Rewrites every unit that has mutants. Mutants in dropped are left out (they did not
  * compile); points in naive are not switched (their mutants run with the oracle rewriter).
- * runtimeOwner: the schema of plmut_ctl. Units of other schemas call it qualified (A4).
+ * runtimeOwner: the schema of plgauge_ctl. Units of other schemas call it qualified (A4).
  * broken: view blocks (blockKey) whose wrapper did not compile; they get none, not even
  * the one that only records.
  * plain: views (unit keys) that go in exactly as written, without even the recording wrapper
@@ -190,13 +190,13 @@ export function buildSchema(ms: Mutant[], dropped: Set<number> = new Set(), naiv
       nodes.push({ p: { unit: l.unit, op: '', kind: 'guard', sub: '', ctx: 'plsql', cat: '', start: l.at, end: l.at, orig: '', mutants: [] }, ms: [], kids: [], loop: ++loopId, order: order++ });
     }
     const roots = nest(nodes);
-    const ctl = su.owner && runtimeOwner && su.owner !== runtimeOwner.toUpperCase() ? `${runtimeOwner.toLowerCase()}.plmut_ctl` : 'plmut_ctl';
-    const r = new Renderer(f.src, su, `${ctl}.active()`, ctl, runtimeOwner ? contextName(runtimeOwner) : 'PLMUT_CTX', [...(u.inserts ?? [])].sort((a, b) => a.at - b.at));
+    const ctl = su.owner && runtimeOwner && su.owner !== runtimeOwner.toUpperCase() ? `${runtimeOwner.toLowerCase()}.plgauge_ctl` : 'plgauge_ctl';
+    const r = new Renderer(f.src, su, `${ctl}.active()`, ctl, runtimeOwner ? contextName(runtimeOwner) : 'PLGAUGE_CTX', [...(u.inserts ?? [])].sort((a, b) => a.at - b.at));
     if (u.decl >= 0) {
-      r.active = 'plmut$a';
+      r.active = 'plgauge$a';
       r.write(f.src.subarray(u.start, u.decl).toString('utf8'));
       // on the same line: line numbers ($$PLSQL_LINE, error backtraces) stay those of the original
-      r.write(` plmut$a CONSTANT PLS_INTEGER := ${ctl}.active;`);
+      r.write(` plgauge$a CONSTANT PLS_INTEGER := ${ctl}.active;`);
     }
     r.rangeWith(u.decl >= 0 ? u.decl : u.start, u.end, roots);
     // Strip CREATE … so that positions match what Oracle reports.
@@ -228,7 +228,7 @@ const identChar = (s: string) => s.length > 0 && identByte(s.charCodeAt(0));
 
 class Renderer {
   b = '';
-  constructor(private src: Buffer, private su: SchemaUnit, public active: string, private ctl = 'plmut_ctl', private ctx = 'PLMUT_CTX', private inserts: NonNullable<Unit['inserts']> = []) {}
+  constructor(private src: Buffer, private su: SchemaUnit, public active: string, private ctl = 'plgauge_ctl', private ctx = 'PLGAUGE_CTX', private inserts: NonNullable<Unit['inserts']> = []) {}
 
   write(s: string) {
     this.b += s;
@@ -386,7 +386,7 @@ class Renderer {
     const branches = [...n.ms].sort((x, y) => x.id - y.id);
     const conds: string[] = [];
     for (let i = 0; i < branches.length; i += 900) conds.push(`NVL(${V}, '0') NOT IN (${branches.slice(i, i + 900).map((m) => `'${m.id}'`).join(', ')})`);
-    // views: hit_sql, never in parallel slaves (see plmut_ctl); cursor declarations in PL/SQL:
+    // views: hit_sql, never in parallel slaves (see plgauge_ctl); cursor declarations in PL/SQL:
     // hit, whose purity a subprogram under PRAGMA RESTRICT_REFERENCES may rely on
     const fn = this.su.type === 'VIEW' ? 'hit_sql' : 'hit';
     conds.push(`(NVL(${V}, '0') <> '-1' OR (SELECT ${this.hits(n.dup!.reach.map((m) => m.id), fn)} FROM dual) = 0)`);
@@ -511,12 +511,12 @@ export interface PlanRow {
 }
 
 /** A predicate of the schema: it mentions the switch context or the control package. */
-const SCAFFOLD = /PLMUT_CT[XL]/i;
+const SCAFFOLD = /PLGAUGE_CT[XL]/i;
 /**
  * A conjunct that holds only under one mutant (V = 'id') or only in the recording run (what
  * OR expansion makes of the original branch's recording condition: LNNVL(NVL(V, '0') <> '-1')).
  */
-const DEAD = /^(NVL\()?SYS_CONTEXT\('PLMUT_CTX[^']*','ACTIVE'\)(,'0'\))?='-?\d+'$|^LNNVL\(NVL\(SYS_CONTEXT\('PLMUT_CTX[^']*','ACTIVE'\),'0'\)<>'-1'\)$/;
+const DEAD = /^(NVL\()?SYS_CONTEXT\('PLGAUGE_CTX[^']*','ACTIVE'\)(,'0'\))?='-?\d+'$|^LNNVL\(NVL\(SYS_CONTEXT\('PLGAUGE_CTX[^']*','ACTIVE'\),'0'\)<>'-1'\)$/;
 
 /** The top-level AND terms of a predicate, outer parentheses removed (and split again). */
 function conjuncts(f: string): string[] {

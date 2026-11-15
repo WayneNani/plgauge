@@ -2,7 +2,7 @@ node_modules/
 corpus/.cache/
 .env.local
 examples/order_pricing/report/coverage.json
-examples/order_pricing/plcov.local.json
+examples/order_pricing/coverage-config.local.json
 eval/pljson
 eval/*.html
 examples/*/report.*
