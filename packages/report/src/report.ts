@@ -97,10 +97,7 @@ export function renderHtml(r: RunReport, opts: { mutation?: { results: MutationR
   const ut = objs.reduce((a, o) => ({ covered: a.covered + (o.utplsql?.covered ?? 0), total: a.total + (o.utplsql?.total ?? 0) }), { covered: 0, total: 0 });
   const totals = Object.fromEntries(METRICS.map((m) => [m.key, sum(objs, m.key)])) as Record<MetricKey, Metric>;
   const tips: string[] = [];
-  const tip = (html: string) => {
-    tips.push(html);
-    return `t${tips.length - 1}`;
-  };
+  const tip = (html: string) => `t${tips.push(html) - 1}`;
 
   // ---------------------------------------------------------------- hero
   const utPct = pctNum(ut);
@@ -419,12 +416,9 @@ function unchecked(o: ObjectResult, byLine: Map<number, MutationResultLite[]> | 
   if (!byLine) return [];
   const out: { line: number; m: MutationResultLite }[] = [];
   for (const [line, rs] of byLine) {
-    for (const m of rs) {
-      if (m.status !== 'SURVIVED') continue;
-      // the statement around the mutant ran: the line itself or the nearest statement start above
-      const st = o.statements.filter((s) => s.line <= line && s.endLine >= line).sort((a, b) => b.line - a.line)[0];
-      if (st && st.hits > 0) out.push({ line, m });
-    }
+    // the statement around the mutant ran: the line itself or the nearest statement start above
+    const st = o.statements.filter((s) => s.line <= line && s.endLine >= line).sort((a, b) => b.line - a.line)[0];
+    if (st && st.hits > 0) out.push(...rs.filter((m) => m.status === 'SURVIVED').map((m) => ({ line, m })));
   }
   return out.sort((a, b) => a.line - b.line);
 }

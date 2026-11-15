@@ -34,10 +34,9 @@ export interface Session {
 export async function newSession(cfg: ConnectConfig): Promise<Session> {
   const conn = await oracledb.getConnection(cfg);
   try {
-    const r = await conn.execute<[number, number]>(
+    const [sid, serial] = (await conn.execute<[number, number]>(
       `select to_number(sys_context('USERENV','SID')), serial# from v$session where sid = sys_context('USERENV','SID')`,
-    );
-    const [sid, serial] = r.rows![0];
+    )).rows![0];
     return { conn, sid, serial };
   } catch (e) {
     // (an open connection would keep the process alive)
@@ -68,8 +67,7 @@ export async function installRuntime(conn: oracledb.Connection): Promise<void> {
 
 /** Context and plmut_ctl. */
 export async function installControl(conn: oracledb.Connection): Promise<void> {
-  const schema = (await conn.execute<[string]>(`select sys_context('USERENV','CURRENT_SCHEMA') from dual`)).rows![0][0];
-  const ctx = contextName(schema);
+  const ctx = contextName((await conn.execute<[string]>(`select sys_context('USERENV','CURRENT_SCHEMA') from dual`)).rows![0][0]);
   try {
     await conn.execute(CTX.replace(/plmut_ctx/i, ctx));
   } catch (e) {
@@ -184,11 +182,9 @@ export async function hits(s: Session): Promise<Map<string, number[]>> {
   const m = new Map<string, number[]>();
   for (const line of out.split('\n')) {
     const k = line.lastIndexOf('|');
-    if (k < 0) continue;
     const id = Number(line.slice(k + 1));
-    if (!Number.isFinite(id)) continue;
     const test = line.slice(0, k);
-    (m.get(test) ?? m.set(test, []).get(test)!).push(id);
+    if (k >= 0 && Number.isFinite(id)) (m.get(test) ?? m.set(test, []).get(test)!).push(id);
   }
   return m;
 }
@@ -211,8 +207,7 @@ export async function setLoopLimits(s: Session, limits: Map<number, number>): Pr
 
 /** Whether a loop guard fired since the last activation. */
 export async function aborted(s: Session): Promise<boolean> {
-  const r = await s.conn.execute<[number]>(`SELECT plmut_ctl.aborted FROM dual`);
-  return r.rows![0][0] === 1;
+  return (await s.conn.execute<[number]>(`SELECT plmut_ctl.aborted FROM dual`)).rows![0][0] === 1;
 }
 
 export const isMemory = (e?: Error) => !!e && /ORA-04036|ORA-04030/.test(e.message);
@@ -230,24 +225,14 @@ export function parseTeamCity(out: string): TestResult[] {
     const kind = sp < 0 ? body : body.slice(0, sp);
     const a = parseAttrs(sp < 0 ? '' : body.slice(sp + 1));
     const name = a.name ?? '';
-    switch (kind) {
-      case 'testStarted':
-        get(name);
-        break;
-      case 'testFailed': {
-        const t = get(name);
-        t.failed = true;
-        if (!t.message) t.message = `${a.message ?? ''} ${a.details ?? ''}`.trim();
-        break;
-      }
-      case 'testIgnored':
-        get(name).ignored = true;
-        break;
-      case 'testFinished': {
-        const d = Number(a.duration);
-        if (Number.isFinite(d)) get(name).durationMs = d;
-        break;
-      }
+    const d = Number(a.duration);
+    if (kind === 'testStarted') get(name);
+    else if (kind === 'testIgnored') get(name).ignored = true;
+    else if (kind === 'testFinished' && Number.isFinite(d)) get(name).durationMs = d;
+    else if (kind === 'testFailed') {
+      const t = get(name);
+      t.failed = true;
+      t.message ||= `${a.message ?? ''} ${a.details ?? ''}`.trim();
     }
   }
   return [...index.values()];
@@ -266,13 +251,9 @@ function parseAttrs(s: string): Record<string, string> {
     let v = '';
     for (; i < s.length; i++) {
       const c = s[i];
-      if (c === '|' && i + 1 < s.length) {
-        const n = s[++i];
-        v += n === 'n' ? '\n' : n === 'r' ? '\r' : n;
-        continue;
-      }
       if (c === "'") break;
-      v += c;
+      const n = c === '|' && i + 1 < s.length ? s[++i] : undefined;
+      v += n === undefined ? c : n === 'n' ? '\n' : n === 'r' ? '\r' : n;
     }
     m[key] = v;
     i++;

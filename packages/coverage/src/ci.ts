@@ -45,9 +45,8 @@ export function sourceMap(files: string[], rel: (p: string) => string = (p) => p
     for (const u of p.units) {
       let k = u.a;
       while (['CREATE', 'OR', 'REPLACE', 'EDITIONABLE', 'NONEDITIONABLE', 'EDITIONING'].includes(p.tokens[k].up)) k++;
-      let name = u.name!;
-      name = name.slice(name.lastIndexOf('.') + 1);
-      name = name.startsWith('"') ? name.replace(/"/g, '') : name.toUpperCase();
+      const last = u.name!.slice(u.name!.lastIndexOf('.') + 1);
+      const name = last.startsWith('"') ? last.replace(/"/g, '') : last.toUpperCase();
       map.set(`${u.op} ${name}`.toUpperCase(), { path: rel(f), firstLine: p.tokens[k].line });
     }
   }
@@ -321,10 +320,7 @@ export function quotas(exp: CoverageExport): Record<QuotaKey, { covered: number;
     for (const c of o.conditions.filter((x) => !x.nf)) {
       q.cond.total += 2;
       q.cond.covered += +((c.t ?? c.tests.T.length) > 0) + +((c.f ?? c.tests.F.length) > 0);
-      if (c.mcdc && c.mcdc !== 'na') {
-        q.mcdc.total++;
-        if (c.mcdc === 'yes') q.mcdc.covered++;
-      }
+      if (c.mcdc && c.mcdc !== 'na') { q.mcdc.total++; q.mcdc.covered += +(c.mcdc === 'yes'); }
     }
   }
   return q;

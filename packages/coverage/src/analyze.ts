@@ -288,10 +288,7 @@ function isPair(i: number, a: { v: string; out: boolean }, b: { v: string; out: 
   const ai = a.v[i];
   const bi = b.v[i];
   if (!((ai === 'T' && bi === 'F') || (ai === 'F' && bi === 'T'))) return false;
-  for (let j = 0; j < a.v.length; j++) {
-    if (j === i) continue;
-    if (a.v[j] !== b.v[j] && a.v[j] !== '-' && b.v[j] !== '-') return false;
-  }
+  for (let j = 0; j < a.v.length; j++) if (j !== i && a.v[j] !== b.v[j] && a.v[j] !== '-' && b.v[j] !== '-') return false;
   return true;
 }
 
@@ -310,10 +307,7 @@ function computeMcdc(tree: CondNode, conds: CondResult[], vectors: DecisionResul
   }
   for (let i = 0; i < n; i++) {
     const c = conds[i];
-    let ok = false;
-    for (let a = 0; a < observed.length && !ok; a++) {
-      for (let b = a + 1; b < observed.length && !ok; b++) if (isPair(i, observed[a], observed[b])) ok = true;
-    }
+    const ok = observed.some((a, k) => observed.some((b, l) => l > k && isPair(i, a, b)));
     c.mcdc = ok ? 'yes' : 'no';
     if (ok || !candidates.length) continue;
     const fmt = (x: { v: string; out: boolean }) =>

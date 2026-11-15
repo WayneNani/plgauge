@@ -50,7 +50,6 @@ export function tokenize(src: string, opts: LexOptions = {}): Token[] {
   let startLine = 1;
   let startCol = 1;
 
-  /** Advance pos to `to`, keeping line bookkeeping correct. */
   const advance = (to: number) => {
     for (let k = pos; k < to; k++) {
       if (src[k] === '\n') {
@@ -60,7 +59,6 @@ export function tokenize(src: string, opts: LexOptions = {}): Token[] {
     }
     pos = to;
   };
-  /** The token from start to `to`. */
   const emit = (kind: TokenKind, to: number) => {
     advance(to);
     const text = src.slice(start, pos);
@@ -73,7 +71,6 @@ export function tokenize(src: string, opts: LexOptions = {}): Token[] {
     startLine = line;
     startCol = pos - lineStart + 1;
 
-    // whitespace
     if (/\s/.test(ch)) {
       let k = pos;
       while (k < src.length && /\s/.test(src[k])) k++;
@@ -81,11 +78,9 @@ export function tokenize(src: string, opts: LexOptions = {}): Token[] {
       continue;
     }
 
-    // comments
     if (ch === '-' && src[pos + 1] === '-') {
-      let k = src.indexOf('\n', pos);
-      if (k < 0) k = src.length;
-      emit('trivia', k);
+      const k = src.indexOf('\n', pos);
+      emit('trivia', k < 0 ? src.length : k);
       continue;
     }
     if (ch === '/' && src[pos + 1] === '*') {
@@ -108,33 +103,20 @@ export function tokenize(src: string, opts: LexOptions = {}): Token[] {
     }
 
     // national strings n'...'
-    if ((ch === 'n' || ch === 'N') && src[pos + 1] === "'") {
-      advance(pos + 1);
-    }
+    if ((ch === 'n' || ch === 'N') && src[pos + 1] === "'") advance(pos + 1);
 
-    // strings
     if (src[pos] === "'") {
+      // '' inside the string is a quote, not its end
       let k = pos + 1;
-      for (;;) {
-        if (k >= src.length) {
-          if (!opts.tolerant) throw new LexError('Unterminated string', startLine, startCol);
-          k = src.length - 1;
-          break;
-        }
-        if (src[k] === "'") {
-          if (src[k + 1] === "'") {
-            k += 2;
-            continue;
-          }
-          break;
-        }
-        k++;
+      while (k < src.length && (src[k] !== "'" || src[k + 1] === "'")) k += src[k] === "'" ? 2 : 1;
+      if (k >= src.length) {
+        if (!opts.tolerant) throw new LexError('Unterminated string', startLine, startCol);
+        k = src.length - 1;
       }
       emit('string', k + 1);
       continue;
     }
 
-    // quoted identifiers
     if (ch === '"') {
       const k = src.indexOf('"', pos + 1);
       if (k < 0 && !opts.tolerant) throw new LexError('Unterminated quoted identifier', startLine, startCol);
@@ -160,7 +142,6 @@ export function tokenize(src: string, opts: LexOptions = {}): Token[] {
       continue;
     }
 
-    // identifiers / keywords
     if (isIdentStart(ch)) {
       let k = pos + 1;
       while (k < src.length && isIdentPart(src[k])) k++;
@@ -168,13 +149,7 @@ export function tokenize(src: string, opts: LexOptions = {}): Token[] {
       continue;
     }
 
-    // operators
-    const two = src.slice(pos, pos + 2);
-    if (MULTI_OPS.includes(two)) {
-      emit('op', pos + 2);
-      continue;
-    }
-    emit('op', pos + 1);
+    emit('op', pos + (MULTI_OPS.includes(src.slice(pos, pos + 2)) ? 2 : 1));
   }
   return tokens;
 }

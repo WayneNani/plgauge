@@ -382,11 +382,9 @@ async function main() {
                 await lock.execute(`alter session set current_schema = ${qi(home)}`);
                 // a running run (of either tool) holds the lock: its objects are not leftovers
                 await lockRun(lock, RUN_LOCK);
-                if (logoff) {
-                  await conn.execute(`drop trigger ${qi(home)}.cov$_logoff`).then(
-                    () => console.error('Logoff-Trigger der Coverage entfernt'),
-                    (e: Error) => { if (!e.message.includes('ORA-04080')) console.error(`  ✗ Logoff-Trigger nicht entfernt: ${firstLine(e)}`); });
-                }
+                if (logoff) await conn.execute(`drop trigger ${qi(home)}.cov$_logoff`).then(
+                  () => console.error('Logoff-Trigger der Coverage entfernt'),
+                  (e: Error) => { if (!e.message.includes('ORA-04080')) console.error(`  ✗ Logoff-Trigger nicht entfernt: ${firstLine(e)}`); });
                 // read again under the lock: a run that finished meanwhile left other entries
                 await restoreJournal(conn, await journalEntries(conn), (m) => console.error(m));
                 const still = await journalEntries(conn);

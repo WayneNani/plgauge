@@ -356,11 +356,8 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       }
       const obj = objects.find((o) => o.owner === m.owner && o.name === m.name && o.type === m.type)!;
       const r = analyze(m, hits, testIndex);
-      r.sourceSha256 = sha256(obj.processed);
-      r.rawSha256 = sha256(obj.original);
       const ut = utCov.sonar.get(r.key);
-      if (ut) r.utplsql = ut;
-      return r;
+      return Object.assign(r, { sourceSha256: sha256(obj.processed), rawSha256: sha256(obj.original) }, ut ? { utplsql: ut } : {});
     });
 
     return {
@@ -369,17 +366,9 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       schema: multi ? schemas.join(',') : schema,
       sqlProbes,
       timings: { baselineMs: baseline.run.ms, utplsqlCoverageMs: utCov.run.ms, instrumentedMs: instrumentedRun.run.ms, instrumentMs, compileMs },
-      baseline: baseline.run,
-      utplsqlRun: utCov.run,
-      instrumentedRun: instrumentedRun.run,
-      equivalent,
-      flakyTests: [...flaky].sort(),
-      baselineRuns: repeat,
-      differingTests: differing,
-      tests,
-      perTest,
-      objects: objectsOut,
-      log: messages,
+      baseline: baseline.run, utplsqlRun: utCov.run, instrumentedRun: instrumentedRun.run,
+      equivalent, flakyTests: [...flaky].sort(), baselineRuns: repeat, differingTests: differing,
+      tests, perTest, objects: objectsOut, log: messages,
       ...(unrestored ? { unrestored } : {}),
     };
   } finally {
@@ -456,10 +445,8 @@ async function loadHits(conn: oracledb.Connection, runId: string): Promise<Hits>
       case 'C': hits.cond.set(k, n); break;
       case 'D': hits.dec.set(k, n); break;
       case 'L': hits.loop.set(k, n); break;
-      case 's': forTest(test!).s.add(Number(k)); break;
-      case 'b': forTest(test!).b.add(Number(k)); break;
-      case 'c': forTest(test!).c.add(k); break;
-      case 'd': forTest(test!).d.add(k); break;
+      case 's': case 'b': forTest(test!)[kind].add(Number(k)); break;
+      case 'c': case 'd': forTest(test!)[kind].add(k); break;
       case 'V': {
         // d|evaluated|true|null|outcome (bit masks) -> d|vector|T/F/N
         const [d, e, t, nl, o] = k.split('|').map(Number);

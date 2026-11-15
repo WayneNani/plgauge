@@ -208,8 +208,7 @@ class Worker {
   private async takeLock(): Promise<void> {
     const l = this.lock;
     if (l) {
-      const ok = await l.execute('select 1 from dual').then(() => true, () => false);
-      if (ok) return;
+      if (await l.execute('select 1 from dual').then(() => true, () => false)) return;
       await l.close().catch(() => {});
       if (this.lock === l) this.lock = undefined;
     }
@@ -232,20 +231,14 @@ class Worker {
       throw e;
     }
     // shut down meanwhile: the run is over, the lock goes with the connection
-    if (this.down) {
-      await c.close().catch(() => {});
-      return;
-    }
+    if (this.down) return c.close().catch(() => {});
     this.lock = c;
     this.held = true;
     // an idle session may be ended (IDLE_TIME, a firewall): a ping every minute keeps it, and a
     // lost lock is taken again or reported
     clearInterval(this.ping);
     this.ping = setInterval(() => {
-      if (this.retired || this.foreign) {
-        clearInterval(this.ping);
-        return;
-      }
+      if (this.retired || this.foreign) return clearInterval(this.ping);
       // a network hiccup: try again next minute (takeLock marks a lock that went to another run)
       this.ensureLock().catch((e: Error) => {
         if (!this.foreign) this.logf(`WARNUNG${this.name}: Laufsperre nicht erneuert: ${firstLine(e)}`);
@@ -624,21 +617,14 @@ class Worker {
     const compile = () => this.compileUnit(unitKey(m), m.unitRef.type, m.unitRef.name, withoutCreate(mutatedUnit(m)));
     try {
       const errs = await compile();
-      if (errs.length) {
-        res.status = 'COMPILE_ERROR';
-        res.detail = errs.slice(0, 3).map((e) => `${e.line}:${e.position} ${e.text}`).join('; ');
-        return res;
-      }
+      if (errs.length) return Object.assign(res, { status: 'COMPILE_ERROR' as const, detail: errs.slice(0, 3).map((e) => `${e.line}:${e.position} ${e.text}`).join('; ') });
       let tests = this.testPaths();
       const sel = await this.run.selection(this, m);
       if (sel) {
         // configured paths may be suites: select from the single tests of the baseline
         tests = this.run.passing.filter((t) => sel.includes(t));
         res.coveredBy = tests;
-        if (!tests.length) {
-          Object.assign(res, { status: 'NOT_COVERED', detail: 'laut Coverage von keinem Test ausgeführt' });
-          return res;
-        }
+        if (!tests.length) return Object.assign(res, { status: 'NOT_COVERED' as const, detail: 'laut Coverage von keinem Test ausgeführt' });
       }
       await resetPackages(this.test);
       const run = await this.runTests(tests);
@@ -769,11 +755,9 @@ class Worker {
       const run = await this.runTests(tests, timeout ? 2 * this.run.limitMs : this.run.limitMs);
       const guard = await aborted(this.test).catch(() => false);
       if (this.dirty(run)) await this.repair(tests);
-      const had = r.sideEffect;
-      r.sideEffect = false;
+      // (confirmVerdicts sends no result with a side effect: one now is this run's)
       this.sideEffect(r, run, tests);
       if (r.sideEffect) await this.resetAfterSideEffect();
-      r.sideEffect ||= had;
       if (!lostConnection(run.err)) this.judgeAgain(r, run, tests, this.name ? ` auf${this.name}` : '', guard);
     } catch (e) {
       this.logf(`Gegenprobe${this.name}, Mutant ${r.id}: ${firstLine(e as Error)}`);
@@ -794,7 +778,6 @@ class Worker {
     Object.assign(r, { status: again.status, killedBy: again.killedBy, detail: again.detail });
   }
 
-  /** Compiles a schema unit's text (see compileUnit). */
   compileSchemaUnit(su: SchemaUnit) {
     return this.compileUnit(su.key, su.type, su.owner ? `"${su.owner}"."${su.name}"` : su.name, su.text);
   }
@@ -813,8 +796,7 @@ class Worker {
     // the database belongs to another run now: never reset it
     if (!cmd0 || this.foreign) return;
     // (the URL may leave the port out: Oracle's default, as parseDbUrl takes it)
-    const port = new URL(this.url).port || '1521';
-    const cmd = cmd0.replaceAll('{port}', port);
+    const cmd = cmd0.replaceAll('{port}', new URL(this.url).port || '1521');
     this.logf(`Worker${this.name} wird zurückgesetzt: ${cmd}`);
     const t0 = Date.now();
     try {
@@ -920,12 +902,11 @@ class Run {
   }
 
   progress(w: Worker, r: Result) {
-    this.done++;
     const one = (s: string) => {
       const t = s.split(/\s+/).join(' ');
       return [...t].length > 60 ? [...t].slice(0, 57).join('') + '…' : t;
     };
-    this.total = Math.max(this.total, this.done);
+    this.total = Math.max(this.total, ++this.done);
     this.logf(`[${this.done}/${this.total}]${w.name} ${r.status.padEnd(13)} ${r.file.split('/').pop()}:${r.line} ${r.op} ${one(r.original)} → ${one(r.mutated)}`);
   }
 
@@ -1073,8 +1054,7 @@ class Run {
     // the baseline's worker unless it retired (its connections are closed then)
     const w = this.workers.find((x) => !x.retired);
     if (!w) return;
-    const mine = (r: Result) => !only || only.has(r.id);
-    const killers = [...new Set(rep.results.filter((r) => mine(r) && killedByTest(r)).map((r) => r.killedBy!))].sort();
+    const killers = [...new Set(rep.results.filter((r) => (!only || only.has(r.id)) && killedByTest(r)).map((r) => r.killedBy!))].sort();
     const flaky = new Set<string>();
     try {
       for (const name of killers) {
@@ -1096,8 +1076,7 @@ class Run {
       this.logf(`Nachprüfung der erkennenden Tests abgebrochen: ${firstLine(e as Error)}`);
     }
     if (!flaky.size) return;
-    rep.flakyTests.push(...flaky);
-    rep.flakyTests.sort();
+    rep.flakyTests = [...rep.flakyTests, ...flaky].sort();
     this.exclude(flaky);
     // every kill of a test found unreliable, also one checked earlier (another recheck call)
     const again = rep.results.filter((r) => r.status === 'KILLED' && flaky.has(r.killedBy ?? ''));
@@ -1132,11 +1111,9 @@ async function withoutTriggeredViews(run: Run, ms: Mutant[]): Promise<Mutant[]> 
     if (m.unitRef.type !== 'VIEW' || (!hasTrigger(m) && !unchecked(m))) out.push(m);
     else if (!left.has(unitKey(m))) left.set(unitKey(m), m);
   }
-  for (const [k, m] of left) {
-    run.logf(hasTrigger(m)
-      ? `${k}: View mit INSTEAD-OF-Trigger, wird nicht mutiert (CREATE OR REPLACE VIEW würde den Trigger löschen)`
-      : `${k}: View eines anderen Schemas, deren INSTEAD-OF-Trigger sich ohne CREATE ANY TRIGGER nicht prüfen lassen: wird nicht mutiert`);
-  }
+  for (const [k, m] of left) run.logf(hasTrigger(m)
+    ? `${k}: View mit INSTEAD-OF-Trigger, wird nicht mutiert (CREATE OR REPLACE VIEW würde den Trigger löschen)`
+    : `${k}: View eines anderen Schemas, deren INSTEAD-OF-Trigger sich ohne CREATE ANY TRIGGER nicht prüfen lassen: wird nicht mutiert`);
   return out;
 }
 
@@ -1205,7 +1182,6 @@ async function settled(ps: Promise<unknown>[]): Promise<void> {
   if (bad) throw bad.reason;
 }
 
-/** Executes a complete run. */
 export async function runMutation(opt: Options): Promise<Report> {
   const t0 = performance.now();
   const { cfg, files, mutants } = projectMutants(opt.dir, opt);
@@ -1242,10 +1218,7 @@ export async function runMutation(opt: Options): Promise<Report> {
   opt.dbUrls.forEach((u, i) => run.workers.push(new Worker(u, opt.dbUrls.length > 1 ? ` w${i + 1}` : '', run)));
   let report: Report | undefined;
   const onSig = () => {
-    if (run.interrupted) {
-      run.logf('Die Originale werden gerade wiederhergestellt, bitte warten (sonst: pltest restore)');
-      return;
-    }
+    if (run.interrupted) return run.logf('Die Originale werden gerade wiederhergestellt, bitte warten (sonst: pltest restore)');
     run.interrupted = true;
     run.logf('Abbruch angefordert, stelle Originale wieder her …');
     // test calls in flight end now (a CI cancel kills the process a few seconds later)
@@ -1734,11 +1707,10 @@ async function record(run: Run, tests: TestResult[], ids: number[], loopCount: n
     run.exclude(new Set(flakyNow.map((t) => t.name)));
     tests = tests.filter((t) => !run.flaky.has(t.name));
   }
-  const h = await hits(w.test);
   const dur = new Map(tests.map((t) => [t.name, t.durationMs]));
   const all = tests.map((t) => t.name);
   const byId = new Map<number, Set<string>>();
-  for (const [test, ids] of h) for (const id of ids) for (const n of test === '' ? all : [test]) (byId.get(id) ?? byId.set(id, new Set()).get(id)!).add(n);
+  for (const [test, ids] of await hits(w.test)) for (const id of ids) for (const n of test === '' ? all : [test]) (byId.get(id) ?? byId.set(id, new Set()).get(id)!).add(n);
   const covering = new Map<number, string[]>([...byId].map(([id, set]) => [id, [...set].sort((a, b) => (dur.get(a) ?? 0) - (dur.get(b) ?? 0) || (a < b ? -1 : a > b ? 1 : 0))]));
   if (!intact) {
     // no mutant may come out NOT_COVERED on lost hits: all tests for every switched mutant

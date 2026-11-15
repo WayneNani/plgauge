@@ -87,9 +87,7 @@ export interface DatabaseInfo {
 export async function databaseInfo(conn: oracledb.Connection): Promise<DatabaseInfo> {
   const ver = await conn.execute<[string]>(`select banner_full from v$version where rownum = 1`);
   const banner = ver.rows?.[0]?.[0]?.split('\n')[0] ?? 'Oracle Database';
-  const major = Number(
-    (await conn.execute<[number]>(`select to_number(regexp_substr(version_full, '^\\d+')) from product_component_version where rownum = 1`)).rows?.[0]?.[0] ?? 19,
-  );
+  const major = Number((await conn.execute<[number]>(`select to_number(regexp_substr(version_full, '^\\d+')) from product_component_version where rownum = 1`)).rows?.[0]?.[0] ?? 19);
   return { banner, major };
 }
 
@@ -412,12 +410,9 @@ export async function replaceSourceDetailed(conn: oracledb.Connection, obj: Sour
  * comparable to codeFingerprint's; undefined for a missing object.
  */
 async function currentCode(conn: oracledb.Connection, obj: Pick<SourceObject, 'owner' | 'name' | 'type'>): Promise<{ text: string; sha: string } | undefined> {
-  if (obj.type === 'VIEW') {
-    const v = await conn.execute<[string]>(`select text from all_views where owner = :o and view_name = :n`, { o: obj.owner, n: obj.name });
-    const text = v.rows?.[0]?.[0];
-    return text === undefined ? undefined : { text, sha: fingerprint(text) };
-  }
-  const r = await conn.execute<[string]>(`select text from all_source where owner = :o and name = :n and type = :t order by line`, { o: obj.owner, n: obj.name, t: obj.type });
+  const r = obj.type === 'VIEW'
+    ? await conn.execute<[string]>(`select text from all_views where owner = :o and view_name = :n`, { o: obj.owner, n: obj.name })
+    : await conn.execute<[string]>(`select text from all_source where owner = :o and name = :n and type = :t order by line`, { o: obj.owner, n: obj.name, t: obj.type });
   if (!r.rows?.length) return undefined;
   const text = r.rows.map((x) => x[0]).join('');
   return { text, sha: fingerprint(text) };
@@ -496,11 +491,9 @@ export async function restoreAll(conn: oracledb.Connection, objs: SourceObject[]
     schemas.add(obj.owner);
   }
   // (may be refused for another schema: the originals are back anyway)
-  if (recompile) {
-    for (const s of schemas) {
-      await conn.execute(`begin dbms_utility.compile_schema(:s, compile_all => false, reuse_settings => true); end;`, { s })
-        .catch((e: Error) => say(`  Hinweis: Neukompilieren von ${s} nicht möglich: ${firstLine(e)}`));
-    }
+  for (const s of recompile ? schemas : []) {
+    await conn.execute(`begin dbms_utility.compile_schema(:s, compile_all => false, reuse_settings => true); end;`, { s })
+      .catch((e: Error) => say(`  Hinweis: Neukompilieren von ${s} nicht möglich: ${firstLine(e)}`));
   }
   // materialized views on a replaced view or function are left NEEDS_COMPILE (compile_schema
   // leaves them)

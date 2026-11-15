@@ -254,14 +254,10 @@ class Parser {
   /** Splits [a, b) at commas of depth 0. */
   private commas(a: number, b: number): [number, number][] {
     const out: [number, number][] = [];
-    let s = a;
-    for (;;) {
+    for (let s = a; ; ) {
       const c = this.find(s, COMMA, b);
-      if (c < 0) {
-        out.push([s, b]);
-        return out;
-      }
-      out.push([s, c]);
+      out.push([s, c < 0 ? b : c]);
+      if (c < 0) return out;
       s = c + 1;
     }
   }
@@ -416,8 +412,7 @@ class Parser {
     // trailing view constraints are not part of the query
     let qb = end;
     const w = (k: number, ...ws: string[]) => k > as && this.isWord(k, ...ws);
-    if (w(qb - 3, 'WITH') && w(qb - 2, 'READ') && w(qb - 1, 'ONLY')) qb -= 3;
-    else if (w(qb - 3, 'WITH') && w(qb - 2, 'CHECK') && w(qb - 1, 'OPTION')) qb -= 3;
+    if (w(qb - 3, 'WITH') && ((w(qb - 2, 'READ') && w(qb - 1, 'ONLY')) || (w(qb - 2, 'CHECK') && w(qb - 1, 'OPTION')))) qb -= 3;
     else if (w(qb - 5, 'WITH') && w(qb - 4, 'CHECK') && w(qb - 3, 'OPTION') && w(qb - 2, 'CONSTRAINT')) qb -= 5;
     if (qb <= as + 1) this.fail('Abfrage der View fehlt', as);
     const q = this.query(as + 1, qb);
@@ -437,11 +432,7 @@ class Parser {
         this.i = c + 1;
         continue;
       }
-      if (this.at('(')) {
-        this.i = this.close(this.i) + 1;
-        continue;
-      }
-      this.i++;
+      this.i = this.at('(') ? this.close(this.i) + 1 : this.i + 1;
     }
     if (this.at('CALL')) {
       // CALL proc(…) ends at its semicolon, or (written without one) at the unit's slash: never
@@ -616,8 +607,7 @@ class Parser {
   private stmt(): Node {
     const la = this.i;
     while (this.at('<<')) {
-      this.i++;
-      this.i++;
+      this.i += 2;
       this.expect('>>');
     }
     if (this.eof() || (STMT_END.has(this.up()) && this.t[this.i].kind === 'ident')) {
@@ -747,8 +737,7 @@ class Parser {
       kind = 'for';
       if (this.isOp(k, '(') && this.isQuery(k + 1)) {
         kind = 'cursor-for';
-        const c = this.close(k);
-        kids.push(this.query(k + 1, c));
+        kids.push(this.query(k + 1, this.close(k)));
       } else {
         for (const [s, e] of this.commas(k, lp)) {
           // 21c iteration controls: … [WHILE cond] [WHEN cond]
@@ -1005,11 +994,8 @@ class Parser {
       if (this.isWordIn(k, b, 'NULLS')) k += 2;
       if (aliases && k < b && (this.t[k].kind === 'ident' || this.t[k].kind === 'qident') && !SQL_CLAUSE_END.has(this.t[k].up)
         && !NOT_OPERAND.has(this.t[k].up)) k++;
-      if (k < b && this.isOp(k, ',')) {
-        k++;
-        continue;
-      }
-      return k;
+      if (k >= b || !this.isOp(k, ',')) return k;
+      k++;
     }
   }
 
@@ -1026,13 +1012,8 @@ class Parser {
       const eq = this.find(k, EQ, b);
       if (eq < 0) return k;
       const n = this.condAt(eq + 1, b, out);
-      if (n === eq + 1) return n;
-      k = n;
-      if (k < b && this.isOp(k, ',')) {
-        k++;
-        continue;
-      }
-      return k;
+      if (n === eq + 1 || n >= b || !this.isOp(n, ',')) return n;
+      k = n + 1;
     }
   }
 
@@ -1288,12 +1269,10 @@ class Parser {
         const z = this.primary();
         if (!z) return null;
         p = node('clause', p.a, z.b, [p, z], { op: 'AT TIME ZONE' });
-      } else if (this.isWord(this.i, 'AT') && this.isWord(this.i + 1, 'LOCAL')) {
+      } else if ((this.isWord(this.i, 'AT') && this.isWord(this.i + 1, 'LOCAL')) || this.isWord(this.i, 'COLLATE')) {
+        const op = this.upAt(this.i) === 'AT' ? 'AT LOCAL' : 'COLLATE';
         this.i += 2;
-        p = node('clause', p.a, this.i, [p], { op: 'AT LOCAL' });
-      } else if (this.isWord(this.i, 'COLLATE')) {
-        this.i += 2;
-        p = node('clause', p.a, this.i, [p], { op: 'COLLATE' });
+        p = node('clause', p.a, this.i, [p], { op });
       } else if (this.isWord(this.i, 'MULTISET') && this.isWord(this.i + 1, 'UNION', 'INTERSECT', 'EXCEPT')) {
         this.i += 2;
         if (this.isWord(this.i, 'ALL', 'DISTINCT')) this.i++;
@@ -1342,13 +1321,9 @@ class Parser {
     if (x.kind !== 'ident') return null;
     const u = x.up;
     const next = this.t[a + 1];
-    if ((u === 'DATE' || u === 'TIMESTAMP') && next?.kind === 'string') {
+    if ((u === 'DATE' || u === 'TIMESTAMP' || u === 'INTERVAL') && next?.kind === 'string') {
       this.i += 2;
-      return node('lit', a, this.i);
-    }
-    if (u === 'INTERVAL' && next?.kind === 'string') {
-      this.i += 2;
-      while (this.isWord(this.i, 'YEAR', 'MONTH', 'DAY', 'HOUR', 'MINUTE', 'SECOND', 'TO')) {
+      while (u === 'INTERVAL' && this.isWord(this.i, 'YEAR', 'MONTH', 'DAY', 'HOUR', 'MINUTE', 'SECOND', 'TO')) {
         this.i++;
         if (this.isOp(this.i, '(')) this.i = this.close(this.i) + 1;
       }

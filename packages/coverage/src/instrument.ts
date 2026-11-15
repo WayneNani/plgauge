@@ -117,7 +117,6 @@ class Instrumenter {
           break;
         }
         const first = u.kids[begin];
-        // header: WHEN clause is not measured
         const declIdx = first.k === 'decls' ? first.a - 1 : first.a; // DECLARE token
         for (let k = u.a; k < declIdx; k++) {
           if (this.t[k].up === 'WHEN') this.gap(this.t[k].line, 'WHEN-Klausel des Triggers wird nicht gemessen');
@@ -292,9 +291,7 @@ class Instrumenter {
       if (nf) this.nfNest--;
     }
     const end = this.endOf(this.t[s.b - 1]);
-    stmt.endLine = end.line;
-    stmt.col = first.col;
-    stmt.endCol = end.col;
+    Object.assign(stmt, { endLine: end.line, col: first.col, endCol: end.col });
     return nf;
   }
 
@@ -388,9 +385,7 @@ class Instrumenter {
       loop.kind = 'while';
       this.twoWay('while', s.kids[0], first, 'Bedingung WAHR → Durchlauf', 'Bedingung nicht WAHR → Ende');
     } else if (first.up === 'FOR') {
-      for (let k = s.a + 1; k < loopIdx; k++) {
-        if (this.t[k].up === 'SELECT' || this.t[k].up === 'WITH') loop.kind = 'cursor-for';
-      }
+      if (this.t.slice(s.a + 1, loopIdx).some((t) => t.up === 'SELECT' || t.up === 'WITH')) loop.kind = 'cursor-for';
       if (loop.kind === 'cursor-for') this.scanRegion(s.a + 1, loopIdx, 'sql', 'start', s.kids.filter((k) => k.k !== 'seq' && k.k !== 'branch'));
       else {
         loop.kind = 'for';
@@ -435,8 +430,7 @@ class Instrumenter {
 
   /** Wraps a condition with decision and condition probes. */
   private decision(kind: DecisionKind, cond: Node, ctx: 'plsql' | 'sql'): Decision | null {
-    const a = cond.a;
-    const b = cond.b;
+    const { a, b } = cond;
     if (b <= a) throw new ParseError('Leere Bedingung', this.t[a]?.line ?? 0);
     if (ctx === 'sql' && !this.opts.sqlProbes) return null;
     const id = this.ids.dec++;

@@ -108,10 +108,9 @@ export function buildSchema(ms: Mutant[], dropped: Set<number> = new Set(), naiv
   const out: SchemaUnit[] = [];
   let loopId = 0;
   for (const [u, { f, points }] of byUnit) {
-    const fullOriginal = f.src.subarray(u.start, u.end).toString('utf8');
     const su: SchemaUnit = {
       key: `${f.path}#${u.type} ${u.name}`, type: u.type, name: objectName(u.name), owner: objectOwner(u.name),
-      text: '', original: withoutCreate(fullOriginal), regions: [], mutants: [], loops: 0, recorded: [],
+      text: '', original: withoutCreate(f.src.subarray(u.start, u.end).toString('utf8')), regions: [], mutants: [], loops: 0, recorded: [],
     };
     const nodes: Node[] = [];
     let order = 0;
@@ -129,7 +128,6 @@ export function buildSchema(ms: Mutant[], dropped: Set<number> = new Set(), naiv
     for (const [p, pm] of points) {
       const live = pm.filter((m) => !dropped.has(m.id));
       if (p.dyn && !naive.has(p)) {
-        // one node per literal
         const key = p.dyn.join(':');
         let g = lits.get(key);
         if (!g) {
@@ -187,30 +185,23 @@ export function buildSchema(ms: Mutant[], dropped: Set<number> = new Set(), naiv
       g.dup!.reach.push(m);
       su.recorded.push(m.id);
     }
-    for (const l of f.loops) {
-      if (f.units[l.unit] === u) {
-        loopId++;
-        su.loops++;
-        nodes.push({ p: { unit: l.unit, op: '', kind: 'guard', sub: '', ctx: 'plsql', cat: '', start: l.at, end: l.at, orig: '', mutants: [] }, ms: [], kids: [], loop: loopId, order: order++ });
-      }
+    for (const l of f.loops.filter((x) => f.units[x.unit] === u)) {
+      su.loops++;
+      nodes.push({ p: { unit: l.unit, op: '', kind: 'guard', sub: '', ctx: 'plsql', cat: '', start: l.at, end: l.at, orig: '', mutants: [] }, ms: [], kids: [], loop: ++loopId, order: order++ });
     }
     const roots = nest(nodes);
     const ctl = su.owner && runtimeOwner && su.owner !== runtimeOwner.toUpperCase() ? `${runtimeOwner.toLowerCase()}.plmut_ctl` : 'plmut_ctl';
     const r = new Renderer(f.src, su, `${ctl}.active()`, ctl, runtimeOwner ? contextName(runtimeOwner) : 'PLMUT_CTX', [...(u.inserts ?? [])].sort((a, b) => a.at - b.at));
-    let start = u.start;
     if (u.decl >= 0) {
       r.active = 'plmut$a';
       r.write(f.src.subarray(u.start, u.decl).toString('utf8'));
       // on the same line: line numbers ($$PLSQL_LINE, error backtraces) stay those of the original
       r.write(` plmut$a CONSTANT PLS_INTEGER := ${ctl}.active;`);
-      start = u.decl;
     }
-    r.rangeWith(start, u.end, roots);
+    r.rangeWith(u.decl >= 0 ? u.decl : u.start, u.end, roots);
     // Strip CREATE … so that positions match what Oracle reports.
-    const full = r.b;
-    const text = withoutCreate(full);
-    const shift = full.length - text.length;
-    su.text = text;
+    su.text = withoutCreate(r.b);
+    const shift = r.b.length - su.text.length;
     su.regions = su.regions.map((g) => ({ ...g, start: g.start - shift, end: g.end - shift }));
     out.push(su);
   }
@@ -307,10 +298,8 @@ class Renderer {
       if (ids.length) this.write(` ${this.ctl}.reach(${ids[0]}, ${ids[ids.length - 1] - ids[0] + 1});`);
     }
     this.write(' END IF;');
-    let first = true;
-    for (const m of [...n.ms].sort((x, y) => x.id - y.id)) {
-      this.write(` ${first ? 'IF' : 'ELSIF'} ${a} = ${m.id} THEN `);
-      first = false;
+    for (const [i, m] of [...n.ms].sort((x, y) => x.id - y.id).entries()) {
+      this.write(` ${i ? 'ELSIF' : 'IF'} ${a} = ${m.id} THEN `);
       this.variantRegion(this.variant(n, m), m.point, m.id);
     }
     this.write(' ELSE ');
@@ -396,9 +385,7 @@ class Renderer {
     const start = this.b.length;
     const branches = [...n.ms].sort((x, y) => x.id - y.id);
     const conds: string[] = [];
-    for (let i = 0; i < branches.length; i += 900) {
-      conds.push(`NVL(${V}, '0') NOT IN (${branches.slice(i, i + 900).map((m) => `'${m.id}'`).join(', ')})`);
-    }
+    for (let i = 0; i < branches.length; i += 900) conds.push(`NVL(${V}, '0') NOT IN (${branches.slice(i, i + 900).map((m) => `'${m.id}'`).join(', ')})`);
     // views: hit_sql, never in parallel slaves (see plmut_ctl); cursor declarations in PL/SQL:
     // hit, whose purity a subprogram under PRAGMA RESTRICT_REFERENCES may rely on
     const fn = this.su.type === 'VIEW' ? 'hit_sql' : 'hit';
@@ -468,18 +455,9 @@ export function switchable(p: Point): boolean {
   // the function result cache is shared by all sessions and outlives the switch of the active mutant
   if (p.naiveOnly) return false;
   if (p.dyn) return true;
-  switch (p.kind) {
-    case 'stmt':
-      return p.mutants.length === 1 && p.mutants[0] === 'NULL;';
-    case 'bool':
-    case 'value':
-      return p.ctx !== 'sql' || !!p.scope;
-    case 'insert':
-      return true;
-    case 'clause':
-      return !!p.scope;
-  }
-  return false;
+  if (p.kind === 'stmt') return p.mutants.length === 1 && p.mutants[0] === 'NULL;';
+  if (p.kind === 'bool' || p.kind === 'value') return p.ctx !== 'sql' || !!p.scope;
+  return p.kind === 'insert' || (p.kind === 'clause' && !!p.scope);
 }
 
 /**
