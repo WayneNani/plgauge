@@ -407,13 +407,24 @@ async function currentCode(conn: oracledb.Connection, obj: Pick<SourceObject, 'o
  */
 export async function restoreJournal(conn: oracledb.Connection, entries: JournalEntry[], say: (m: string) => void): Promise<number> {
   const todo: SourceObject[] = [];
+  let hidden = 0;
+  const user = (await conn.execute<[string]>(`select user from dual`)).rows![0][0];
   for (const e of entries) {
     // (not readable: restored as before; the compile reports what is wrong)
     const cur = await currentCode(conn, e.object).catch(() => null);
     if (cur === undefined) {
-      // pltest never drops an object: someone did since, on purpose
-      say(`  ✗ ${e.owner}.${e.name} existiert nicht mehr: Journal-Eintrag verworfen, nicht neu angelegt`);
-      await journalForget(conn, e.object);
+      // missing from ALL_SOURCE / ALL_VIEWS: dropped, or only not visible to this user (another
+      // schema's body without the ANY privileges); DBA_OBJECTS tells, or the own schema
+      const dba = await conn.execute<[number]>(`select count(*) from dba_objects where owner = :o and object_name = :n and object_type = :t`, { o: e.owner, n: e.name, t: e.type })
+        .then((r) => r.rows?.[0]?.[0] ?? 0, () => undefined);
+      if (dba === 0 || (dba === undefined && e.owner === user)) {
+        // pltest never drops an object: someone did since, on purpose
+        say(`  ✗ ${e.owner}.${e.name} existiert nicht mehr: Journal-Eintrag verworfen, nicht neu angelegt`);
+        await journalForget(conn, e.object);
+      } else {
+        say(`  ✗ ${e.owner}.${e.name} ist für ${user} nicht sichtbar: Journal-Eintrag bleibt, mit dem Benutzer des Laufs zurückspielen (pltest restore)`);
+        hidden++;
+      }
       continue;
     }
     // a view or trigger noted before its compile, or by an older version (other fingerprints): no
@@ -430,8 +441,8 @@ export async function restoreJournal(conn: oracledb.Connection, entries: Journal
     }
     todo.push(e.object);
   }
-  // how many hold changed code still
-  return restoreAll(conn, todo, say);
+  // how many hold changed code still (or may: not visible here)
+  return hidden + (await restoreAll(conn, todo, say));
 }
 
 /**
@@ -466,8 +477,9 @@ export async function restoreAll(conn: oracledb.Connection, objs: SourceObject[]
         .catch((e: Error) => say(`  Hinweis: Neukompilieren von ${s} nicht möglich: ${e.message.split('\n')[0]}`));
     }
   }
-  // materialized views on a replaced view are left NEEDS_COMPILE
-  for (const obj of objs.filter((o) => o.type === 'VIEW')) {
+  // materialized views on a replaced view or function are left NEEDS_COMPILE (compile_schema
+  // leaves them)
+  for (const obj of objs) {
     const mv = await conn.execute<[string, string]>(
       `select owner, name from all_dependencies where referenced_owner = :o and referenced_name = :n and type = 'MATERIALIZED VIEW'`,
       { o: obj.owner, n: obj.name },

@@ -1324,7 +1324,7 @@ async function runSchema(run: Run, ms: Mutant[], stop: () => boolean): Promise<R
   const rep = emptyReport(run, base.ms, base.tests.length);
   run.logf(`Baseline mit Schema: ${base.tests.length} Tests in ${Math.round(base.ms)}ms, Zeitgrenze ${Math.round(w.limitMs)}ms`);
 
-  const covering = await record(run, base.tests);
+  const covering = await record(run, base.tests, units.flatMap((u) => u.mutants.map((m) => m.id)));
   run.checkpoint();
   run.covering = covering;
   run.recorded = new Set(units.flatMap((u) => u.recorded));
@@ -1672,11 +1672,14 @@ async function compileSchema(run: Run, ms: Mutant[], dropped: Map<number, string
 }
 
 /** Recording run: covering tests per mutant ID, fastest first; loop limits. */
-async function record(run: Run, tests: TestResult[]): Promise<Map<number, string[]>> {
+async function record(run: Run, tests: TestResult[], ids: number[]): Promise<Map<number, string[]>> {
   const w = run.primary;
   await activate(w.test, -1);
+  await w.test.conn.execute(`begin plmut_ctl.arm; end;`);
   const r = await w.runTests(w.testPaths(), 10 * 60_000);
   if (r.err) throw new Error(`Aufzeichnungslauf: ${firstLine(r.err)}`);
+  // a test reset all package state (DBMS_SESSION.RESET_PACKAGE): the hits are gone with it
+  const intact = (await w.test.conn.execute<[number]>(`select plmut_ctl.intact from dual`)).rows?.[0]?.[0] === 1;
   // A test that passed the baseline but fails now depends on state or order.
   const flakyNow = r.tests.filter((t) => t.failed);
   for (const t of flakyNow) {
@@ -1703,6 +1706,12 @@ async function record(run: Run, tests: TestResult[]): Promise<Map<number, string
   const covering = new Map<number, string[]>();
   for (const [id, set] of byId) {
     covering.set(id, [...set].sort((a, b) => (dur.get(a) ?? 0) - (dur.get(b) ?? 0) || (a < b ? -1 : a > b ? 1 : 0)));
+  }
+  if (!intact) {
+    // no mutant may come out NOT_COVERED on lost hits: all tests for every switched mutant
+    run.logf('WARNUNG: Ein Test hat den Paketzustand zurückgesetzt (DBMS_SESSION.RESET_PACKAGE?): die Aufzeichnung ist unvollständig, jeder Mutant läuft mit allen Tests');
+    const sorted = [...all].sort((a, b) => (dur.get(a) ?? 0) - (dur.get(b) ?? 0));
+    for (const id of ids) covering.set(id, sorted);
   }
   const counts = await loops(w.test);
   w.loopLimits = new Map([...counts].map(([id, n]) => [id, Math.max(1000, 10 * n)]));

@@ -1059,3 +1059,9 @@ test('finder: a column named OFFSET is no row limit and does not end a GROUP BY 
   assert.ok(!got.some((g) => g.includes('m.ts DESC')), got.join('\n'));
   assert.ok(!got.some((g) => g.includes('m.a - 1')), got.join('\n'));
 });
+
+test('finder: OFFSET with an expression is a row limit too', () => {
+  const got = mutants(body(`DELETE FROM t WHERE a IN (SELECT a FROM t ORDER BY b DESC OFFSET NVL(c, 100) ROWS);
+    SELECT a INTO x FROM t ORDER BY d OFFSET c - 1 ROWS;`), ['ORD']);
+  assert.ok(got.some((g) => g.includes('b ASC')) && got.some((g) => g.includes('d DESC')), got.join('\n'));
+});

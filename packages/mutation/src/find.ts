@@ -950,7 +950,7 @@ class Finder {
     this.skipped += inner.skipped;
     // fetched INTO a single row without a row limit or a subquery (whose order could pick the row):
     // its ORDER BY changes nothing, as in a static SELECT … INTO
-    const orderFree = single && !/\b(FETCH\s+(FIRST|NEXT)|ROWNUM)\b|(?<![.\w$#])OFFSET\s+\S+\s+ROWS?\b|\(\s*(SELECT|WITH)\b/i.test(content);
+    const orderFree = single && !/\b(FETCH\s+(FIRST|NEXT)|ROWNUM)\b|(?<![.\w$#])OFFSET\b[^;]*?\bROWS?\b|\(\s*(SELECT|WITH)\b/i.test(content);
     for (const p of inner.points) {
       if (p.start < from || p.end > to || p.kind === 'insert' || p.kind === 'stmt') continue;
       // (only the query's own ORDER BY: one in OVER, WITHIN GROUP or KEEP decides the row's value)
@@ -1393,7 +1393,7 @@ class Finder {
     const top = own.map((_, i) => i).filter((i) => depth[i] === 0);
     const has = (w: string) => top.some((i) => up(i) === w);
     // a row limit: the order picks the rows (OFFSET alone too)
-    const fetch = top.some((i) => (up(i) === 'FETCH' && ['FIRST', 'NEXT'].includes(up(i + 1))) || (up(i) === 'OFFSET' && up(i - 1) !== '.' && ['ROW', 'ROWS'].includes(up(i + 2))));
+    const fetch = top.some((i) => (up(i) === 'FETCH' && ['FIRST', 'NEXT'].includes(up(i + 1))) || (up(i) === 'OFFSET' && up(i - 1) !== '.' && top.some((j) => j > i && ['ROW', 'ROWS'].includes(up(j)))));
     // (in IN with FETCH FIRST the order and duplicates decide which rows count; EXISTS only asks for one)
     const member = inSub && (!fetch || parent?.op === 'EXISTS');
     const singleRow = q.k === 'sql' && (q.op === 'SELECT' || q.op === 'WITH') && has('INTO') && !has('BULK');
