@@ -1,0 +1,12 @@
+{
+  "install": [
+    "src/01_tables.sql",
+    "src/02_order_pricing.pks",
+    "src/03_order_pricing.pkb",
+    "src/04_archive_orders.prc",
+    "test/test_order_pricing.pks",
+    "test/test_order_pricing.pkb"
+  ],
+  "mutate": ["src/*.pkb", "src/*.prc"],
+  "tests": ["test_order_pricing"]
+}
