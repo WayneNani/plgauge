@@ -285,7 +285,7 @@ interface Env {
    * a trigger's WHEN condition (no PL/SQL function calls allowed there), 'static' in the value of a
    * constant that gives a size elsewhere (it must stay a static expression).
    */
-  naiveOnly?: 'cache' | 'when' | 'static';
+  naiveOnly?: 'cache' | 'when' | 'static' | 'macro';
   /** Inside a query block the schema switches with UNION ALL branches (views, cursor declarations). */
   union?: boolean;
   /** In a select list (of the innermost query): a switch there cannot change the plan. */
@@ -311,7 +311,8 @@ const SCOPE_STMTS = new Set(['sql', 'forall', 'open']);
 const ORDER_END = new Set(['FETCH', 'OFFSET', 'FOR', 'ROWS', 'RANGE', 'GROUPS', 'UNION', 'INTERSECT', 'MINUS', 'EXCEPT', 'LIMIT']);
 /** Where the ORDER BY of MATCH_RECOGNIZE ends (only there: elsewhere these are column names). */
 const MATCH_END = new Set(['MEASURES', 'PATTERN', 'DEFINE', 'SUBSET', 'AFTER']);
-const SET_END = new Set(['WHERE', 'RETURNING', 'RETURN', 'LOG', 'DELETE']);
+// (FROM: the direct join of an UPDATE … SET … FROM, 23ai)
+const SET_END = new Set(['WHERE', 'RETURNING', 'RETURN', 'LOG', 'DELETE', 'FROM']);
 const AGGREGATE_SWAP: Record<string, string> = { MIN: 'MAX', MAX: 'MIN', SUM: 'AVG', AVG: 'SUM' };
 
 class Finder {
@@ -454,8 +455,12 @@ class Finder {
       case 'subprog': {
         const sub = env.sub ? `${env.sub}.${n.name}` : n.name!;
         const head = n.kids.find((k) => k.k === 'decls' || k.k === 'body');
-        const cached = this.t.slice(n.a, head ? head.a : n.b).some((t) => t.up === 'RESULT_CACHE');
-        const inner: Env = { sub, ctx: 'plsql', guard: false, naiveOnly: cached ? 'cache' : env.naiveOnly };
+        const header = this.t.slice(n.a, head ? head.a : n.b);
+        const cached = header.some((t) => t.up === 'RESULT_CACHE');
+        // a SQL macro's body runs only when a statement that calls it is hard-parsed: a switch never
+        // gets there once the cursors exist
+        const macro = header.some((t) => t.up === 'SQL_MACRO');
+        const inner: Env = { sub, ctx: 'plsql', guard: false, naiveOnly: cached ? 'cache' : macro ? 'macro' : env.naiveOnly };
         const outer = this.scopeNode;
         this.scopeNode = n;
         // parameter defaults of a subprogram that a spec or a forward declaration declares too (in

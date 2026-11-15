@@ -15,7 +15,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import oracledb from 'oracledb';
 import {
@@ -1155,6 +1155,13 @@ async function confirmVerdicts(run: Run, results: Result[], stop: () => boolean)
   run.logf(`Gegenprobe: ${todo.length} Urteile in ${Math.round(performance.now() - t0)}ms, ${kills} Erkennungen nicht wiederholbar, ${slow} Zeitüberschreitungen knapp`);
 }
 
+/** "TYPE|NAME" of the unit a script statement creates (leading comments skipped), or ''. */
+function createdUnit(stmt: string): string {
+  const s = stmt.replace(/^(\s*(--[^\n]*(\n|$)|\/\*[\s\S]*?\*\/))*\s*/, '');
+  const m = /^CREATE\s+(OR\s+REPLACE\s+)?((NO\s+)?FORCE\s+|(NON)?EDITIONABLE\s+|EDITIONING\s+)*(PACKAGE\s+BODY|TYPE\s+BODY|PROCEDURE|FUNCTION|TRIGGER|VIEW)\s+(IF\s+NOT\s+EXISTS\s+)?((?:"[^"]+"|[\w$#]+)(?:\s*\.\s*(?:"[^"]+"|[\w$#]+))?)/i.exec(s);
+  return m ? `${m[5].replace(/\s+/g, ' ').toUpperCase()}|${objectName(m[7].replace(/\s+/g, ''))}` : '';
+}
+
 /** Executes a complete run. */
 export async function runMutation(opt: Options): Promise<Report> {
   const t0 = performance.now();
@@ -1166,6 +1173,25 @@ export async function runMutation(opt: Options): Promise<Report> {
   for (const f of files) {
     skipped += f.skipped;
     if (f.errors.length) run.logf(`übersprungen, nicht parsbar: ${f.path}: ${f.errors.join('; ')}`);
+  }
+  // a unit of an installed file whose CREATE the install never runs (no "/" at the end, after EXIT,
+  // held back by "."): the database keeps another version, mutants of the file text are wrong
+  if (!opt.skipInstall) {
+    const installed = new Set(cfg.install.map((s) => resolve(opt.dir, s)));
+    const missing = new Set<unknown>();
+    for (const f of files) {
+      if (!installed.has(resolve(f.path))) continue;
+      const created = new Set(splitScript(f.src.toString('utf8')).map(createdUnit).filter(Boolean));
+      for (const u of f.units) {
+        if (created.has(`${u.type.replace(/\s+/g, ' ').toUpperCase()}|${objectName(u.name)}`)) continue;
+        missing.add(u);
+        run.logf(`übersprungen, vom Installationsskript nicht angelegt (kein "/" danach?): ${f.path}#${u.type} ${u.name}`);
+      }
+    }
+    if (missing.size) {
+      ms = ms.filter((m) => !missing.has(m.unitRef));
+      run.total = ms.length;
+    }
   }
   run.logf(`${ms.length} Mutanten in ${files.length} Dateien${opt.diff ? ' (nur geänderte Zeilen)' : ''}, ${skipped} gleichwertige oder sinnlose Varianten ausgelassen`);
   if (!ms.length) {
@@ -1325,7 +1351,7 @@ async function runSchema(run: Run, ms: Mutant[], stop: () => boolean): Promise<R
   run.logf(`Baseline mit Schema: ${base.tests.length} Tests in ${Math.round(base.ms)}ms, Zeitgrenze ${Math.round(w.limitMs)}ms`);
 
   // (with the recorded view points, which run one by one on the recording's reach)
-  const covering = await record(run, base.tests, units.flatMap((u) => [...u.mutants.map((m) => m.id), ...u.recorded]));
+  const covering = await record(run, base.tests, units.flatMap((u) => [...u.mutants.map((m) => m.id), ...u.recorded]), units.reduce((n, u) => n + u.loops, 0));
   run.checkpoint();
   run.covering = covering;
   run.recorded = new Set(units.flatMap((u) => u.recorded));
@@ -1673,7 +1699,7 @@ async function compileSchema(run: Run, ms: Mutant[], dropped: Map<number, string
 }
 
 /** Recording run: covering tests per mutant ID, fastest first; loop limits. */
-async function record(run: Run, tests: TestResult[], ids: number[]): Promise<Map<number, string[]>> {
+async function record(run: Run, tests: TestResult[], ids: number[], loopCount: number): Promise<Map<number, string[]>> {
   const w = run.primary;
   await activate(w.test, -1);
   await w.test.conn.execute(`begin plmut_ctl.arm; end;`);
@@ -1714,9 +1740,13 @@ async function record(run: Run, tests: TestResult[], ids: number[]): Promise<Map
     const sorted = [...all].sort((a, b) => (dur.get(a) ?? 0) - (dur.get(b) ?? 0));
     for (const id of ids) covering.set(id, sorted);
   }
-  // counts after a reset would be partial: limits from them could stop the original code
+  // counts after a reset would be partial: limits from them could stop the original code, and so
+  // could the default; without them every guard is as good as off (the watchdog's time limit
+  // still stops an endless loop)
   const counts = intact ? await loops(w.test) : new Map<number, number>();
-  w.loopLimits = new Map([...counts].map(([id, n]) => [id, Math.max(1000, 10 * n)]));
+  w.loopLimits = intact
+    ? new Map([...counts].map(([id, n]) => [id, Math.max(1000, 10 * n)]))
+    : new Map(Array.from({ length: loopCount }, (_, k) => [k + 1, 1_000_000_000] as [number, number]));
   await setLoopLimits(w.test, w.loopLimits);
   run.logf(`Aufzeichnung: ${covering.size} von ${run.total} Mutanten erreicht, ${counts.size} Schleifen gezählt`);
   return covering;

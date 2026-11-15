@@ -276,3 +276,11 @@ begin
 end;
 `), ['create table t (a number)', 'insert into t values (1)', 'insert into t values (2)']);
 });
+
+test('splitScript: a blank line inside a string literal ends unfinished SQL (SQLBLANKLINES OFF)', () => {
+  assert.deepEqual(splitScript(`insert into t values ('line1
+
+line2');
+select 1 from dual;
+`), ['select 1 from dual']);
+});

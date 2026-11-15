@@ -231,9 +231,11 @@ export function splitScript(text: string): string[] {
       if (SQLPLUS.test(line) || SQL_START.test(line) || /^\s*(\/\*|EXEC(UTE)?\s)/i.test(line)) dropped = false;
       else continue;
     }
-    // a blank line in unfinished SQL (not PL/SQL, not in a string or comment) ends its entry
-    if (!blankLines && !line.trim() && code.trim() && !st.comment && !st.quote && !PLSQL_START.test(code) && !WITH_PLSQL.test(code) && !FOREIGN_HEAD.test(code)) {
+    // a blank line in unfinished SQL (not PL/SQL) ends its entry, also inside a string or comment:
+    // SQL*Plus reads lines, not literals (SET SQLBLANKLINES ON is the way to keep one)
+    if (!blankLines && !line.trim() && code.trim() && !PLSQL_START.test(code) && !WITH_PLSQL.test(code) && !FOREIGN_HEAD.test(code)) {
       parked = true;
+      st = { comment: false, quote: '' };
       continue;
     }
     const between = !code.trim() && !st.comment && !st.quote;

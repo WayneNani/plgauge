@@ -1073,3 +1073,16 @@ test('finder: JOI stays with NOT IN (subquery) or > ALL (subquery) in WHERE; EXC
   assert.equal(got.filter((g) => g.startsWith('JOI')).length, 2, got.join('\n'));
   assert.ok(got.some((g) => g.startsWith('EXC')), got.join('\n'));
 });
+
+test('finder: SQL_MACRO functions run one by one; COL keeps the FROM of UPDATE … SET … FROM', () => {
+  const f = points(`CREATE OR REPLACE PACKAGE BODY mm AS
+  FUNCTION top_n(p_n NUMBER) RETURN VARCHAR2 SQL_MACRO(TABLE) IS BEGIN IF p_n > 1 THEN RETURN 'select 1 from dual'; END IF; RETURN 'select 2 from dual'; END;
+  PROCEDURE u IS BEGIN UPDATE t SET c1 = v.x, c2 = v.y FROM v WHERE t.id = v.id; END;
+END mm;
+/
+`)[0];
+  assert.ok(f.points.filter((p) => p.sub?.toLowerCase().endsWith('top_n')).every((p) => p.naiveOnly === 'macro'), JSON.stringify(f.points.map((p) => [p.op, p.sub, p.naiveOnly])));
+  const col = expand([f]).filter((m) => m.op === 'COL').map((m) => m.mutated);
+  // the SET list ends before FROM: dropping an assignment keeps the join
+  assert.ok(col.length && col.every((t) => !/FROM/.test(t)), col.join('\n'));
+});

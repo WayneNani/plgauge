@@ -64,7 +64,7 @@ export interface Point {
    */
   dyn?: [number, number];
   /** Runs only with the oracle rewriter (see the finder's Env.naiveOnly). */
-  naiveOnly?: 'cache' | 'when' | 'static';
+  naiveOnly?: 'cache' | 'when' | 'static' | 'macro';
 }
 
 /** Position right after a LOOP keyword, where the schema puts a loop guard. */

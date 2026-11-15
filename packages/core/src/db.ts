@@ -366,6 +366,12 @@ export async function replaceSourceDetailed(conn: oracledb.Connection, obj: Sour
     if (fresh) await journalForget(conn, obj);
     return { error: `${obj.owner}.${obj.name} ist nicht lesbar (ALL_SOURCE/ALL_VIEWS): nicht verändert`, untouched: fresh };
   }
+  // someone compiled a newer version since the original was read: the journal would put the old
+  // one back over it at the end
+  if (fresh && now.sha !== codeFingerprint(obj.type, obj.original)) {
+    await journalForget(conn, obj);
+    return { error: `${obj.owner}.${obj.name} wurde geändert, seit es gelesen wurde: nicht verändert`, untouched: true };
+  }
   await journalNote(conn, obj, source, now.sha);
   const out = await compileDetailed(conn, obj, source);
   // rejected at once (a lock, a privilege, a view statement): the object still holds the text before
@@ -408,7 +414,7 @@ async function currentCode(conn: oracledb.Connection, obj: Pick<SourceObject, 'o
 export async function restoreJournal(conn: oracledb.Connection, entries: JournalEntry[], say: (m: string) => void): Promise<number> {
   const todo: SourceObject[] = [];
   let hidden = 0;
-  const user = (await conn.execute<[string]>(`select user from dual`)).rows![0][0];
+  const [user, schema] = (await conn.execute<[string, string]>(`select user, sys_context('USERENV', 'CURRENT_SCHEMA') from dual`)).rows![0];
   for (const e of entries) {
     // (not readable: restored as before; the compile reports what is wrong)
     const cur = await currentCode(conn, e.object).catch(() => null);
@@ -417,7 +423,12 @@ export async function restoreJournal(conn: oracledb.Connection, entries: Journal
       // schema's body without the ANY privileges); DBA_OBJECTS tells, or the own schema
       const dba = await conn.execute<[number]>(`select count(*) from dba_objects where owner = :o and object_name = :n and object_type = :t`, { o: e.owner, n: e.name, t: e.type })
         .then((r) => r.rows?.[0]?.[0] ?? 0, () => undefined);
-      if (dba === 0 || (dba === undefined && e.owner === user)) {
+      // without DBA_OBJECTS: the session sees the object whenever it exists in its own schemas, or
+      // with the ANY privilege that shows such objects in ALL_SOURCE / ALL_VIEWS
+      const any = e.type === 'VIEW' ? ['SELECT ANY TABLE', 'READ ANY TABLE'] : e.type === 'TRIGGER' ? ['CREATE ANY TRIGGER'] : ['CREATE ANY PROCEDURE', 'EXECUTE ANY PROCEDURE'];
+      const sees = dba === undefined && (e.owner === user || e.owner === schema
+        || ((await conn.execute<[number]>(`select count(*) from session_privs where privilege in (${any.map((p) => `'${p}'`).join(', ')})`)).rows?.[0]?.[0] ?? 0) > 0);
+      if (dba === 0 || sees) {
         // pltest never drops an object: someone did since, on purpose
         say(`  ✗ ${e.owner}.${e.name} existiert nicht mehr: Journal-Eintrag verworfen, nicht neu angelegt`);
         await journalForget(conn, e.object);
@@ -509,13 +520,19 @@ export async function objectErrors(conn: oracledb.Connection, obj: Pick<SourceOb
 
 /** Runs the statements of a SQL*Plus style script; "already exists" errors are skipped. */
 export async function runScript(conn: oracledb.Connection, statements: string[], where: string): Promise<void> {
-  for (const stmt of statements) {
-    try {
-      await conn.execute(stmt);
-    } catch (e) {
-      const msg = (e as Error).message;
-      if (/ORA-00955|ORA-01430|ORA-02260|ORA-02275|ORA-01920|ORA-24344/.test(msg)) continue;
-      throw new Error(`${where}: ${msg.split('\n')[0]}`);
+  // a script may switch CURRENT_SCHEMA: the run's journal and lock stay where they were
+  const home = (await conn.execute<[string]>(`select sys_context('USERENV', 'CURRENT_SCHEMA') from dual`)).rows![0][0];
+  try {
+    for (const stmt of statements) {
+      try {
+        await conn.execute(stmt);
+      } catch (e) {
+        const msg = (e as Error).message;
+        if (/ORA-00955|ORA-01430|ORA-02260|ORA-02275|ORA-01920|ORA-24344/.test(msg)) continue;
+        throw new Error(`${where}: ${msg.split('\n')[0]}`);
+      }
     }
+  } finally {
+    await conn.execute(`alter session set current_schema = "${home.replace(/"/g, '""')}"`).catch(() => {});
   }
 }
