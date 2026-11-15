@@ -226,3 +226,21 @@ test('a view dropped after a run died mid-compile (pending) is not created again
     assert.equal((await conn.execute<[number]>(`select count(*) from user_views where view_name = 'PLTEST_JP'`)).rows![0][0], 0);
   });
 });
+
+test('a unit compiled for debugging stays so through change and restore', { skip: !m && 'PLCOV_DB not set' }, async () => {
+  await withConn(async (conn, owner) => {
+    const debug = async () => (await conn.execute<[string]>(`select plsql_debug from user_plsql_object_settings where name = 'PLTEST_JOURNAL_DBG'`)).rows![0][0];
+    try {
+      await conn.execute(`create or replace procedure pltest_journal_dbg is begin null; end;`);
+      await conn.execute(`alter procedure pltest_journal_dbg compile debug`);
+      const obj = await loadObject(conn, owner, 'PLTEST_JOURNAL_DBG', 'PROCEDURE');
+      await replaceSource(conn, obj, 'procedure pltest_journal_dbg is begin dbms_output.put_line(1); end;', 'test');
+      assert.equal(await debug(), 'TRUE');
+      await restoreAll(conn, [obj], () => {});
+      assert.equal(await debug(), 'TRUE');
+    } finally {
+      await conn.execute(`drop procedure pltest_journal_dbg`).catch(() => {});
+      await conn.execute(`alter session set plsql_debug = false`).catch(() => {});
+    }
+  });
+});

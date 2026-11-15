@@ -167,7 +167,9 @@ Für die CI: `--diff origin/main` (nur Mutanten auf Zeilen, die sich seit der Me
 `--min-score 60` (Exit-Code 3 darunter). Weitere Optionen: `--ops ROR,SBR`, `--timeout-factor 5`, `--skip-install`, `-q`, `--no-confirm`,
 `--coverage plcov-coverage.json` (Orakel-Modus: nur die Tests, die die Anweisung um den Mutanten
 ausgeführt haben).
-Projektdatei `pltest.json` (oder `plmut.json`): `install` (Skripte), `mutate` (Globs der Dateien),
+Projektdatei `pltest.json` (oder `plmut.json`): `install` (Skripte, gelesen wie von SQL*Plus mit Standardeinstellungen:
+`/` und `RUN` führen die letzte Anweisung aus, auch ein zweites Mal; eine Leerzeile oder `.` beendet die Eingabe von SQL
+ohne Ausführung, außer bei `SET SQLBLANKLINES ON`; `EXIT` beendet das Skript), `mutate` (Globs der Dateien),
 `tests` (utPLSQL-Pfade).
 
 Mehrere Schemas: Eine Einheit, die mit Schema geschrieben ist (`CREATE OR REPLACE PACKAGE BODY app_util.calc …`), wird in

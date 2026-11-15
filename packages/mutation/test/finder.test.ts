@@ -1052,3 +1052,10 @@ test('finder: OFFSET without FETCH is a row limit, ORD stays for single-row quer
     EXECUTE IMMEDIATE 'SELECT b FROM t ORDER BY b OFFSET 1 ROWS' INTO y;`), ['ORD']);
   assert.ok(got.some((g) => g.includes('a DESC')) && got.some((g) => g.includes('b DESC')), got.join('\n'));
 });
+
+test('finder: a column named OFFSET is no row limit and does not end a GROUP BY list', () => {
+  const got = mutants(body(`SELECT m.val INTO x FROM msgs m WHERE m.offset = a ORDER BY m.ts;
+    FOR r IN (SELECT m.offset, m.a + 1 AS n, COUNT(*) c FROM msgs m GROUP BY m.offset, m.a + 1) LOOP NULL; END LOOP;`), ['ORD', 'AOR']);
+  assert.ok(!got.some((g) => g.includes('m.ts DESC')), got.join('\n'));
+  assert.ok(!got.some((g) => g.includes('m.a - 1')), got.join('\n'));
+});

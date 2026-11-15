@@ -344,6 +344,8 @@ class Worker {
     } catch (e) {
       // the lock went to another run: it restored this run's journal, the schema is its own now
       if (this.foreign) return [];
+      // no journal table yet (the worker failed before ensureJournal): nothing was changed
+      if ((e as Error).message.includes('ORA-00942')) return [];
       return [`Worker${this.name}: ${firstLine(e as Error)}`];
     }
   }
@@ -1091,11 +1093,20 @@ async function withoutTriggeredViews(run: Run, ms: Mutant[]): Promise<Mutant[]> 
   if (!ms.some((m) => m.unitRef.type === 'VIEW')) return ms;
   const w = run.primary;
   const me = await w.currentSchema();
-  const r = await w.deploy.execute<[string, string]>(`select table_owner, table_name from all_triggers where base_object_type = 'VIEW'`);
+  // DBA_TRIGGERS sees all; ALL_TRIGGERS another schema's triggers only with CREATE ANY TRIGGER
+  const dba = await w.deploy.execute<[string, string]>(`select table_owner, table_name from dba_triggers where base_object_type = 'VIEW'`).catch(() => undefined);
+  const r = dba ?? await w.deploy.execute<[string, string]>(`select table_owner, table_name from all_triggers where base_object_type = 'VIEW'`);
+  const complete = !!dba || ((await w.deploy.execute<[number]>(`select count(*) from session_privs where privilege = 'CREATE ANY TRIGGER'`)).rows?.[0]?.[0] ?? 0) > 0;
   const triggered = new Set((r.rows ?? []).map(([o, n]) => `${o}.${n}`));
-  const out = ms.filter((m) => m.unitRef.type !== 'VIEW' || !triggered.has(`${objectOwner(m.unitRef.name) ?? me}.${objectName(m.unitRef.name)}`));
+  const owner = (m: Mutant) => objectOwner(m.unitRef.name) ?? me;
+  const out = ms.filter((m) => m.unitRef.type !== 'VIEW' || (!triggered.has(`${owner(m)}.${objectName(m.unitRef.name)}`) && (complete || owner(m) === me)));
   const left = new Set(ms.filter((m) => !out.includes(m)).map((m) => unitKey(m)));
-  for (const k of left) run.logf(`${k}: View mit INSTEAD-OF-Trigger, wird nicht mutiert (CREATE OR REPLACE VIEW würde den Trigger löschen)`);
+  for (const k of left) {
+    const m = ms.find((x) => unitKey(x) === k)!;
+    run.logf(triggered.has(`${owner(m)}.${objectName(m.unitRef.name)}`)
+      ? `${k}: View mit INSTEAD-OF-Trigger, wird nicht mutiert (CREATE OR REPLACE VIEW würde den Trigger löschen)`
+      : `${k}: View eines anderen Schemas, deren INSTEAD-OF-Trigger sich ohne CREATE ANY TRIGGER nicht prüfen lassen: wird nicht mutiert`);
+  }
   return out;
 }
 

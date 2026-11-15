@@ -246,3 +246,20 @@ PROMPT inserted
 SELECT 1 FROM dual;
 `), ['CREATE OR REPLACE PROCEDURE p(a NUMBER) IS\nBEGIN\n  IF a > 1 THEN NULL; END IF;\nEND;', 'INSERT INTO t (a)\nVALUES (1)', 'SELECT 1 FROM dual']);
 });
+
+test('splitScript: "/" and RUN run the buffer again, "." ends entry without running, EXIT stops', () => {
+  assert.deepEqual(splitScript(`insert into t values (1);
+/
+begin
+  null;
+end;
+.
+/
+select 2 from dual
+.
+run
+create table t2 (a number);
+exit
+drop table t2;
+`), ['insert into t values (1)', 'insert into t values (1)', 'begin\n  null;\nend;', 'select 2 from dual', 'create table t2 (a number)']);
+});
