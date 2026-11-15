@@ -208,7 +208,7 @@ test('a run first puts back what a crashed run left in the journal', { skip: !db
     await replaceSource(conn, before, `${before.original.trimEnd()}\n-- left by a crashed run\n`, 'mutation');
     await runMutation({ dir, dbUrls: [db!], mode: 'schema', skipInstall: true, sample: 2, seed: 3 });
     const after = await loadObject(conn, owner, 'SHOP_PRICING', 'PACKAGE BODY');
-    assert.equal(after.original, before.original);
+    assert.equal(after.original.trimEnd(), before.original.trimEnd());
     assert.deepEqual((await journalEntries(conn)).filter((e) => e.name === 'SHOP_PRICING'), []);
   } finally {
     await conn.close();
@@ -311,5 +311,28 @@ END;
     } finally {
       await conn.close();
     }
+  }
+});
+
+// a dead run's journal must not overwrite what someone compiled into the unit since
+test('a leftover journal entry does not overwrite newer work in the unit', { skip: !db && 'PLMUT_DB nicht gesetzt', timeout: 600_000 }, async () => {
+  const conn = await oracledb.getConnection(parseDbUrl(db!));
+  try {
+    const owner = (await conn.execute<[string]>(`select user from dual`)).rows![0][0];
+    const before = await loadObject(conn, owner, 'SHOP_PRICING', 'PACKAGE BODY');
+    // a dead run left its code …
+    await replaceSource(conn, before, `${before.original.trimEnd()}\n-- left by a crashed run\n`, 'mutation');
+    // … and the developer compiled a newer version over it
+    const newer = `${before.original.trimEnd()}\n-- newer work\n`;
+    await conn.execute(`create or replace ${newer}`);
+    await runMutation({ dir, dbUrls: [db!], mode: 'schema', skipInstall: true, sample: 1, seed: 3 });
+    const after = await loadObject(conn, owner, 'SHOP_PRICING', 'PACKAGE BODY');
+    assert.ok(after.original.includes('-- newer work'), after.original.slice(-80));
+    assert.deepEqual((await journalEntries(conn)).filter((e) => e.name === 'SHOP_PRICING'), []);
+  } finally {
+    // put the example back as installed
+    const o = await loadObject(conn, (await conn.execute<[string]>(`select user from dual`)).rows![0][0], 'SHOP_PRICING', 'PACKAGE BODY');
+    await conn.execute(`create or replace ${o.original.trimEnd().replace(/\n-- newer work$/, '')}`);
+    await conn.close();
   }
 });

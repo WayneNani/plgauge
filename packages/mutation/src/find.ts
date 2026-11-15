@@ -11,7 +11,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { TextDecoder } from 'node:util';
-import { parse, preprocessBlocks, tokenize, type Node, type Token } from '@pltest/core';
+import { parse, preprocessBlocks, scanLine, tokenize, type Node, type ScanState, type Token } from '@pltest/core';
 import type { Loop, Point, SourceFile, Unit } from './mutant.js';
 
 export function findPoints(paths: string[]): SourceFile[] {
@@ -32,85 +32,56 @@ export function findInFile(path: string, buf: Buffer): SourceFile {
 // ------------------------------------------------------------ preprocessing
 
 /** SQL*Plus commands (at the start of a statement; SET TRANSACTION, ROLE and CONSTRAINTS are SQL). */
-const SQLPLUS = /^\s*(SHOW|SHO|SET(?!\s+(TRANSACTION|ROLE|CONSTRAINTS?)\b)|PROMPT|PRO|REM|REMARK|WHENEVER|SPOOL|DEFINE|DEF|UNDEFINE|COLUMN|COL|TTITLE|BTITLE|PAUSE|CLEAR|EXEC|EXECUTE|CONNECT|CONN|DISCONNECT|EXIT|QUIT|LIST|VAR|VARIABLE|HOST|START|PRINT|ACCEPT|TIMING|BREAK|COMPUTE|STORE|GET|SAVE|EDIT|INPUT|RUN|@@?)(\b|@|$).*/i;
+const SQLPLUS = /^\s*(SHOW|SHO|SET(?!\s+(TRANSACTION|ROLE|CONSTRAINTS?)\b)|PROMPT|PRO|REM|REMARK|WHENEVER|SPOOL|DEFINE|DEF|UNDEFINE|COLUMN|COL|TTITLE|BTITLE|PAUSE|CLEAR|EXEC|EXECUTE|CONNECT|CONN|DISCONNECT|EXIT|QUIT|LIST|VAR|VARIABLE|HOST|START|PRINT|ACCEPT|TIMING|BREAK|COMPUTE|STORE|GET|SAVE|EDIT|INPUT|RUN|DESC|DESCRIBE)(\s|;|$).*|^\s*[@$!].*/i;
 /** The start of a PL/SQL unit (ends with "/"); other CREATE statements end with ";". */
-const CREATE_UNIT = /^\s*CREATE\s+(OR\s+REPLACE\s+)?((NON)?EDITIONABLE\s+)?(PACKAGE|PROCEDURE|FUNCTION|TRIGGER|TYPE)\b/i;
+const UNIT_START = /^\s*(CREATE\s+(OR\s+REPLACE\s+)?((NON)?EDITIONABLE\s+)?(PACKAGE|PROCEDURE|FUNCTION|TRIGGER|TYPE)\b|DECLARE\b|BEGIN\b)/i;
+/** Code that may still turn into a unit's start (CREATE OR REPLACE on a line of its own). */
+const UNIT_OPEN = /^\s*CREATE(\s+OR(\s+REPLACE)?)?(\s+(NON)?EDITIONABLE)?\s*$/i;
 
 const utf8Len = (c: number) => (c < 0x80 ? 1 : c < 0x800 ? 2 : 3);
 
 /**
- * A line without its comments and string literals (for finding a statement's end); open: in
- * a block comment at the start, quote: in a string literal (both carry over to the next line).
- */
-function codeOf(line: string, open: boolean, quote: boolean): { code: string; open: boolean; quote: boolean } {
-  let code = '';
-  let i = 0;
-  while (i < line.length) {
-    if (open) {
-      const e = line.indexOf('*/', i);
-      if (e < 0) return { code, open: true, quote };
-      i = e + 2;
-      open = false;
-      continue;
-    }
-    const c = line[i];
-    if (quote) {
-      if (c === "'") quote = false;
-      i++;
-      continue;
-    }
-    if (c === "'") {
-      quote = true;
-      code += "''";
-      i++;
-    } else if (c === '-' && line[i + 1] === '-') break;
-    else if (c === '/' && line[i + 1] === '*') {
-      open = true;
-      i += 2;
-    } else {
-      code += c;
-      i++;
-    }
-  }
-  return { code, open, quote };
-}
-
-/**
  * SQL*Plus commands between statements become spaces. A statement is a PL/SQL unit
  * (CREATE PACKAGE … or an anonymous block, up to the "/" line) or SQL up to its semicolon;
- * block comments and comment lines between statements stay as they are. Like all
+ * comments, strings and quoted names are followed across lines (core scanLine). Like all
  * preprocessing here it keeps every offset (one space per UTF-16 unit), so byte offsets
  * can be taken from the original file.
  */
 export function blankSqlPlus(s: string): string {
   let out = '';
-  let state: 'between' | 'unit' | 'sql' = 'between';
-  let comment = false;
-  let quote = false;
+  let state: 'between' | 'open' | 'unit' | 'sql' = 'between';
+  let head = ''; // the code of a statement whose kind is still open
+  let st: ScanState = { comment: false, quote: '' };
+  let cont = false; // a blanked SQL*Plus command continues on the next line (" -")
   for (const line of s.split(/(?<=\n)/)) {
     const body = line.endsWith('\n') ? line.slice(0, -1) : line;
-    const was = comment || quote;
-    const r = codeOf(body, comment, quote);
-    const code = r.code;
-    comment = r.open;
-    quote = r.quote;
-    // "/" alone on a line (not inside a block comment) ends a unit or a statement
-    if (!was && body.trim() === '/') {
+    const inside = st.comment || st.quote !== '';
+    const r = scanLine(body, st);
+    st = r.state;
+    // "/" alone on a line (not inside a comment or string) ends a unit or a statement
+    if (!inside && body.trim() === '/') {
       state = 'between';
       out += line;
       continue;
     }
-    if (state === 'between' && !was && code.trim()) {
-      if (SQLPLUS.test(body)) {
-        out += ' '.repeat(body.length) + (line.endsWith('\n') ? '\n' : '');
-        comment = false;
-        quote = false;
-        continue;
-      }
-      // CREATE VIEW, TABLE, … and other SQL end at their semicolon
-      state = CREATE_UNIT.test(code) || /^\s*(DECLARE|BEGIN)\b/i.test(code) ? 'unit' : 'sql';
+    if (cont || (state === 'between' && !inside && r.code.trim() && SQLPLUS.test(body))) {
+      out += ' '.repeat(body.length) + (line.endsWith('\n') ? '\n' : '');
+      st = { comment: false, quote: '' };
+      cont = /\s-\s*$/.test(body);
+      continue;
     }
-    if (state === 'sql' && /;\s*$/.test(code)) state = 'between';
+    // (also a statement that starts on the line that closes a block comment)
+    if (state === 'between' && r.code.trim()) {
+      state = 'open';
+      head = '';
+    }
+    if (state === 'open') {
+      head += r.code + '\n';
+      if (UNIT_START.test(head)) state = 'unit';
+      else if (!UNIT_OPEN.test(head)) state = 'sql';
+    }
+    // (a block comment may follow the semicolon: its content is not in the code)
+    if (state === 'sql' && !st.quote && /;\s*$/.test(r.code)) state = 'between';
     out += line;
   }
   return out;

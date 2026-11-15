@@ -23,7 +23,7 @@
  */
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
-import { changedLines, connect, dbIdent, ensureJournal, journalEntries, journalForget, lockRun, preprocess, RUN_LOCK, restoreAll, splitScript } from '@pltest/core';
+import { changedLines, connect, restoreJournal, dbIdent, ensureJournal, journalEntries, journalForget, lockRun, preprocess, RUN_LOCK, splitScript } from '@pltest/core';
 import {
   checkQuotas, instrument, mergeExports, newIds, quotas, restrictToChanged, runCoverage, runCorpus, sourceMap, toCobertura,
   toCoverageExport, toJunit,
@@ -346,7 +346,8 @@ async function main() {
             await lock.execute(`alter session set current_schema = ${dbIdent(home)}`);
             // a running run (of either tool) holds the lock: its objects are not leftovers
             await lockRun(lock, RUN_LOCK);
-            await restoreAll(conn, entries.map((e) => e.object), (m) => console.error(m));
+            // read again under the lock: a run that finished meanwhile left other entries
+            await restoreJournal(conn, await journalEntries(conn), (m) => console.error(m));
             const still = await journalEntries(conn);
             if (still.length && forget) {
               for (const e of still) await journalForget(conn, e.object);

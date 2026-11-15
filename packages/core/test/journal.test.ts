@@ -36,3 +36,11 @@ test('the journal restores code left changed by a killed run', { skip: !m && 'PL
     await conn.close();
   }
 });
+
+test('fingerprint ignores whitespace, CREATE keywords and characters a character set may not hold', async () => {
+  const { fingerprint } = await import('@pltest/core');
+  const a = `CREATE OR REPLACE EDITIONABLE function f return varchar2 is begin return 'a → b'; end;`;
+  assert.equal(fingerprint(a), fingerprint(`function f return varchar2 is\n begin return 'a ¿ b'; end;`));
+  assert.equal(fingerprint(a), fingerprint(`function f return varchar2 is begin return 'a ? b'; end;`));
+  assert.notEqual(fingerprint(a), fingerprint(`function f return varchar2 is begin return 'a c'; end;`));
+});

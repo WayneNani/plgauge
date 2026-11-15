@@ -879,3 +879,26 @@ END d;
   has('ROR d > 1 → FALSE');
   assert.ok(!got.includes('ROR d > 1 → d >= 1') && !got.includes('ROR d > 1 → d <> 1'), got.join('\n'));
 });
+
+test('finder: blankSqlPlus keeps unit code when CREATE OR REPLACE stands alone and after @ includes with paths', () => {
+  const f = points(`@./setup.sql
+@../other.sql
+create or replace
+package body p as
+  g number;
+  procedure x(a number) is begin
+    g := 1;
+    execute immediate
+      'begin null; end;';
+    g := 2;
+  end;
+end;
+/
+`, 'b.sql')[0];
+  assert.deepEqual(f.errors, []);
+  // the EXECUTE IMMEDIATE line is code, not a blanked SQL*Plus EXECUTE: no statement deletion
+  // that starts in the middle of it (EXECUTE IMMEDIATE itself gets no SBR, by design)
+  const sbr = f.points.filter((p) => p.op === 'SBR').map((p) => p.orig.replace(/\s+/g, ' '));
+  assert.deepEqual(sbr, ['g := 1;', 'g := 2;']);
+  assert.ok(f.units.some((u) => u.name.toLowerCase() === 'p'));
+});

@@ -14,7 +14,7 @@ import oracledb from 'oracledb';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import {
-  connect, databaseInfo, dbIdent, utInfoContext, ensureJournal, journalEntries, loadObjects, lockRun, replaceSource, restoreAll, RUN_LOCK, runScript, sha256, splitScript,
+  connect, databaseInfo, dbIdent, utInfoContext, restoreJournal, ensureJournal, journalEntries, loadObjects, lockRun, replaceSource, restoreAll, RUN_LOCK, runScript, sha256, splitScript,
   runTestsJunit as runTests, sameResults, suiteTests, type SourceObject, type TestCase, type TestRun,
 } from '@pltest/core';
 import { instrument } from './instrument.js';
@@ -120,7 +120,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       const r = await connect(cfg);
       try {
         await r.execute(`alter session set current_schema = ${dbIdent(rtOwner)}`);
-        await restoreAll(r, left.map((e) => e.object), say);
+        await restoreJournal(r, left, say);
         const still = await journalEntries(r);
         if (still.length) throw new Error(`${still.length} Objekte eines abgebrochenen Laufs ließen sich nicht wiederherstellen (${still.map((e) => e.name).join(', ')}); erst pltest restore`);
       } finally {
@@ -180,7 +180,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       compileMs += performance.now() - t1;
       if (errors) {
         say(`  ✗ ${obj.name}: instrumentierter Code kompiliert nicht (${errors}) – Original bleibt aktiv`);
-        await restoreAll(conn, [obj], () => {});
+        await restoreAll(conn, [obj], (m) => (m.includes('✗') ? say(m) : undefined));
         restore.pop();
         maps.push({ error: `Kompilierung: ${errors}`, obj });
         continue;

@@ -50,3 +50,55 @@ insert into t values (';');
   assert.equal(parts[4], 'set transaction read only');
   assert.equal(parts[5], "insert into t values (';')");
 });
+
+test('splitScript: q-quotes and quoted names with odd quotes, comment-only parts, EXEC with comments and continuation', () => {
+  const parts = splitScript(`insert into t values (q'[it's]');
+create index " foo'bar" on t (a);
+-- before exec
+exec p; -- run it
+exec dbms_output.put_line( -
+  'x');
+insert into t values ('b');
+-- trailing comment
+`);
+  assert.deepEqual(parts, [
+    "insert into t values (q'[it's]')",
+    `create index " foo'bar" on t (a)`,
+    'BEGIN p; END;',
+    "BEGIN dbms_output.put_line(\n  'x'); END;",
+    "insert into t values ('b')",
+  ]);
+});
+
+test('splitScript: a block comment after the semicolon does not join the next statement', () => {
+  assert.deepEqual(splitScript(`CREATE TABLE t (n NUMBER); /* demo
+ table */
+INSERT INTO t VALUES (1);
+`), ['CREATE TABLE t (n NUMBER) /* demo\n table */', 'INSERT INTO t VALUES (1)']);
+});
+
+test('splitScript: lone semicolons, exit; and continued SQL*Plus commands drop out', () => {
+  assert.deepEqual(splitScript(`commit;
+;
+column x format a20 -
+  heading 'X'
+desc t
+select 1 from dual;
+exit;
+`), ['commit', 'select 1 from dual']);
+});
+
+test('splitScript: code after the block comment that follows a semicolon starts the next statement', () => {
+  assert.deepEqual(splitScript(`select 1 from dual; /* c
+*/ insert into t values ('a;
+b');
+select 3 from dual;
+`), ['select 1 from dual /* c\n*/', " insert into t values ('a;\nb')", 'select 3 from dual']);
+});
+
+test('splitScript: a blank line ends a continued SQL*Plus command, the next statement stays', () => {
+  assert.deepEqual(splitScript(`column x format a20 -
+
+select 1 from dual;
+`), ['select 1 from dual']);
+});

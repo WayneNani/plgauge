@@ -1,31 +1,77 @@
 /** Splitting SQL*Plus style scripts into statements. */
 
 /** SQL*Plus commands between statements (SET TRANSACTION, ROLE and CONSTRAINTS are SQL). */
-const SQLPLUS = /^\s*(PROMPT|PRO|SET(?!\s+(TRANSACTION|ROLE|CONSTRAINTS?)\b)|SPOOL|WHENEVER|DEFINE|DEF|UNDEFINE|SHOW|SHO|EXIT|QUIT|REM|REMARK|COLUMN|COL|TTITLE|BTITLE|PAUSE|CLEAR|VAR|VARIABLE|PRINT|ACCEPT|TIMING|BREAK|COMPUTE|HOST|LIST|CONNECT|CONN|DISCONNECT)(\s|$)|^\s*@/i;
+const SQLPLUS = /^\s*(PROMPT|PRO|SET(?!\s+(TRANSACTION|ROLE|CONSTRAINTS?)\b)|SPOOL|WHENEVER|DEFINE|DEF|UNDEFINE|SHOW|SHO|EXIT|QUIT|REM|REMARK|COLUMN|COL|TTITLE|BTITLE|PAUSE|CLEAR|VAR|VARIABLE|PRINT|ACCEPT|TIMING|BREAK|COMPUTE|HOST|LIST|CONNECT|CONN|DISCONNECT|START|RUN|GET|DESC|DESCRIBE)(\s|;|$)|^\s*[@$!]/i;
 const PLSQL_START = /^\s*(CREATE\s+(OR\s+REPLACE\s+)?((NON)?EDITIONABLE\s+)?(PACKAGE|PROCEDURE|FUNCTION|TRIGGER|TYPE)\b|DECLARE\b|BEGIN\b)/i;
 
-/** A line's code without comments and string contents; comment/quote carry over lines. */
-function scan(line: string, comment: boolean, quote: boolean): { code: string; comment: boolean; quote: boolean } {
+/** Where a line ends: in a block comment, in a string or quoted name (its closing text), or in code. */
+export interface ScanState {
+  comment: boolean;
+  /** "'" in a string, '"' in a quoted name, "]'" and the like in a q-quote ('' outside). */
+  quote: string;
+}
+
+const Q_CLOSE: Record<string, string> = { '[': ']', '{': '}', '<': '>', '(': ')' };
+
+/**
+ * A line's code without comments and the contents of strings and quoted names (a string stays
+ * as '' in it); the state carries over to the next line. Knows q'[…]' quotes and "names".
+ */
+export function scanLine(line: string, st: ScanState): { code: string; state: ScanState; semi: number; dash: number } {
+  let { comment, quote } = st;
   let code = '';
-  for (let i = 0; i < line.length; i++) {
+  let i = 0;
+  let semi = -1; // the last semicolon of the code
+  let dash = -1; // where a -- comment starts
+  while (i < line.length) {
     const c = line[i];
     if (comment) {
-      if (c === '*' && line[i + 1] === '/') {
-        comment = false;
-        i++;
+      const e = line.indexOf('*/', i);
+      if (e < 0) return { code, state: { comment, quote }, semi, dash };
+      i = e + 2;
+      comment = false;
+      continue;
+    }
+    if (quote) {
+      const e = line.indexOf(quote, i);
+      if (e < 0) return { code, state: { comment, quote }, semi, dash };
+      // '' inside a string is a quote, not its end
+      if (quote === "'" && line[e + 1] === "'") {
+        i = e + 2;
+        continue;
       }
-    } else if (quote) {
-      if (c === "'") quote = false;
-    } else if (c === "'") {
-      quote = true;
-      code += "'";
-    } else if (c === '-' && line[i + 1] === '-') break;
-    else if (c === '/' && line[i + 1] === '*') {
-      comment = true;
+      i = e + quote.length;
+      quote = '';
+      continue;
+    }
+    const free = !/[\w$#]/.test(line[i - 1] ?? '');
+    if (free && (((c === 'q' || c === 'Q') && line[i + 1] === "'" && line[i + 2]) || ((c === 'n' || c === 'N') && /[qQ]/.test(line[i + 1] ?? '') && line[i + 2] === "'"))) {
+      const k = c === 'n' || c === 'N' ? i + 1 : i;
+      const d = line[k + 2];
+      if (d) {
+        quote = (Q_CLOSE[d] ?? d) + "'";
+        code += "''";
+        i = k + 3;
+        continue;
+      }
+    }
+    if (c === "'" || c === '"') {
+      quote = c;
+      code += c + c;
       i++;
-    } else code += c;
+    } else if (c === '-' && line[i + 1] === '-') {
+      dash = i;
+      break;
+    } else if (c === '/' && line[i + 1] === '*') {
+      comment = true;
+      i += 2;
+    } else {
+      if (c === ';') semi = i;
+      code += c;
+      i++;
+    }
   }
-  return { code, comment, quote };
+  return { code, state: { comment, quote }, semi, dash };
 }
 
 /**
@@ -37,37 +83,91 @@ export function splitScript(text: string): string[] {
   const out: string[] = [];
   let buf: string[] = [];
   let code = ''; // the code of the statement so far (comments and strings out)
-  let comment = false;
-  let quote = false;
-  const flush = (stmt: string) => {
-    if (stmt.trim()) out.push(stmt);
+  let st: ScanState = { comment: false, quote: '' };
+  let exec: string[] | undefined;
+  let ended = false; // the statement ended, a block comment after its semicolon is still open
+  let cont = false; // a SQL*Plus command continues on the next line
+  const flush = () => {
+    // a statement of comments only, or a lone semicolon, is none (ORA-00900)
+    if (code.replace(/;\s*$/, '').trim()) out.push(buf.join('\n').replace(/\s+$/, ''));
     buf = [];
     code = '';
   };
-  for (const line of text.split('\n')) {
-    const between = !code.trim() && !comment && !quote;
+  // EXEC call;  →  BEGIN call; END;  (continuation lines ending in " -" joined, a trailing comment and the semicolon off)
+  const execBlock = (lines: string[]) => {
+    const parts = lines.map((l, i) => (i < lines.length - 1 ? l.replace(/\s-\s*$/, '') : l));
+    let state: ScanState = { comment: false, quote: '' };
+    const kept: string[] = [];
+    for (const l of parts) {
+      const r = scanLine(l, state);
+      state = r.state;
+      kept.push(r.dash >= 0 ? l.slice(0, r.dash) : l);
+    }
+    const body = kept.join('\n').replace(/^\s*EXEC(UTE)?\s+/i, '').trim().replace(/;\s*$/, '');
+    if (body) out.push(`BEGIN ${body}; END;`);
+  };
+  for (let line of text.split('\n')) {
+    if (ended) {
+      const r = scanLine(line, st);
+      st = r.state;
+      if (st.comment) {
+        buf.push(line);
+        continue;
+      }
+      // the comment closes here: it belongs to the statement before, code after it starts the next
+      const at = line.indexOf('*/') + 2;
+      buf.push(line.slice(0, at));
+      ended = false;
+      flush();
+      st = { comment: false, quote: '' };
+      line = line.slice(at);
+      if (!line.trim()) continue;
+    }
+    if (exec) {
+      exec.push(line);
+      if (!/\s-\s*$/.test(line)) {
+        execBlock(exec);
+        exec = undefined;
+      }
+      continue;
+    }
+    // a SQL*Plus command continued with " -": this line belongs to it, even a blank one
+    if (cont) {
+      cont = /\s-\s*$/.test(line);
+      continue;
+    }
+    const between = !code.trim() && !st.comment && !st.quote;
     if (between && !line.trim() && !buf.length) continue;
-    if (!comment && !quote && line.trim() === '/') {
-      flush(buf.join('\n'));
+    if (!st.comment && !st.quote && line.trim() === '/') {
+      flush();
       continue;
     }
-    if (between && SQLPLUS.test(line)) continue;
+    // a SQL*Plus command, with its continuation lines (" -" at the end)
+    if (between && SQLPLUS.test(line)) {
+      cont = /\s-\s*$/.test(line);
+      continue;
+    }
     if (between && /^\s*EXEC(UTE)?\s+/i.test(line)) {
-      flush(buf.join('\n')); // (comments before it)
-      out.push(`BEGIN ${line.trim().replace(/^EXEC(UTE)?\s+/i, '').replace(/;\s*$/, '')}; END;`);
+      flush(); // comments before it go
+      if (/\s-\s*$/.test(line)) exec = [line];
+      else execBlock([line]);
       continue;
     }
-    const r = scan(line, comment, quote);
-    comment = r.comment;
-    quote = r.quote;
+    const r = scanLine(line, st);
+    st = r.state;
     buf.push(line);
     code += r.code + '\n';
     // PL/SQL is known once its first code is (CREATE OR REPLACE may stand on a line of its own)
     const plsql = PLSQL_START.test(code);
-    if (!plsql && !comment && !quote && /;\s*$/.test(r.code) && code.trim()) {
-      flush(buf.join('\n').replace(/;(\s*(--.*)?)$/, '$1').replace(/\s+$/, ''));
+    // (a block comment may follow the semicolon: its content is not in the code)
+    if (!plsql && !st.quote && /;\s*$/.test(r.code) && code.trim()) {
+      // the statement without its semicolon (a trailing comment stays, a block comment up to its end)
+      buf[buf.length - 1] = line.slice(0, r.semi) + line.slice(r.semi + 1);
+      if (st.comment) ended = true;
+      else flush();
     }
   }
-  flush(buf.join('\n'));
+  if (exec) execBlock(exec);
+  flush();
   return out;
 }

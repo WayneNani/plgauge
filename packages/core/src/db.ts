@@ -8,7 +8,7 @@
  */
 import oracledb from 'oracledb';
 import { createHash } from 'node:crypto';
-import { journalForget, journalRemember } from './journal.js';
+import { fingerprint, journalForget, journalNote, journalRemember, journalUnnote, type JournalEntry } from './journal.js';
 
 export interface ConnectConfig {
   user: string;
@@ -292,7 +292,45 @@ export async function replaceSource(conn: oracledb.Connection, obj: SourceObject
 
 export async function replaceSourceDetailed(conn: oracledb.Connection, obj: SourceObject, source: string, tool: string): Promise<CompileOutcome> {
   await journalRemember(conn, obj, tool);
-  return compileDetailed(conn, obj, source);
+  // noted before the compile: if the run dies during it, the unit holds this text or the one it
+  // holds now (read from the database, not assumed from the last note: a compile that failed
+  // before its DDL changed nothing)
+  const now = await currentSource(conn, obj).catch(() => undefined);
+  await journalNote(conn, obj, source, now === undefined ? undefined : fingerprint(now));
+  const out = await compileDetailed(conn, obj, source);
+  // rejected at once (a lock, a privilege, a view statement): the object still holds the text before
+  if (out.error && !/^Zeile \d+:/.test(out.error)) await journalUnnote(conn, obj);
+  return out;
+}
+
+/** The source of a unit as the database holds it now (undefined for a view or a missing unit). */
+async function currentSource(conn: oracledb.Connection, obj: SourceObject): Promise<string | undefined> {
+  if (obj.type === 'VIEW') return undefined;
+  const r = await conn.execute<[string]>(`select text from all_source where owner = :o and name = :n and type = :t order by line`, { o: obj.owner, n: obj.name, t: obj.type });
+  return r.rows?.length ? r.rows.map((x) => x[0]).join('') : undefined;
+}
+
+/**
+ * Journal entries a dead run left, back to their originals, unless the unit holds code that is
+ * neither pltest's (the fingerprint of what it compiled last) nor carries its marks: then
+ * someone has put newer work there since, which wins; its entry is dropped with a warning.
+ */
+export async function restoreJournal(conn: oracledb.Connection, entries: JournalEntry[], say: (m: string) => void): Promise<void> {
+  const todo: SourceObject[] = [];
+  for (const e of entries) {
+    if (e.currentSha) {
+      const cur = await currentSource(conn, e.object).catch(() => undefined);
+      // pltest's: the text it was about to compile, the one before, or the original itself
+      const ours = new Set([e.currentSha, e.prevSha, fingerprint(e.object.original)]);
+      if (cur !== undefined && !ours.has(fingerprint(cur)) && !/plmut_ctl\.|plmut\$a|cov\$\./i.test(cur)) {
+        say(`  ✗ ${e.owner}.${e.name} wurde nach dem abgebrochenen Lauf geändert: Journal-Eintrag verworfen, die neuere Fassung bleibt`);
+        await journalForget(conn, e.object);
+        continue;
+      }
+    }
+    todo.push(e.object);
+  }
+  await restoreAll(conn, todo, say);
 }
 
 /**
@@ -302,15 +340,20 @@ export async function replaceSourceDetailed(conn: oracledb.Connection, obj: Sour
  */
 export async function restoreAll(conn: oracledb.Connection, objs: SourceObject[], say: (m: string) => void, recompile = true): Promise<void> {
   const schemas = new Set<string>();
+  let failed = 0;
   for (const obj of objs) {
-    const out = await compileDetailed(conn, obj, obj.original);
+    // one object that cannot even be tried (its schema is gone, say) must not stop the others
+    const out = await compileDetailed(conn, obj, obj.original).catch((e: Error) => ({ error: e.message.split('\n')[0], warning: undefined }) as CompileOutcome);
     const err = out.error;
     if (out.warning) say(`  ✗ ${out.warning}`);
     if (err) {
       say(`  ✗ Wiederherstellung von ${obj.name} fehlgeschlagen: ${err}`);
       // compile errors ("Zeile n: …"): the original is in place, only invalid; anything else
       // left the changed code there and the entry must stay
-      if (!/^Zeile \d+:/.test(err)) continue;
+      if (!/^Zeile \d+:/.test(err)) {
+        failed++;
+        continue;
+      }
     }
     await journalForget(conn, obj);
     schemas.add(obj.owner);
@@ -331,7 +374,7 @@ export async function restoreAll(conn: oracledb.Connection, objs: SourceObject[]
     const q = (x: string) => `"${x.replace(/"/g, '""')}"`;
     for (const [o, n] of mv.rows ?? []) await conn.execute(`alter materialized view ${q(o)}.${q(n)} compile`).catch(() => {});
   }
-  say(`Originalcode von ${objs.length} Objekten wiederhergestellt`);
+  say(`Originalcode von ${objs.length - failed} Objekten wiederhergestellt${failed ? `, ${failed} nicht (Journal-Eintrag bleibt)` : ''}`);
 }
 
 export interface CompileError {

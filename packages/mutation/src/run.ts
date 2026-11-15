@@ -19,7 +19,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import oracledb from 'oracledb';
 import {
-  dbIdent, ensureJournal, journalEntries, loadObject, lockRun, RUN_LOCK, objectErrors, replaceSourceDetailed, restoreAll, runScript, sha256, splitScript, touches,
+  dbIdent, ensureJournal, journalEntries, loadObject, restoreJournal, type JournalEntry, lockRun, RUN_LOCK, objectErrors, replaceSourceDetailed, restoreAll, runScript, sha256, splitScript, touches,
   type ChangedLines, type SourceObject,
 } from '@pltest/core';
 import type { CoverageExport } from '@pltest/coverage';
@@ -276,6 +276,8 @@ class Worker {
     await this.ensureLock();
     this.deploy = await oracledb.getConnection(this.db);
     this.monitor = await oracledb.getConnection(this.db);
+    // its statements are short (select 1, cancel, kill): a dropped connection must not hang the watchdog
+    this.monitor.callTimeout = 30_000;
     this.test = await newSession(this.db);
     // a run that died (of either tool: the lock keeps the other out now) left its units changed:
     // put the journaled originals back first, or this run would take the changed code for the
@@ -284,7 +286,7 @@ class Worker {
     const left = await journalEntries(this.deploy);
     if (left.length) {
       this.logf(`Worker${this.name}: ${left.length} Objekte eines abgebrochenen Laufs werden aus dem Journal wiederhergestellt`);
-      await this.restoreLeftovers(left.map((e) => e.object));
+      await this.restoreLeftovers(left);
     }
     if (!this.run.opt.skipInstall) {
       for (const s of this.run.cfg.install) {
@@ -304,10 +306,10 @@ class Worker {
    * parameters (ccflags, length semantics, …) that install scripts on the deploy connection
    * must not inherit.
    */
-  private async restoreLeftovers(objs: SourceObject[]): Promise<void> {
+  private async restoreLeftovers(entries: JournalEntry[]): Promise<void> {
     const c = await oracledb.getConnection(this.db);
     try {
-      await restoreAll(c, objs, (m) => (m.includes('✗') ? this.logf(`WARNUNG${this.name}: ${m.trim()}`) : undefined));
+      await restoreJournal(c, entries, (m) => (m.includes('✗') ? this.logf(`WARNUNG${this.name}: ${m.trim()}`) : undefined));
       // an original that did not go back (a session of the dead run still holds the unit, say):
       // this run would take the changed code for the original and lose the true one at its end
       const still = await journalEntries(c);
@@ -320,12 +322,15 @@ class Worker {
   /** End of the run for a retired worker: whatever its journal still holds goes back. */
   async finalRestore(): Promise<void> {
     try {
+      // only while the schema is still this run's (a lost lock: another run restored and owns it)
+      await this.ensureLock();
+      if (this.foreign) return;
       const c = await oracledb.getConnection(this.db);
       try {
         const left = await journalEntries(c);
         if (left.length) {
           this.logf(`Worker${this.name}: ${left.length} Objekte nach dem Ausscheiden wiederhergestellt`);
-          await this.restoreLeftovers(left.map((e) => e.object));
+          await this.restoreLeftovers(left);
         }
       } finally {
         await c.close().catch(() => {});
@@ -403,6 +408,9 @@ class Worker {
       const { line, col } = positionOf(text, out.offset);
       return [{ line, position: col, text: out.error }];
     }
+    // not compiled at all (a lock: ORA-04021, a privilege): no error of this text; the caller's
+    // verdict is ERROR, not COMPILE_ERROR
+    if (!/^Zeile \d+:/.test(out.error)) throw new Error(out.error);
     const errs = await objectErrors(this.deploy, obj);
     return errs.length ? errs : [{ line: 0, position: 0, text: out.error }];
   }
@@ -439,7 +447,9 @@ class Worker {
   /** Whether the deploy connection still answers. */
   async alive(): Promise<boolean> {
     try {
+      // the monitor too: without it no timeout can cancel a test
       await this.deploy.execute('select 1 from dual');
+      await this.monitor.execute('select 1 from dual');
       return true;
     } catch {
       return false;
@@ -461,10 +471,11 @@ class Worker {
       await this.ensureLock();
       this.deploy = await oracledb.getConnection(this.db);
       this.monitor = await oracledb.getConnection(this.db);
+      this.monitor.callTimeout = 30_000;
       this.test = await newSession(this.db);
       await ensureJournal(this.deploy);
       const mine = await journalEntries(this.deploy);
-      if (mine.length) await this.restoreLeftovers(mine.map((e) => e.object));
+      if (mine.length) await this.restoreLeftovers(mine);
       await installRuntime(this.deploy);
       if (this.schema) {
         await this.installSchema(this.schema);
@@ -1124,8 +1135,9 @@ export async function runMutation(opt: Options): Promise<Report> {
   } finally {
     // (a worker whose lock went to another run restores nothing: Worker.restoreAll)
     await run.restoreEverywhere().catch(() => {});
-    // a retired worker lost its connections with code still changed: its journal knows what
-    await Promise.all(run.workers.filter((w) => w.retired && !w.foreign).map((w) => w.finalRestore()));
+    // a retired worker, or one whose deploy connection died before the end, still has changed
+    // code: its journal knows what (on a fresh connection)
+    await Promise.all(run.workers.filter((w) => !w.foreign && (w.retired || w.changed.size > 0)).map((w) => w.finalRestore()));
     await Promise.all(run.workers.map((w) => w.shutdown()));
     process.off('SIGINT', onSig);
   }
@@ -1166,7 +1178,7 @@ async function runNaive(run: Run, ms: Mutant[], stop: () => boolean): Promise<Re
 
 async function runSchema(run: Run, ms: Mutant[], stop: () => boolean): Promise<Report> {
   const w = run.primary;
-  if (ms.some((m) => m.point.naiveOnly === 'cache')) {
+  if (ms.some((m) => m.point.naiveOnly === 'cache') || [...new Set(ms.map((m) => m.sourceFile))].some((f) => /\bRESULT_CACHE\b/i.test(f.src.toString('utf8')))) {
     run.logf('Hinweis: RESULT_CACHE-Funktionen laufen einzeln; ihre gecachten Ergebnisse können Mutanten in Code verdecken, den sie aufrufen (dafür --mode naive)');
   }
   // the main block of an ordered view gets no wrapper (its order must hold): its points run one by one
@@ -1477,7 +1489,9 @@ async function isolateViews(run: Run, ms: Mutant[], dropped: Map<number, string>
   if (extra.length) {
     const culprits = new Map<SchemaUnit, string[]>();
     for (const v of views) {
-      await w.compileUnit(v.key, v.type, v.owner ? `"${v.owner}"."${v.name}"` : v.name, v.text);
+      // a view that cannot be put in place alone (a lock, say) is not tried on its own
+      const errs = await w.compileUnit(v.key, v.type, v.owner ? `"${v.owner}"."${v.name}"` : v.name, v.text).catch(() => undefined);
+      if (errs === undefined) continue;
       const f = await failingTests(run, extra);
       const hit = extra.filter((t) => f.has(t));
       if (hit.length) culprits.set(v, hit);
@@ -1508,7 +1522,9 @@ async function compileSchema(run: Run, ms: Mutant[], dropped: Map<number, string
     let bad = false;
     const before = state();
     for (const su of buildSchema(ms, new Set(dropped.keys()), naive, await w.currentSchema(), broken, run.plain).filter(only)) {
-      const errs = await w.compileUnit(su.key, su.type, su.owner ? `"${su.owner}"."${su.name}"` : su.name, su.text);
+      // not compiled at all (a lock, say): the unit's mutants run one by one, the run goes on
+      const errs = await w.compileUnit(su.key, su.type, su.owner ? `"${su.owner}"."${su.name}"` : su.name, su.text)
+        .catch((e: Error) => [{ line: 0, position: 0, text: firstLine(e) }]);
       if (!errs.length) continue;
       bad = true;
       for (const e of errs) {
