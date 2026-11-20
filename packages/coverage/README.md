@@ -111,7 +111,7 @@ Example: [`examples/order_pricing/coverage-config.json`](../../examples/order_pr
 | `user`, `password`, `connectString` | Database connection. `PLGAUGE_PASSWORD` overrides `password` |
 | `schema` | Schema whose code is measured |
 | `tests` | utPLSQL paths to run, e.g. `["demo"]` |
-| `include`, `exclude` | Optional regular expressions (case-insensitive), tested on `NAME` and on `OWNER.NAME`: `^PRICING$` picks an object by name, `^CORE\.` all objects of schema `CORE` (in JSON `"^CORE\\."`), `^CORE\.PRICING$` one object. An object is measured when `include` matches either form and `exclude` matches neither |
+| `include`, `exclude` | Optional regular expressions (case-insensitive), tested on `NAME`; a pattern that contains an escaped dot `\.` is tested on `OWNER.NAME` instead. `^PRICING$` picks an object by name, `^CORE\.` all objects of schema `CORE` (in JSON `"^CORE\\."`), `^CORE\.PRICING$` one object. An object is measured when `include` matches and `exclude` does not |
 | `sqlProbes` | Instrument SQL as well; `"auto"` = from 23ai on |
 | `perTest` | Record which test reaches which probe (default `true`) |
 | `baselineRuns` | Test runs without coverage before measuring (default 2) |

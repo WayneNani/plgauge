@@ -9,7 +9,7 @@
 import oracledb from 'oracledb';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { tokenize } from './lexer.js';
+import { tokenize, type Token } from './lexer.js';
 import { splitScript } from './script.js';
 import { codeFingerprint, fingerprint, journalForget, journalNote, journalRemember, journalSettle, journalUnnote, type JournalEntry } from './journal.js';
 
@@ -94,16 +94,19 @@ export async function databaseInfo(conn: oracledb.Connection): Promise<DatabaseI
 }
 
 export interface ObjectFilter {
-  /** Regular expressions, tested on NAME and on OWNER.NAME (so `^CORE\.` picks a schema). */
+  /** Regular expressions, tested on NAME; on OWNER.NAME when they contain `\.` (`^CORE\.` picks a schema). */
   include?: string;
   exclude?: string;
   /** Object names never loaded (runtime packages). */
   skip?: string[];
 }
 
-/** include/exclude on NAME and on OWNER.NAME: a plain name pattern works as before, `^CORE\.` picks a schema. */
+/**
+ * include/exclude on NAME, as always; a pattern with an escaped dot (`^CORE\.`) means OWNER.NAME.
+ * Opt-in, so an unanchored `TEST` does not hit every object of schema APP_TEST.
+ */
 export function filterAccepts(filter: ObjectFilter, owner: string, name: string): boolean {
-  const hit = (re: string) => [name, `${owner}.${name}`].some((x) => new RegExp(re, 'i').test(x));
+  const hit = (re: string) => new RegExp(re, 'i').test(re.includes('\\.') ? `${owner}.${name}` : name);
   return (!filter.include || hit(filter.include)) && (!filter.exclude || !hit(filter.exclude));
 }
 
@@ -208,20 +211,25 @@ export async function loadObject(conn: oracledb.Connection, owner: string, name:
 /**
  * DBMS_PREPROCESSOR returns a trigger without its header (23.26: from DECLARE, BEGIN, COMPOUND
  * TRIGGER or the CALL target on): ALL_SOURCE's header goes back in front, so lines and columns
- * match ALL_SOURCE. The body ends where ALL_SOURCE ends, so its first line is found by counting
- * from the end; undefined when that line does not end with it (conditional compilation on it).
+ * match ALL_SOURCE. The preprocessor keeps the lines and the body ends where ALL_SOURCE ends, so
+ * the body's first keyword is on the line found by counting from the end: ALL_SOURCE up to that
+ * keyword, then the body. Undefined when that line has no such keyword.
  */
 export function triggerSource(original: string, body: string): string | undefined {
   if (body === original || /^\s*trigger\b/i.test(body)) return body;
-  const src = original.split('\n');
-  const lines = body.split('\n');
-  const first = lines[0].trimEnd();
-  const h = src.length - lines.length;
-  if (h < 0 || !src[h].trimEnd().endsWith(first)) return undefined;
-  const line = src[h].trimEnd();
-  const head = [...src.slice(0, h), line.slice(0, line.length - first.length)].join('\n');
-  // a CALL trigger's body gets a ";" that CREATE TRIGGER refuses; it has no PL/SQL to preprocess
-  return /\bcall\s*$/i.test(head) ? original : head + body;
+  const bt = tokenize(body, { tolerant: true }).filter((t) => t.kind !== 'trivia');
+  // a CALL trigger's body is its target plus a ";" CREATE TRIGGER refuses; it has no PL/SQL to preprocess
+  if (!bodyStart(bt, 0)) return original;
+  const h = original.split('\n').length - body.split('\n').length;
+  const ot = tokenize(original, { tolerant: true }).filter((t) => t.kind !== 'trivia');
+  const k = ot.findIndex((t, i) => t.line === h + bt[0].line && t.up === bt[0].up && bodyStart(ot, i));
+  return k < 0 ? undefined : original.slice(0, ot[k].start) + body.slice(bt[0].start);
+}
+
+/** DECLARE, BEGIN, a label or COMPOUND TRIGGER: where a trigger's PL/SQL starts (COMPOUND is no reserved word). */
+function bodyStart(ts: Token[], i: number): boolean {
+  const u = ts[i]?.up;
+  return u === 'DECLARE' || u === 'BEGIN' || u === '<<' || (u === 'COMPOUND' && ts[i + 1]?.up === 'TRIGGER');
 }
 
 /**

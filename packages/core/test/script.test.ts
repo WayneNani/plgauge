@@ -285,7 +285,7 @@ select 1 from dual;
 `), ['select 1 from dual']);
 });
 
-test('filterAccepts: include/exclude match NAME or OWNER.NAME', async () => {
+test('filterAccepts: include/exclude match NAME, OWNER.NAME only with an escaped dot', async () => {
   const { filterAccepts } = await import('../src/db.js');
   assert.equal(filterAccepts({ include: '^PRICING$' }, 'CORE', 'PRICING'), true, 'a plain name pattern keeps working');
   assert.equal(filterAccepts({ include: '^CORE\\.' }, 'CORE', 'PRICING'), true);
@@ -294,4 +294,8 @@ test('filterAccepts: include/exclude match NAME or OWNER.NAME', async () => {
   assert.equal(filterAccepts({ exclude: '^UTIL\\.LOG$' }, 'UTIL', 'LOG'), false);
   assert.equal(filterAccepts({ exclude: '^UTIL\\.LOG$' }, 'CORE', 'LOG'), true, 'the same name in another schema stays');
   assert.equal(filterAccepts({}, 'CORE', 'LOG'), true);
+  // without "\\." the schema name is not tested, exactly as before
+  assert.equal(filterAccepts({ exclude: 'TEST' }, 'APP_TEST', 'ORDERS'), true);
+  assert.equal(filterAccepts({ include: 'API' }, 'API_OWNER', 'ORDERS'), false);
+  assert.equal(filterAccepts({ include: 'API' }, 'API_OWNER', 'ORDER_API'), true);
 });
