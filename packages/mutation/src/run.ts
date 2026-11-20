@@ -19,7 +19,7 @@ import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import oracledb from 'oracledb';
 import {
-  dbIdent, ensureJournal, journalEntries, loadObject, restoreJournal, lockRun, RUN_LOCK, objectErrors, replaceSourceDetailed, restoreAll, runScript, sha256, splitScript, touches,
+  dbIdent, ensureJournal, journalEntries, loadObject, restoreJournal, lockRun, RUN_LOCK, objectErrors, replaceSourceDetailed, restoreAll, runScript, runTestHooks, sha256, splitScript, touches,
   type ChangedLines, type SourceObject,
 } from '@plgauge/core';
 import type { CoverageExport } from '@plgauge/coverage';
@@ -43,6 +43,12 @@ export interface Config {
   mutate: string[];
   /** utPLSQL paths; empty runs the whole schema. */
   tests: string[];
+  /**
+   * Scripts relative to the project, run before the first test run (test seams: synonyms to
+   * mocks, say) and at the very end, after the originals are back, also when the run fails.
+   */
+  beforeTests: string[];
+  afterTests: string[];
 }
 
 export interface Options {
@@ -113,12 +119,14 @@ export interface Report {
   aborted?: string;
   /** Objects whose originals did not go back at the end (they stay in the journal). */
   unrestored?: string[];
+  /** afterTests failed on these workers: the test seams may still be switched. */
+  afterTestsFailed?: string[];
 }
 
 /** The project file plgauge.json. */
 export function loadConfig(dir: string): Config {
   const c = JSON.parse(readFileSync(join(dir, 'plgauge.json'), 'utf8')) as Partial<Config>;
-  return { install: c.install ?? [], mutate: c.mutate ?? [], tests: c.tests ?? [] };
+  return { install: c.install ?? [], mutate: c.mutate ?? [], tests: c.tests ?? [], beforeTests: c.beforeTests ?? [], afterTests: c.afterTests ?? [] };
 }
 
 export function mutateFiles(cfg: Config, dir: string): string[] {
@@ -315,6 +323,39 @@ class Worker {
     }
     await ensureJournal(this.deploy);
     await installRuntime(this.deploy);
+    // also after a reset (a fresh database); on a connection of their own, like the journal
+    // restore: their session state must not reach the deploy connection
+    if (this.run.cfg.beforeTests.length) {
+      this.seams = true;
+      await this.hooks(this.run.cfg.beforeTests);
+    }
+  }
+
+  /** beforeTests ran (or started) here: afterTests runs at the end. */
+  seams = false;
+
+  private async hooks(scripts: string[], allOf = false): Promise<void> {
+    const c = await oracledb.getConnection(this.db);
+    try {
+      await runTestHooks(c, scripts.map((s) => join(this.run.opt.dir, s)), allOf);
+    } finally {
+      await c.close().catch(() => {});
+    }
+  }
+
+  /**
+   * End of the run, after the originals are back: the afterTests scripts, only while the schema
+   * is still this run's. Returns the failure, if any.
+   */
+  async afterTests(): Promise<string | undefined> {
+    if (!this.seams || !this.run.cfg.afterTests.length) return;
+    try {
+      await this.ensureLock();
+      this.guard();
+      await this.hooks(this.run.cfg.afterTests, true);
+    } catch (e) {
+      return `Worker${this.name}: ${firstLine(e as Error)}`;
+    }
   }
 
   /**
@@ -1274,6 +1315,11 @@ export async function runMutation(opt: Options): Promise<Report> {
       const msg = `ERROR: originals not restored (${left.join('; ')}); the changed code is in the journal: plgauge restore`;
       (opt.log ?? console.error)(msg);
       if (report) report.unrestored = left;
+    }
+    const hooks = (await Promise.all(run.workers.map((w) => w.afterTests()))).filter((f): f is string => !!f);
+    if (hooks.length) {
+      (opt.log ?? console.error)(`ERROR: afterTests: ${hooks.join('; ')} (the test seams may still be switched)`);
+      if (report) report.afterTestsFailed = hooks;
     }
     await Promise.all(run.workers.map((w) => w.shutdown()));
     process.off('SIGINT', onSig);

@@ -14,7 +14,7 @@ import oracledb from 'oracledb';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import {
-  connect, databaseInfo, dbIdent, firstLine, utInfoContext, restoreJournal, ensureJournal, journalEntries, loadObjects, lockRun, replaceSourceDetailed, restoreAll, RUN_LOCK, runScript, sha256, splitScript,
+  connect, databaseInfo, dbIdent, firstLine, utInfoContext, restoreJournal, ensureJournal, journalEntries, loadObjects, lockRun, replaceSourceDetailed, restoreAll, RUN_LOCK, runScript, runTestHooks, sha256, splitScript,
   runTestsJunit as runTests, suiteTests, tryExecute, type SourceObject, type TestCase, type TestRun,
 } from '@plgauge/core';
 import { instrument } from './instrument.js';
@@ -51,6 +51,12 @@ export interface RunConfig {
    * crashed run left: installed earlier, they would be overwritten by those old originals.
    */
   installScripts?: string[];
+  /**
+   * Scripts (paths) run once before the first test run (test seams: synonyms to mocks, say) and
+   * once at the very end, after the originals are back, also when the run fails or is cancelled.
+   */
+  beforeTests?: string[];
+  afterTests?: string[];
 }
 
 export type { TestCase, TestRun } from '@plgauge/core';
@@ -80,6 +86,8 @@ export interface RunReport {
   log: string[];
   /** Objects whose originals did not go back at the end (their entries stay in the journal). */
   unrestored?: number;
+  /** An afterTests script failed: the test seams may still be switched. */
+  afterTestsFailed?: string;
 }
 
 export async function runCoverage(cfg: RunConfig, log: (m: string) => void = console.error): Promise<RunReport> {
@@ -189,6 +197,9 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
   process.on('SIGINT', onSig);
   process.on('SIGTERM', onSig);
   const restore: SourceObject[] = [];
+  // beforeTests started: afterTests runs at the end, whatever happens after
+  let seams = false;
+  let report: RunReport | undefined;
   try {
     const nls = (await conn.execute<[string]>(`select value from nls_session_parameters where parameter = 'NLS_LENGTH_SEMANTICS'`)).rows?.[0]?.[0] ?? 'BYTE';
     await conn.execute(`alter session set current_schema = ${dbIdent(rtOwner)}`);
@@ -226,6 +237,13 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       await conn.execute(`grant execute on ${dbIdent(rtOwner)}.cov$ to ${dbIdent(owner)}`);
     }
 
+    // on a connection of their own in rtOwner, like the install scripts: their session state
+    // (CURRENT_SCHEMA, parameters) must not reach the tests
+    if (cfg.beforeTests?.length) {
+      seams = true;
+      await connectHome(async (c) => runTestHooks(c, cfg.beforeTests!)).then((c) => c.close());
+      say(`${cfg.beforeTests.length} beforeTests scripts run`);
+    }
     await testRun(cfg.tests, null); // warm-up: utPLSQL builds its annotation cache on the first run
     say('1/4 Test run without coverage …');
     const repeat = Math.max(1, cfg.baselineRuns ?? 2);
@@ -360,7 +378,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       return Object.assign(r, { sourceSha256: sha256(obj.processed), rawSha256: sha256(obj.original) }, ut ? { utplsql: ut } : {});
     });
 
-    return {
+    return (report = {
       generated: new Date().toISOString(),
       database: banner,
       schema: multi ? schemas.join(',') : schema,
@@ -370,7 +388,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       equivalent, flakyTests: [...flaky].sort(), baselineRuns: repeat, differingTests: differing,
       tests, perTest, objects: objectsOut, log: messages,
       ...(unrestored ? { unrestored } : {}),
-    };
+    });
   } finally {
     clearInterval(ping);
     // the main connection may be what failed (a test crashed its server process): the cleanup on
@@ -390,6 +408,15 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     } finally {
       if (fin !== conn) await fin.close().catch(() => {});
       await conn.close().catch(() => {});
+      // after the restore and never instead of it; only while the schema is still this run's
+      if (seams && cfg.afterTests?.length) {
+        const failed = !(await confirmed()) ? 'run lock not confirmed, not run'
+          : await connectHome(async (c) => runTestHooks(c, cfg.afterTests!, true)).then((c) => c.close()).then(() => undefined, (e: Error) => firstLine(e));
+        if (failed) {
+          say(`ERROR: afterTests: ${failed} (the test seams may still be switched)`);
+          if (report) report.afterTestsFailed = failed;
+        } else say(`${cfg.afterTests.length} afterTests scripts run`);
+      }
       process.off('SIGINT', onSig);
       process.off('SIGTERM', onSig);
       // (a check in flight may still swap the connection; after this none takes the lock again)

@@ -49,6 +49,8 @@ A project is a directory with a `plgauge.json`. Coverage and mutation read the s
 | `install` | Scripts, in order, relative to the project (see below for how they are read). |
 | `mutate` | Globs of the files whose units are mutated. |
 | `tests` | utPLSQL paths. Empty runs the whole schema. |
+| `beforeTests` | Scripts, relative to the project, run once per worker database before the first test run, after the install (and again after a `--reset-cmd` reset). For test seams: synonyms to mocks, say. A failing script fails the run. |
+| `afterTests` | Scripts run once per worker database at the very end, after the originals are restored, also when the run fails or is cancelled. A failing script does not stop the later ones; it is reported and the run exits with code 1. |
 
 The `install` scripts are read like SQL*Plus with default settings:
 
@@ -56,6 +58,10 @@ The `install` scripts are read like SQL*Plus with default settings:
 - A blank line or `.` ends SQL input without executing it, except with `SET SQLBLANKLINES ON`.
 - `EXIT` ends the script.
 - Substitution variables (`&x`, `DEFINE`) are not replaced.
+
+`beforeTests` and `afterTests` are read the same way. They run on a connection of their own as the
+connected user and are committed at the end. The tests run in another session, so what they need must
+persist: DDL or committed data, not session state.
 
 ## Commands and options
 
@@ -86,8 +92,8 @@ Options of `mutate run`:
 | `--no-confirm` | Turn off the second attempt of the [second look at verdicts](#second-look-at-verdicts). |
 | `-q` | No progress output. |
 
-The text report goes to stdout. The run exits with code 1 if it was aborted or if originals could not
-be restored.
+The text report goes to stdout. The run exits with code 1 if it was aborted, if originals could not
+be restored or if an `afterTests` script failed.
 
 Environment variables:
 

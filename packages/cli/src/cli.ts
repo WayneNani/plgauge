@@ -22,7 +22,7 @@
  *   plgauge crosscheck --coverage c.json --mutation m.json  recording run of the mutation against measured coverage
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import {
   changedLines, connect, currentSchema, restoreJournal, ensureJournal, firstLine, journalEntries, journalForget, lockRun, preprocess, quoteIdent as qi, RUN_LOCK, splitScript,
   type ConnectConfig,
@@ -102,6 +102,9 @@ function loadConfig(path: string | undefined): RunConfig {
   if (!path) throw new Error('missing --config');
   const cfg = JSON.parse(readFileSync(path, 'utf8')) as RunConfig;
   cfg.password = process.env.PLGAUGE_PASSWORD ?? cfg.password;
+  // script paths are relative to the config file
+  cfg.beforeTests = cfg.beforeTests?.map((s) => resolve(dirname(path), s));
+  cfg.afterTests = cfg.afterTests?.map((s) => resolve(dirname(path), s));
   return cfg;
 }
 
@@ -142,6 +145,7 @@ async function main() {
         console.error(`ERROR: ${report.unrestored} objects not restored: plgauge restore`);
         process.exitCode = 1;
       }
+      if (report.afterTestsFailed) process.exitCode = 1;
       break;
     }
     case 'report': {
@@ -315,7 +319,7 @@ async function main() {
       // (an aborted run's exit code (1) stands)
       scoreGate(rep.results, minScore, !!rep.aborted);
       // changed code left in the schema outranks the score gate
-      if (rep.unrestored?.length) process.exitCode = 1;
+      if (rep.unrestored?.length || rep.afterTestsFailed?.length) process.exitCode = 1;
       break;
     }
     case 'crosscheck': {

@@ -105,6 +105,8 @@ Put a `plgauge.json` next to your sources:
   with `;`, PL/SQL units with a `/` on its own line.
 - **`mutate`** lists the files whose units are measured and mutated.
 - **`tests`** lists utPLSQL paths (packages or suite paths).
+- **`beforeTests`** and **`afterTests`** (optional) list scripts that switch test seams, such as synonyms to
+  mock packages: before the first test run, and back at the end of the run, also when it fails or is cancelled.
 
 Then:
 
