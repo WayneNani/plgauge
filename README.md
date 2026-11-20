@@ -116,7 +116,8 @@ bin/plgauge coverage path/to/project --out coverage
 bin/plgauge mutate run path/to/project --json mutation.json --report mutation.html
 ```
 
-If the code is already installed, add `--skip-install`. To measure an existing schema without a project file,
+If the code is already installed, add `--skip-install`. For a faster run without utPLSQL's own line rate, add
+`--no-utplsql-compare --no-warmup` (two test runs fewer). To measure an existing schema without a project file,
 use a connection config instead. See [`examples/order_pricing/coverage-config.json`](examples/order_pricing/coverage-config.json)
 and the [coverage documentation](packages/coverage/README.md#configuration).
 

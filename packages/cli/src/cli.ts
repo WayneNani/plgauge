@@ -4,6 +4,7 @@
  *
  *   plgauge coverage --config coverage-config.json [--out report]  measure coverage, write report ("run" is the old name)
  *   plgauge coverage [dir] --db oracle://…               same for a project with plgauge.json (its units, its tests)
+ *        --no-warmup --no-utplsql-compare               skip the warm-up run / the run with utPLSQL's own coverage
  *   plgauge instrument <file.sql> [--no-sql]             print instrumented source (offline)
  *   plgauge deploy <file.sql ...> --config coverage-config.json    run SQL*Plus-style scripts (demo setup)
  *   plgauge report <coverage.json> [--mutation run.json] re-render HTML from saved JSON; with mutation results: joint report
@@ -115,12 +116,16 @@ async function main() {
       const configFile = opt('config');
       const db = opt('db') ?? process.env.PLGAUGE_DB?.split(',')[0];
       const skipInstall = flag('skip-install');
+      const noWarmup = flag('no-warmup');
+      const noUtCompare = flag('no-utplsql-compare');
       const th = thresholds();
       const diffRef = opt('diff');
       const src = opt('src');
       const out = resolve(opt('out') ?? 'plgauge-report');
       const project = configFile || !db ? undefined : args.shift() ?? '.';
       const cfg = project === undefined ? loadConfig(configFile) : await projectCoverageConfig(project, db!, !skipInstall, (m) => console.error(m));
+      if (noWarmup) cfg.warmup = false;
+      if (noUtCompare) cfg.utplsqlCompare = false;
       const report = await runCoverage(cfg);
       let exp = toCoverageExport(report);
       mkdirSync(out, { recursive: true });

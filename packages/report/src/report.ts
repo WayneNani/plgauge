@@ -94,6 +94,8 @@ export function renderHtml(r: RunReport, opts: { mutation?: { results: MutationR
   const muts = opts.mutation ? mutationIndex(opts.mutation.results) : undefined;
   const mutOf = (o: ObjectResult) => muts?.get(`${o.type} ${o.name}`);
   const mutAll = muts ? objs.flatMap((o) => [...(mutOf(o)?.values() ?? [])].flat()) : [];
+  // a run without the utPLSQL comparison (older reports: always with it) hides its column and rows
+  const hasUt = r.utplsqlCompare !== false;
   const ut = objs.reduce((a, o) => ({ covered: a.covered + (o.utplsql?.covered ?? 0), total: a.total + (o.utplsql?.total ?? 0) }), { covered: 0, total: 0 });
   const totals = Object.fromEntries(METRICS.map((m) => [m.key, sum(objs, m.key)])) as Record<MetricKey, Metric>;
   const tips: string[] = [];
@@ -103,16 +105,18 @@ export function renderHtml(r: RunReport, opts: { mutation?: { results: MutationR
   const utPct = pctNum(ut);
   const brPct = pctNum(totals.branch);
   const mcPct = pctNum(totals.mcdc);
-  const headline = utPct !== null && brPct !== null
-    ? `utPLSQL reports <em>${fmtPct(utPct)}</em> line coverage. <em class="t-${tone(brPct)}">${fmtPct(brPct)}</em> of the branches${mcPct !== null ? ` and <em class="t-${tone(mcPct)}">${fmtPct(mcPct)}</em> MC/DC` : ''} are tested.`
-    : 'Coverage measured by source code instrumentation';
+  const tested = brPct !== null
+    ? `<em class="t-${tone(brPct)}">${fmtPct(brPct)}</em> of the branches${mcPct !== null ? ` and <em class="t-${tone(mcPct)}">${fmtPct(mcPct)}</em> MC/DC` : ''} are tested.`
+    : null;
+  const headline = tested === null ? 'Coverage measured by source code instrumentation'
+    : utPct !== null ? `utPLSQL reports <em>${fmtPct(utPct)}</em> line coverage. ${tested}` : tested;
 
   const compareRows = [
-    `<div class="cmp-row ref">
+    ...(hasUt ? [`<div class="cmp-row ref">
        <div class="cmp-label"><strong>Lines</strong><span>utPLSQL today (DBMS_PROFILER)</span></div>
        ${bar(ut, 'ref')}
        <div class="cmp-val"><b>${fmtPct(utPct)}</b><small>${ut.covered}/${ut.total}</small></div>
-     </div>`,
+     </div>`] : []),
     ...[...METRICS.map((m) => ({ ...m, v: totals[m.key] })), ...(muts ? [{ label: 'Mutation Score', help: MUT_HELP, v: mutScore(mutAll) }] : [])].map(({ label, help, v }) => `<div class="cmp-row">
         <div class="cmp-label"><strong>${label}</strong><span>${esc(help)}</span></div>
         ${bar(v)}
@@ -128,6 +132,9 @@ export function renderHtml(r: RunReport, opts: { mutation?: { results: MutationR
   const slowUt = slowest && r.utplsqlRun?.tests.find((t) => t.suite === slowest.suite && t.name === slowest.name);
   const factor = slowest && slowInstr && slowest.time > 0 ? slowInstr.time / slowest.time : null;
   const nObj = objs.filter((o) => !o.instrumentError).length;
+  // no warm baseline run (warm-up skipped, one baseline run): its test times are no reference
+  const warmBase = r.timings.baselineMs !== undefined;
+  const skipped = [r.warmup === false ? 'warm-up run' : '', r.utplsqlCompare === false ? 'utPLSQL coverage run' : ''].filter(Boolean);
   const facts = `
     <div class="facts">
       <div class="fact ${r.equivalent ? 'f-ok' : 'f-bad'}">
@@ -140,7 +147,7 @@ export function renderHtml(r: RunReport, opts: { mutation?: { results: MutationR
         <span class="fact-v">${fmtMs(r.timings.instrumentMs)}</span>
         <span class="fact-d">Parsing and placing probes for ${nObj} object${nObj === 1 ? '' : 's'}. Compiling in the database: ${fmtMs(r.timings.compileMs)}.</span>
       </div>
-      ${slowest && slowInstr ? `<div class="fact">
+      ${slowest && slowInstr && warmBase ? `<div class="fact">
         <span class="fact-k">Runtime overhead</span>
         <span class="fact-v">${factor !== null ? `× ${factor.toLocaleString('en-US', { maximumFractionDigits: 1 })}` : '–'}</span>
         <span class="fact-d">Slowest test “${esc(slowest.name)}”: ${fmtMs(slowest.time * 1000)} without coverage${slowUt ? `, ${fmtMs(slowUt.time * 1000)} with utPLSQL coverage` : ''}, ${fmtMs(slowInstr.time * 1000)} with plgauge.</span>
@@ -148,7 +155,7 @@ export function renderHtml(r: RunReport, opts: { mutation?: { results: MutationR
       <div class="fact">
         <span class="fact-k">Test runs total</span>
         <span class="fact-v">${fmtMs(r.timings.instrumentedMs)}</span>
-        <span class="fact-d">Without coverage ${fmtMs(r.timings.baselineMs)}, with utPLSQL coverage ${fmtMs(r.timings.utplsqlCoverageMs)}.</span>
+        <span class="fact-d">Without coverage ${warmBase ? fmtMs(r.timings.baselineMs!) : 'not timed (the only run also warmed up utPLSQL)'}${r.timings.utplsqlCoverageMs !== undefined ? `, with utPLSQL coverage ${fmtMs(r.timings.utplsqlCoverageMs)}` : ''}.${skipped.length ? ` Skipped: ${skipped.join(', ')}.` : ''}</span>
       </div>
     </div>`;
 
@@ -157,7 +164,7 @@ export function renderHtml(r: RunReport, opts: { mutation?: { results: MutationR
     const cell = (v: Metric, cls = 'mini') => `<td><div class="cell">${bar(v, cls)}<span class="num">${fmtPct(pctNum(v))}</span></div></td>`;
     return `<tr>
       <th scope="row"><a href="#o${idx}">${esc(o.name.toLowerCase())}</a><span class="otype">${esc(o.type.toLowerCase())}</span></th>
-      ${cell(o.utplsql ?? { covered: 0, total: 0 }, 'mini ref')}
+      ${hasUt ? cell(o.utplsql ?? { covered: 0, total: 0 }, 'mini ref') : ''}
       ${o.instrumentError ? `<td colspan="${METRICS.length}" class="err">${esc(o.instrumentError)}</td>` : METRICS.map((m) => cell(o.metrics[m.key])).join('')}
       ${muts ? cell(mutScore([...(mutOf(o)?.values() ?? [])].flat())) : ''}
       <td class="num find">${o.findings.length + (muts ? unchecked(o, mutOf(o)).length : 0)}</td>
@@ -350,7 +357,7 @@ aside.findings { background: var(--surface); border: 1px solid var(--line); bord
   <section aria-labelledby="h-obj">
     <header><div class="eyebrow">Objects</div><h2 id="h-obj">Coverage per program unit</h2></header>
     <div class="tbl"><table>
-      <thead><tr><th>Object</th><th>Lines (utPLSQL)</th>${METRICS.map((m) => `<th>${m.label}</th>`).join('')}${muts ? '<th>Mutation Score</th>' : ''}<th class="find">Gaps</th></tr></thead>
+      <thead><tr><th>Object</th>${hasUt ? '<th>Lines (utPLSQL)</th>' : ''}${METRICS.map((m) => `<th>${m.label}</th>`).join('')}${muts ? '<th>Mutation Score</th>' : ''}<th class="find">Gaps</th></tr></thead>
       <tbody>${tableRows}</tbody>
     </table></div>
   </section>
@@ -361,7 +368,7 @@ aside.findings { background: var(--surface); border: 1px solid var(--line); bord
     <span><i class="sw" style="background:var(--bad)"></i>never executed</span>
     <span><i class="sw" style="background:var(--nf)"></i>NOT_FEASIBLE</span>
     <span><span class="tf"><b class="on T">T</b><b class="on F">F</b><b class="on N">N</b></span>sub-condition was TRUE / FALSE / NULL</span>
-    <span><span class="ut"><i class="y"></i></span> line counted by utPLSQL</span>
+    ${hasUt ? '<span><span class="ut"><i class="y"></i></span> line counted by utPLSQL</span>' : ''}
   </div>
 
   ${sections}

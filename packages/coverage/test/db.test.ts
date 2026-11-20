@@ -424,3 +424,60 @@ test('hits of a scheduler job started by a test are collected under #background'
     await conn.close();
   }
 });
+
+// Optional runs: without warm-up and utPLSQL comparison only the baseline and the instrumented run take place.
+test('coverage without warm-up and utPLSQL comparison: fewer test runs, report without utPLSQL', { skip: !m && 'PLGAUGE_COV_DB not set', timeout: 300_000 }, async () => {
+  const conn = await oracledb.getConnection({ user: m![1], password: m![2], connectString: m![3] });
+  try {
+    await conn.execute(`begin execute immediate 'create table plgauge_opt_log (n number)'; exception when others then if sqlcode != -955 then raise; end if; end;`);
+    await conn.execute(`create or replace procedure plgauge_opt_mark is pragma autonomous_transaction; begin insert into plgauge_opt_log values (1); commit; end;`);
+    await conn.execute(`create or replace function plgauge_opt_calc(n number) return varchar2 is begin if n > 0 then return 'pos'; end if; return 'other'; end;`);
+    await conn.execute(`create or replace package plgauge_opt_test is
+      --%suite
+
+      --%test
+      procedure pos;
+    end;`);
+    await conn.execute(`create or replace package body plgauge_opt_test is
+      procedure pos is begin plgauge_opt_mark; ut.expect(plgauge_opt_calc(1)).to_equal('pos'); end;
+    end;`);
+    const { runCoverage } = await import('@plgauge/coverage');
+    const { renderHtml } = await import('@plgauge/report');
+    const runs = async (extra: { warmup?: boolean; utplsqlCompare?: boolean; baselineRuns?: number }) => {
+      await conn.execute(`delete from plgauge_opt_log`);
+      await conn.commit();
+      const r = await runCoverage({
+        user: m![1], password: m![2], connectString: m![3], schema: m![1], include: '^PLGAUGE_OPT_CALC$', tests: ['plgauge_opt_test'], ...extra,
+      }, () => {});
+      return { r, n: (await conn.execute<[number]>(`select count(*) from plgauge_opt_log`)).rows![0][0] };
+    };
+
+    // both off, one baseline run: it warms up, so it is not timed
+    const a = await runs({ warmup: false, utplsqlCompare: false, baselineRuns: 1 });
+    assert.equal(a.n, 2, 'baseline + instrumented');
+    assert.ok(a.r.equivalent);
+    assert.deepEqual([a.r.warmup, a.r.utplsqlCompare, a.r.baselineRuns], [false, false, 1]);
+    assert.equal(a.r.utplsqlRun, undefined);
+    assert.equal(a.r.timings.utplsqlCoverageMs, undefined);
+    assert.equal(a.r.timings.baselineMs, undefined, 'a cold baseline is not timed');
+    assert.ok(a.r.timings.instrumentedMs > 0);
+    const o = a.r.objects.find((x) => x.name === 'PLGAUGE_OPT_CALC')!;
+    assert.equal(o.utplsql, undefined);
+    assert.deepEqual(o.metrics.branch, { covered: 1, total: 2 });
+    const html = renderHtml(a.r);
+    assert.doesNotMatch(html, /Lines \(utPLSQL\)|undefined|NaN/);
+    assert.match(html, /Skipped: warm-up run, utPLSQL coverage run\./);
+
+    // only the comparison off: warm-up + two baseline runs + instrumented; the last baseline run is timed
+    const b = await runs({ utplsqlCompare: false });
+    assert.equal(b.n, 4, 'warm-up + 2 baseline + instrumented');
+    assert.deepEqual([b.r.warmup, b.r.utplsqlCompare, b.r.baselineRuns], [true, false, 2]);
+    assert.equal(b.r.timings.baselineMs, b.r.baseline.ms);
+  } finally {
+    await conn.execute(`drop package plgauge_opt_test`).catch(() => undefined);
+    await conn.execute(`drop function plgauge_opt_calc`).catch(() => undefined);
+    await conn.execute(`drop procedure plgauge_opt_mark`).catch(() => undefined);
+    await conn.execute(`drop table plgauge_opt_log purge`).catch(() => undefined);
+    await conn.close();
+  }
+});

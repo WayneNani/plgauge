@@ -1,8 +1,9 @@
 /**
  * Orchestrates a coverage run against a database:
  *
- *  1. baseline test runs without coverage (timing; twice by default)
- *  2. baseline test run with utPLSQL's own coverage (line coverage for comparison);
+ *  1. baseline test runs without coverage (timing; twice by default), after a warm-up run
+ *     (optional: without it the first baseline run warms up and is not timed)
+ *  2. baseline test run with utPLSQL's own coverage (line coverage for comparison; optional);
  *     a test whose result changes across 1 and 2 is flaky
  *  3. instrument + compile all code objects of the schema
  *  4. test run on instrumented code, flush probes
@@ -46,6 +47,10 @@ export interface RunConfig {
   perTest?: boolean;
   /** Test runs without coverage before measuring (default 2); a test whose result changes is flaky. */
   baselineRuns?: number;
+  /** A warm-up test run before the baseline (default true); without it the first baseline run warms up. */
+  warmup?: boolean;
+  /** A test run with utPLSQL's own coverage (DBMS_PROFILER) for the line-rate comparison (default true). */
+  utplsqlCompare?: boolean;
   /**
    * Scripts (paths) the run installs first, under the run lock and after restoring what a
    * crashed run left: installed earlier, they would be overwritten by those old originals.
@@ -66,10 +71,11 @@ export interface RunReport {
   database: string;
   schema: string;
   sqlProbes: boolean;
-  timings: { baselineMs: number; utplsqlCoverageMs: number; instrumentedMs: number; instrumentMs: number; compileMs: number };
+  /** baselineMs is missing when no baseline run was warm, utplsqlCoverageMs without the utPLSQL run. */
+  timings: { baselineMs?: number; utplsqlCoverageMs?: number; instrumentedMs: number; instrumentMs: number; compileMs: number };
   baseline: TestRun;
-  /** Test run with utPLSQL's own coverage (DBMS_PROFILER + DBMS_PLSQL_CODE_COVERAGE). */
-  utplsqlRun: TestRun;
+  /** Test run with utPLSQL's own coverage (DBMS_PROFILER + DBMS_PLSQL_CODE_COVERAGE); missing when skipped. */
+  utplsqlRun?: TestRun;
   instrumentedRun: TestRun;
   /** Same results with and without instrumentation, flaky tests left aside. */
   equivalent: boolean;
@@ -82,6 +88,9 @@ export interface RunReport {
   perTest: boolean;
   /** Runs without coverage before measuring. */
   baselineRuns?: number;
+  /** Whether the warm-up run and the utPLSQL run took place (missing in older reports: both did). */
+  warmup?: boolean;
+  utplsqlCompare?: boolean;
   objects: ObjectResult[];
   log: string[];
   /** Objects whose originals did not go back at the end (their entries stay in the journal). */
@@ -244,9 +253,14 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       await connectHome(async (c) => runTestHooks(c, cfg.beforeTests!)).then((c) => c.close());
       say(`${cfg.beforeTests.length} beforeTests scripts run`);
     }
-    await testRun(cfg.tests, null); // warm-up: utPLSQL builds its annotation cache on the first run
+    // warm-up: utPLSQL builds its annotation cache on the first run
+    const warmup = cfg.warmup !== false;
+    if (warmup) await testRun(cfg.tests, null);
     say('1/4 Test run without coverage …');
     const repeat = Math.max(1, cfg.baselineRuns ?? 2);
+    // without the warm-up the first baseline run is cold: its results count, its time does not
+    // (the last run gives the timing, so only a single cold run leaves none)
+    const timed = warmup || repeat > 1;
     // Every run starts with fresh package state, like the instrumented run after compiling:
     // tests that depend on state left by earlier tests then behave the same in all runs.
     const fresh = () => conn.execute('begin dbms_session.reset_package; end;');
@@ -257,9 +271,12 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       baseline = await testRun(cfg.tests, null);
       observed.push(baseline.run.tests);
     }
-    say('2/4 Test run with utPLSQL coverage (DBMS_PROFILER) …');
-    await fresh();
-    const utCov = await testRun(cfg.tests, schemas);
+    let utCov: Awaited<ReturnType<typeof testRun>> | undefined;
+    if (cfg.utplsqlCompare !== false) {
+      say('2/4 Test run with utPLSQL coverage (DBMS_PROFILER) …');
+      await fresh();
+      utCov = await testRun(cfg.tests, schemas);
+    } else say('2/4 Test run with utPLSQL coverage skipped');
 
     say('3/4 Instrumenting and compiling …');
     const ids = newIds();
@@ -344,7 +361,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
 
     // Flaky: the result changed although our instrumentation was not involved (baseline runs and
     // the run with utPLSQL's own coverage). They are left out of the equivalence check.
-    observed.push(utCov.run.tests);
+    if (utCov) observed.push(utCov.run.tests);
     const key = (t: TestCase) => `${t.suite}::${t.name}`;
     const seen = new Map<string, Set<string>>();
     for (const run of observed) for (const t of run) seen.set(key(t), (seen.get(key(t)) ?? new Set()).add(t.status));
@@ -374,7 +391,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       }
       const obj = objects.find((o) => o.owner === m.owner && o.name === m.name && o.type === m.type)!;
       const r = analyze(m, hits, testIndex);
-      const ut = utCov.sonar.get(r.key);
+      const ut = utCov?.sonar.get(r.key);
       return Object.assign(r, { sourceSha256: sha256(obj.processed), rawSha256: sha256(obj.original) }, ut ? { utplsql: ut } : {});
     });
 
@@ -383,9 +400,9 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       database: banner,
       schema: multi ? schemas.join(',') : schema,
       sqlProbes,
-      timings: { baselineMs: baseline.run.ms, utplsqlCoverageMs: utCov.run.ms, instrumentedMs: instrumentedRun.run.ms, instrumentMs, compileMs },
-      baseline: baseline.run, utplsqlRun: utCov.run, instrumentedRun: instrumentedRun.run,
-      equivalent, flakyTests: [...flaky].sort(), baselineRuns: repeat, differingTests: differing,
+      timings: { baselineMs: timed ? baseline.run.ms : undefined, utplsqlCoverageMs: utCov?.run.ms, instrumentedMs: instrumentedRun.run.ms, instrumentMs, compileMs },
+      baseline: baseline.run, utplsqlRun: utCov?.run, instrumentedRun: instrumentedRun.run,
+      equivalent, flakyTests: [...flaky].sort(), baselineRuns: repeat, warmup, utplsqlCompare: !!utCov, differingTests: differing,
       tests, perTest, objects: objectsOut, log: messages,
       ...(unrestored ? { unrestored } : {}),
     });
