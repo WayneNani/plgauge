@@ -38,7 +38,7 @@ export interface RunConfig {
   runtimeSchema?: string;
   /** utPLSQL suite paths to run, e.g. ["demo"]. */
   tests: string[];
-  /** Optional regular expressions to include / exclude objects, tested on NAME and on OWNER.NAME. */
+  /** Optional regular expressions to include / exclude objects, tested on NAME; a pattern with an escaped dot (\.) on OWNER.NAME. */
   include?: string;
   exclude?: string;
   /** "auto" enables SQL probes on 23ai and later. */
