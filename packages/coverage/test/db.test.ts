@@ -147,7 +147,7 @@ end plgauge_constructs_trg;`;
 // Several schemas (A4): needs a second schema and CREATE ANY PROCEDURE, EXECUTE ANY PROCEDURE for the
 // connected user, e.g. PLGAUGE_LIB_SCHEMA=DEMO_LIB (ci/setup-db.sh creates it as APP_LIB).
 const lib = process.env.PLGAUGE_LIB_SCHEMA;
-test('several schemas: code of another schema is measured, the runtime stays with the user', { skip: (!m || !lib) && 'PLGAUGE_COV_DB / PLGAUGE_LIB_SCHEMA not set', timeout: 300_000 }, async () => {
+test('several schemas: code of another schema is measured, the runtime stays with the user, no grant stays; uninstall', { skip: (!m || !lib) && 'PLGAUGE_COV_DB / PLGAUGE_LIB_SCHEMA not set', timeout: 300_000 }, async () => {
   const conn = await oracledb.getConnection({ user: m![1], password: m![2], connectString: m![3] });
   const L = lib!.toUpperCase();
   try {
@@ -173,7 +173,7 @@ test('several schemas: code of another schema is measured, the runtime stays wit
     end;`);
     const { runCoverage } = await import('@plgauge/coverage');
     const r = await runCoverage({
-      user: m![1], password: m![2], connectString: m![3], schema: m![1], schemas: [L], include: '^PLGAUGE_CALC$',
+      user: m![1], password: m![2], connectString: m![3], schema: m![1], schemas: [L], include: `^${L}\\.PLGAUGE_CALC$`, // OWNER.NAME
       tests: ['plgauge_multi_test'], baselineRuns: 1,
     }, () => {});
     assert.ok(r.equivalent, 'same results with instrumentation');
@@ -185,6 +185,33 @@ test('several schemas: code of another schema is measured, the runtime stays wit
     // the original code is back
     const src = await conn.execute<[string]>(`select text from all_source where owner = :o and name = 'PLGAUGE_CALC' and type = 'PACKAGE BODY' and text like '%cov$%'`, { o: L });
     assert.equal(src.rows!.length, 0);
+    // the run took back its grant on cov$
+    const U = m![1].toUpperCase();
+    const grants = `select count(*) from all_tab_privs where table_schema = '${U}' and table_name = 'COV$'`;
+    assert.equal((await conn.execute<[number]>(grants)).rows![0][0], 0, 'no grant on cov$ left');
+
+    // uninstall: refused while the journal has an entry
+    const { uninstallRuntime } = await import('@plgauge/coverage');
+    const cfg = { user: m![1], password: m![2], connectString: m![3] };
+    const said: string[] = [];
+    await conn.execute(`insert into plgauge_journal (owner, name, type, source) values ('${U}', 'PLGAUGE_NOPE', 'PROCEDURE', 'x')`);
+    await conn.commit();
+    await assert.rejects(uninstallRuntime(cfg, U, () => {}), /plgauge restore/);
+    await conn.execute(`delete from plgauge_journal where name = 'PLGAUGE_NOPE'`);
+    await conn.commit();
+    // a grant an older version left behind goes too
+    await conn.execute(`grant execute on cov$ to ${L}`);
+    await uninstallRuntime(cfg, U, (x) => said.push(x));
+    const runtime = async () => (await conn.execute(`select object_type || ' ' || object_name from user_objects
+      where object_name in ('COV$', 'COV$_LOGOFF', 'PLGAUGE_HITS', 'PLGAUGE_RUNS', 'PLGAUGE_JOURNAL', 'PLGAUGE_LOCK')`)).rows;
+    assert.deepEqual(await runtime(), [], 'runtime gone');
+    assert.equal((await conn.execute<[number]>(grants)).rows![0][0], 0, 'no grant on cov$');
+    assert.ok(said.some((x) => x.includes(`revoked from ${L}`)), said.join('\n'));
+    // a second uninstall changes nothing
+    said.length = 0;
+    await uninstallRuntime(cfg, U, (x) => said.push(x));
+    assert.match(said.join('\n'), /nothing to remove/);
+    assert.deepEqual(await runtime(), [], 'nothing created');
   } finally {
     await conn.execute(`drop package plgauge_multi_test`).catch(() => undefined);
     await conn.execute(`drop package ${L}.plgauge_calc`).catch(() => undefined);

@@ -15,7 +15,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import {
   connect, databaseInfo, dbIdent, firstLine, utInfoContext, restoreJournal, ensureJournal, journalEntries, loadObjects, lockRun, replaceSourceDetailed, restoreAll, RUN_LOCK, runScript, sha256, splitScript,
-  runTestsJunit as runTests, suiteTests, tryExecute, type SourceObject, type TestCase, type TestRun,
+  runTestsJunit as runTests, suiteTests, tryExecute, type ConnectConfig, type SourceObject, type TestCase, type TestRun,
 } from '@plgauge/core';
 import { instrument } from './instrument.js';
 import { analyze, type ObjectResult } from './analyze.js';
@@ -37,7 +37,7 @@ export interface RunConfig {
   runtimeSchema?: string;
   /** utPLSQL suite paths to run, e.g. ["demo"]. */
   tests: string[];
-  /** Optional regular expression of object names to include / exclude. */
+  /** Optional regular expressions to include / exclude objects, tested on NAME and on OWNER.NAME. */
   include?: string;
   exclude?: string;
   /** "auto" enables SQL probes on 23ai and later. */
@@ -189,6 +189,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
   process.on('SIGINT', onSig);
   process.on('SIGTERM', onSig);
   const restore: SourceObject[] = [];
+  const granted: string[] = [];
   try {
     const nls = (await conn.execute<[string]>(`select value from nls_session_parameters where parameter = 'NLS_LENGTH_SEMANTICS'`)).rows?.[0]?.[0] ?? 'BYTE';
     await conn.execute(`alter session set current_schema = ${dbIdent(rtOwner)}`);
@@ -224,6 +225,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     for (const owner of new Set(objects.map((o) => o.owner).filter((o) => o !== rtOwner))) {
       // instrumented code of other schemas calls the runtime qualified
       await conn.execute(`grant execute on ${dbIdent(rtOwner)}.cov$ to ${dbIdent(owner)}`);
+      granted.push(owner);
     }
 
     await testRun(cfg.tests, null); // warm-up: utPLSQL builds its annotation cache on the first run
@@ -387,6 +389,12 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       } else if (restore.length) {
         await restoreOwn(restore, fin).catch((e: Error) => say(`ERROR: originals not restored (${firstLine(e)}), the instrumented code is in the journal: plgauge restore`));
       }
+      // no grant left behind, but a schema whose instrumented code stays (journal) keeps its own,
+      // or that code turns invalid until plgauge restore; without the lock another run may need them
+      if (granted.length && (await confirmed())) {
+        const left = await journalEntries(fin).catch(() => undefined);
+        if (left) await revokeRuntime(fin, rtOwner, granted.filter((o) => !left.some((e) => e.owner === o)), say);
+      }
     } finally {
       if (fin !== conn) await fin.close().catch(() => {});
       await conn.close().catch(() => {});
@@ -424,6 +432,61 @@ export async function installRuntime(conn: oracledb.Connection) {
   if (nativeErr.rows?.length) await conn.execute(`alter package cov$ compile body plsql_code_type = interpreted plsql_optimize_level = 3`);
   const err = await conn.execute<[number, string]>(`select line, text from user_errors where name = 'COV$' order by sequence`);
   if (err.rows?.length) throw new Error(`Runtime cov$ does not compile: ${err.rows.map((r) => `${r[0]}: ${r[1]}`).join('; ')}`);
+}
+
+/** Takes back EXECUTE on cov$ from the schemas given; a grant that is gone already is no error. */
+export async function revokeRuntime(conn: oracledb.Connection, rtOwner: string, grantees: string[], say: (m: string) => void): Promise<void> {
+  for (const g of grantees) {
+    await tryExecute(conn, `revoke execute on ${dbIdent(rtOwner)}.cov$ from ${dbIdent(g)}`, 'ORA-01927', 'ORA-04043', 'ORA-00942')
+      .catch((e: Error) => say(`WARNING: execute on cov$ not revoked from ${g}: ${firstLine(e)}`));
+  }
+}
+
+const RUNTIME_TABLES = ['PLGAUGE_HITS', 'PLGAUGE_RUNS', 'PLGAUGE_JOURNAL'];
+
+/**
+ * plgauge uninstall: removes what runs leave in the runtime schema home (logoff trigger, the
+ * grants on cov$, cov$, the tables plgauge_hits, plgauge_runs, plgauge_journal, plgauge_lock).
+ * Refused while the journal has entries: their originals would be lost. Idempotent.
+ */
+export async function uninstallRuntime(cfg: ConnectConfig, home: string, say: (m: string) => void): Promise<void> {
+  const conn = await connect(cfg);
+  let lock: oracledb.Connection | undefined;
+  try {
+    const rows = async (sql: string) => ((await conn.execute<[string]>(sql, { o: home })).rows ?? []).map((r) => r[0]);
+    const tables = await rows(`select table_name from all_tables where owner = :o and table_name in ('PLGAUGE_HITS', 'PLGAUGE_RUNS', 'PLGAUGE_JOURNAL', 'PLGAUGE_LOCK')`);
+    const objs = await rows(`select object_type || ' ' || object_name from all_objects where owner = :o and object_name in ('COV$', 'COV$_LOGOFF') and object_type in ('PACKAGE', 'TRIGGER')`);
+    if (!tables.length && !objs.length) {
+      say(`Schema ${home}: nothing to remove`);
+      return;
+    }
+    await conn.execute(`alter session set current_schema = ${dbIdent(home)}`);
+    // a running run (either tool) holds the lock: it fails here and nothing is touched
+    lock = await connect(cfg);
+    await lock.execute(`alter session set current_schema = ${dbIdent(home)}`);
+    await lockRun(lock, RUN_LOCK);
+    if (tables.includes('PLGAUGE_JOURNAL')) {
+      const n = (await conn.execute<[number]>(`select count(*) from plgauge_journal`)).rows![0][0];
+      if (n) throw new Error(`Schema ${home}: ${n} objects in the restore journal, their originals would be lost: run plgauge restore first`);
+    }
+    if (objs.includes('TRIGGER COV$_LOGOFF')) await tryExecute(conn, `drop trigger cov$_logoff`, 'ORA-04080');
+    if (objs.includes('PACKAGE COV$')) {
+      // every grantee, also those of runs before this version, which never revoked
+      const grantees = await rows(`select distinct grantee from all_tab_privs where table_schema = :o and table_name = 'COV$'`);
+      await revokeRuntime(conn, home, grantees, say);
+      await tryExecute(conn, `drop package cov$`, 'ORA-04043');
+      if (grantees.length) say(`Execute on cov$ revoked from ${grantees.join(', ')}`);
+    }
+    for (const t of RUNTIME_TABLES.filter((x) => tables.includes(x))) await tryExecute(conn, `drop table ${t} purge`, 'ORA-00942');
+    // the lock table last, after the lock is given up; a run that started in between keeps it
+    await lock.close();
+    lock = undefined;
+    if (!(await tryExecute(conn, `drop table plgauge_lock purge`, 'ORA-00942', 'ORA-00054'))) say('  (a run started meanwhile: its table plgauge_lock stays)');
+    say(`Schema ${home}: plgauge runtime removed (${[...objs.map((o) => o.toLowerCase()), ...tables.map((t) => `table ${t.toLowerCase()}`)].join(', ')})`);
+  } finally {
+    await lock?.close().catch(() => {});
+    await conn.close().catch(() => {});
+  }
 }
 
 async function loadHits(conn: oracledb.Connection, runId: string): Promise<Hits> {

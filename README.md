@@ -136,11 +136,12 @@ Copy [`ci/templates/github-actions.yml`](ci/templates/github-actions.yml) or
 |---|---|
 | `plgauge coverage <dir>` | Install a project and measure its coverage (`--config file` for an existing schema) |
 | `plgauge mutate run <dir>` | Mutation testing (`--mode schema` by default; `--mode naive` compiles each mutant on its own) |
-| `plgauge report <coverage.json> --mutation <run.json>` | Joint HTML report |
+| `plgauge report <coverage.json> --mutation <run.json>` | Joint HTML report (a folder: overview in `index.html`, one page per object) |
 | `plgauge export <coverage.json> --format cobertura\|sonar\|lcov\|junit` | Files for CI and code-quality tools |
 | `plgauge check <file> --min-branch 70 …` | Thresholds on saved results (exit code 3 if one is missed) |
 | `plgauge merge a.json b.json --out all.json` | Merge the coverage of several runs |
 | `plgauge restore --config <file> [--list]` | Put back code that a killed run left changed |
+| `plgauge uninstall --config <file>` | Remove the runtime a run leaves in the schema: `cov$`, its grants, the `plgauge_*` tables (`--db` for a project) |
 | `plgauge mutate points <dir>` | List the mutants without a database |
 | `plgauge instrument <file.sql>` | Show the instrumented source without a database |
 
@@ -161,7 +162,7 @@ The parser is also checked offline on a corpus of about 900 PL/SQL bodies from t
 
 ## Status
 
-plgauge is young (version 0.1). There are 153 automated tests, 25 of them against a real Oracle database,
+plgauge is young (version 0.1). There are 157 automated tests, 25 of them against a real Oracle database,
 including full mutation runs in both modes. Known gaps:
 
 - **Distribution:** plgauge is not on npm; run it from a checkout.

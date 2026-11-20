@@ -15,6 +15,7 @@
  *                                                       CI thresholds; exit code 3 if one is missed
  *   plgauge corpus <dir ...> [--db coverage-config.json]           robustness check on a corpus of PL/SQL files
  *   plgauge restore --config coverage-config.json [--list]         put back code left changed by a killed run (journal)
+ *   plgauge uninstall --config coverage-config.json      remove cov$, its grants and the plgauge_* tables (--db: the user's schema)
  *   plgauge mutate run [dir] [--mode schema|naive] …     mutation testing of a project with plgauge.json
  *        --diff origin/main                             only mutants on lines changed since the merge base (also coverage, check)
  *   plgauge mutate points|schema [dir]                   list mutants / print the schema rewrite (offline)
@@ -28,11 +29,11 @@ import {
   type ConnectConfig,
 } from '@plgauge/core';
 import {
-  checkQuotas, instrument, mergeExports, newIds, quotas, restrictToChanged, runCoverage, runCorpus, sourceMap, sqlFiles, toCobertura,
+  checkQuotas, instrument, mergeExports, newIds, quotas, restrictToChanged, runCoverage, runCorpus, sourceMap, sqlFiles, toCobertura, uninstallRuntime,
   toCoverageExport, toJunit,
   toLcov, toSonar, type CoverageExport, type QuotaKey, type RunConfig, type RunReport,
 } from '@plgauge/coverage';
-import { renderHtml } from '@plgauge/report';
+import { summaryLines, writeReport } from '@plgauge/report';
 import {
   buildSchema, compare, CoverageIndex, crossCheck, crossCheckText, htmlReport, jsonReport, mutationTestingReport, parseDbUrl,
   loadConfig as loadProject, mutateFiles, projectCoverageConfig, projectMutants, runMutation, switchable, textReport,
@@ -123,8 +124,9 @@ async function main() {
       mkdirSync(out, { recursive: true });
       writeFileSync(join(out, 'coverage.json'), JSON.stringify(report, null, 1));
       writeFileSync(join(out, 'plgauge-coverage.json'), JSON.stringify(exp, null, 1));
-      writeFileSync(join(out, 'index.html'), renderHtml(report));
-      console.error(`Report: ${join(out, 'index.html')}`);
+      const index = writeReport(out, report);
+      for (const l of summaryLines(report)) console.error(l);
+      console.error(`Report: ${index}`);
       if (!report.equivalent) {
         console.error('Test results differ with instrumentation');
         process.exitCode = 4;
@@ -151,8 +153,9 @@ async function main() {
       const mutation = opt('mutation');
       const report = JSON.parse(readFileSync(file, 'utf8')) as RunReport;
       mkdirSync(out, { recursive: true });
-      writeFileSync(join(out, 'index.html'), renderHtml(report, mutation ? { mutation: JSON.parse(readFileSync(mutation, 'utf8')) } : {}));
-      console.error(`Report: ${join(out, 'index.html')}`);
+      const index = writeReport(out, report, mutation ? { mutation: JSON.parse(readFileSync(mutation, 'utf8')) } : {});
+      for (const l of summaryLines(report)) console.error(l);
+      console.error(`Report: ${index}`);
       break;
     }
     case 'export': {
@@ -409,8 +412,30 @@ async function main() {
       }
       break;
     }
+    case 'uninstall': {
+      const configFile = opt('config');
+      const dbs = (opt('db') ?? process.env.PLGAUGE_DB ?? '').split(',').map((u) => u.trim()).filter(Boolean);
+      const fromUrls = !configFile && dbs.length > 0;
+      const cfgs: (ConnectConfig & Partial<RunConfig>)[] = fromUrls ? dbs.map((u) => parseDbUrl(u)) : [loadConfig(configFile)];
+      for (const cfg of cfgs) {
+        try {
+          // as restore: a coverage run's runtime schema; for a database URL the user's own schema
+          // (project runs) and the session's CURRENT_SCHEMA (journal and lock of mutation runs)
+          const homes = [(cfg.schemas?.length ? cfg.runtimeSchema ?? cfg.user : cfg.schema ?? cfg.user).toUpperCase()];
+          if (fromUrls) {
+            const c = await connect(cfg);
+            homes.push(await currentSchema(c).finally(() => c.close()));
+          }
+          for (const home of new Set(homes)) await uninstallRuntime(cfg, home, (m) => console.error(m));
+        } catch (e) {
+          console.error(`  ✗ ${firstLine(e)}`);
+          process.exitCode = 1;
+        }
+      }
+      break;
+    }
     default:
-      console.error('Usage: plgauge coverage|mutate|report|export|merge|check|crosscheck|instrument|deploy|corpus|restore …  (see README.md)');
+      console.error('Usage: plgauge coverage|mutate|report|export|merge|check|crosscheck|instrument|deploy|corpus|restore|uninstall …  (see README.md)');
       process.exitCode = 2;
   }
 }

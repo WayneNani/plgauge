@@ -65,18 +65,26 @@ All commands are subcommands of `bin/plgauge`. `run` is the old name of `coverag
 | `coverage --config coverage-config.json [--out dir]` | Full run: baseline, utPLSQL coverage, instrument, test run, restore, report |
 | `coverage <project> --db oracle://…` | The same for a project with `plgauge.json`: exactly its units and its tests |
 | `instrument file.sql [--no-sql]` | Show offline what instrumented code looks like |
-| `report coverage.json [--mutation run.json] [--out dir]` | Re-render the report; with mutation results, the combined report |
+| `report coverage.json [--mutation run.json] [--out dir]` | Re-render the report folder; with mutation results, the combined report |
 | `export coverage.json --format json\|cobertura\|sonar\|lcov\|junit [--src dir]` | Exchange format or CI formats; `--src` maps objects to source files |
 | `merge a.json b.json … --out merged.json` | Merge runs (e.g. unit and integration tests) |
 | `check file --min-stmt N --min-branch N --min-cond N --min-mcdc N` | CI thresholds; exit code 3 if one is missed |
 | `corpus dir… [--db coverage-config.json]` | Parser robustness check on a corpus, optionally with a compile check |
 | `deploy --config coverage-config.json files…` | Run SQL*Plus-style scripts (used for the demo) |
 | `restore --config coverage-config.json [--list]` | Put back code that an aborted run left changed |
+| `uninstall --config coverage-config.json` | Remove the runtime from the schema, see [Removing the runtime](#removing-the-runtime) |
 
 Notes on `coverage`:
 
-- **Output:** the report directory (default `plgauge-report`) receives `index.html`, `coverage.json` (full run
-  report) and `plgauge-coverage.json` (exchange format).
+- **Output:** the report directory (default `plgauge-report`) receives:
+  - `index.html`: the overview with the totals, one row per schema when several are measured (objects, objects
+    without any hit, statements, branches, conditions, MC/DC and loops), and the object list;
+  - `objects/<owner>.<name>.<type>.html`: one page per object with its source (lower case; characters other
+    than letters, digits, `_`, `$`, `.` and `-` become `_`);
+  - `report.css` and `report.js`, shared by all pages. The folder is static and opens from `file://`;
+  - `coverage.json` (full run report) and `plgauge-coverage.json` (exchange format).
+
+  At the end the run prints the totals, and one line per schema when there are several.
 - **Thresholds:** `--min-stmt`, `--min-branch`, `--min-cond` and `--min-mcdc` also work directly on `coverage`.
 - **Diff mode:** `--diff origin/main` (on `coverage` and `check`) applies the thresholds only to lines changed since
   the merge base. It needs the source files: a project, or `--src dir`.
@@ -95,7 +103,7 @@ Example: [`examples/order_pricing/coverage-config.json`](../../examples/order_pr
 | `user`, `password`, `connectString` | Database connection. `PLGAUGE_PASSWORD` overrides `password` |
 | `schema` | Schema whose code is measured |
 | `tests` | utPLSQL paths to run, e.g. `["demo"]` |
-| `include`, `exclude` | Optional regular expressions on object names |
+| `include`, `exclude` | Optional regular expressions (case-insensitive), tested on `NAME` and on `OWNER.NAME`: `^PRICING$` picks an object by name, `^CORE\.` all objects of schema `CORE` (in JSON `"^CORE\\."`), `^CORE\.PRICING$` one object. An object is measured when `include` matches either form and `exclude` matches neither |
 | `sqlProbes` | Instrument SQL as well; `"auto"` = from 23ai on |
 | `perTest` | Record which test reaches which probe (default `true`) |
 | `baselineRuns` | Test runs without coverage before measuring (default 2) |
@@ -212,7 +220,9 @@ A test whose result changes between these runs is flaky:
 With `"schemas": ["APP_CORE", "APP_UTIL"]`, one run measures the objects of several schemas.
 
 - The runtime package `cov$` and the hit table stay in the schema of the connected user (or `runtimeSchema`).
-- Instrumented code in other schemas calls it qualified (`user.cov$`); the run grants `EXECUTE` on `cov$` to those schemas.
+- Instrumented code in other schemas calls it qualified (`user.cov$`); the run grants `EXECUTE` on `cov$` to those schemas
+  and revokes it at the end. A schema whose instrumented code could not be restored keeps its grant until
+  `plgauge restore`, so that code stays valid.
 - Code is compiled in the object's own schema.
 - The tests (`tests`) run with their owner's privileges, as usual.
 - Without `schemas`, runtime and objects live in `schema`.
@@ -224,6 +234,18 @@ Minimum privileges of the connected user:
 | `CREATE ANY PROCEDURE` (`CREATE ANY TYPE`, `CREATE ANY TRIGGER` for type bodies and triggers) | Compiling instrumented code and the original in other schemas |
 | `EXECUTE ANY PROCEDURE` or `EXECUTE` on the objects | Seeing the source in `ALL_SOURCE` and running the tests |
 | Own: `CREATE PROCEDURE`, `CREATE TABLE` | `cov$`, hit table, restore journal |
+
+## Removing the runtime
+
+A run leaves its runtime in the runtime schema for the next run: the package `cov$` and the tables
+`plgauge_hits`, `plgauge_runs`, `plgauge_journal` and `plgauge_lock` (the last two are shared with mutation runs).
+`plgauge uninstall --config coverage-config.json` removes them, together with the logoff trigger of an aborted run
+and every `EXECUTE` grant on `cov$`. With `--db` (or `PLGAUGE_DB`) instead of a config, it works on the user's own
+schema and the session's `CURRENT_SCHEMA`.
+
+- It refuses while the restore journal has entries: run `plgauge restore` first.
+- It takes the run lock, so it fails while a run is in progress.
+- A second `uninstall` finds nothing and changes nothing.
 
 ## Robustness: the corpus
 

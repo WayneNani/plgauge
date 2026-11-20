@@ -1,9 +1,13 @@
 /**
- * Self-contained HTML report (no external scripts; fonts from Google Fonts with fallbacks).
- * With the results of a mutation run on the same code it becomes the joint report: per
- * line the mutants and their verdicts beside the coverage, and as a finding every
- * surviving mutant on an executed line (the tests run the code but do not check it).
+ * Static HTML report folder (no server, opens from file://; fonts from Google Fonts with
+ * fallbacks): index.html is the overview, every object has a page of its own under objects/
+ * (one page with the source of hundreds of objects grew to 40 MB), report.css and report.js
+ * are shared. With the results of a mutation run on the same code it becomes the joint
+ * report: per line the mutants and their verdicts beside the coverage, and as a finding
+ * every surviving mutant on an executed line (the tests run the code but do not check it).
  */
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { tokenize } from '@plgauge/core';
 import type { CondResult, Metric, ObjectResult } from '@plgauge/coverage';
 import type { RunReport } from '@plgauge/coverage';
@@ -32,149 +36,68 @@ const METRICS: { key: MetricKey; label: string; help: string }[] = [
   { key: 'loop', label: 'Loops', help: 'Loops with 0, exactly 1 and several iterations (0 does not apply to a basic LOOP).' },
 ];
 
-function sum(objs: ObjectResult[], k: MetricKey): Metric {
-  return objs.reduce((a, o) => ({ covered: a.covered + o.metrics[k].covered, total: a.total + o.metrics[k].total }), { covered: 0, total: 0 });
-}
-
-function tone(v: number | null): string {
-  if (v === null) return 'none';
-  return v >= 90 ? 'ok' : v >= 70 ? 'warn' : 'bad';
-}
-
-function bar(m: Metric, cls = ''): string {
-  const v = pctNum(m);
-  return `<div class="bar ${cls} t-${tone(v)}" role="img" aria-label="${fmtPct(v)}"><span style="width:${v ?? 0}%"></span></div>`;
-}
-
-/** The parts of a mutation result (plgauge mutate run --json) the joint report reads. */
-export interface MutationResultLite {
-  unit: string;
-  line: number;
-  /** File line of the unit keyword; ALL_SOURCE line = line - unitLine + 1. */
-  unitLine?: number;
-  op: string;
-  original: string;
-  mutated: string;
-  status: string;
-  killedBy?: string;
-  detail?: string;
-}
-
-const MUT_HELP = 'Share of deliberately injected faults that a test notices. Shows whether executed code is also checked.';
-const DETECTED = new Set(['KILLED', 'TIMEOUT', 'MEMORY']);
-const VALID = new Set(['KILLED', 'TIMEOUT', 'MEMORY', 'SURVIVED', 'NOT_COVERED']);
-const mutScore = (rs: MutationResultLite[]): Metric => ({
-  covered: rs.filter((x) => DETECTED.has(x.status)).length,
-  total: rs.filter((x) => VALID.has(x.status)).length,
-});
-const STATUS_TEXT: Record<string, string> = {
-  KILLED: 'killed', TIMEOUT: 'timeout', MEMORY: 'memory limit', SURVIVED: 'survived', NOT_COVERED: 'not reached',
-  COMPILE_ERROR: 'does not compile', ERROR: 'error',
-};
-
-/** Mutation results per object key ("PACKAGE BODY NAME") and ALL_SOURCE line. */
-function mutationIndex(results: MutationResultLite[]): Map<string, Map<number, MutationResultLite[]>> {
-  const out = new Map<string, Map<number, MutationResultLite[]>>();
-  for (const m of results) {
-    const u = /^(PACKAGE BODY|TYPE BODY|PROCEDURE|FUNCTION|TRIGGER) (.+)$/.exec(m.unit);
-    if (!u) continue;
-    let name = u[2].slice(u[2].lastIndexOf('.') + 1);
-    name = name.startsWith('"') ? name.replace(/"/g, '') : name.toUpperCase();
-    const key = `${u[1]} ${name}`;
-    const line = m.line - (m.unitLine ?? 1) + 1;
-    let byLine = out.get(key);
-    if (!byLine) out.set(key, (byLine = new Map()));
-    byLine.set(line, [...(byLine.get(line) ?? []), m]);
-  }
-  return out;
-}
-
-export function renderHtml(r: RunReport, opts: { mutation?: { results: MutationResultLite[] } } = {}): string {
-  const objs = r.objects;
-  const muts = opts.mutation ? mutationIndex(opts.mutation.results) : undefined;
-  const mutOf = (o: ObjectResult) => muts?.get(`${o.type} ${o.name}`);
-  const mutAll = muts ? objs.flatMap((o) => [...(mutOf(o)?.values() ?? [])].flat()) : [];
-  const ut = objs.reduce((a, o) => ({ covered: a.covered + (o.utplsql?.covered ?? 0), total: a.total + (o.utplsql?.total ?? 0) }), { covered: 0, total: 0 });
-  const totals = Object.fromEntries(METRICS.map((m) => [m.key, sum(objs, m.key)])) as Record<MetricKey, Metric>;
-  const tips: string[] = [];
-  const tip = (html: string) => `t${tips.push(html) - 1}`;
-
-  // ---------------------------------------------------------------- hero
-  const utPct = pctNum(ut);
-  const brPct = pctNum(totals.branch);
-  const mcPct = pctNum(totals.mcdc);
-  const headline = utPct !== null && brPct !== null
-    ? `utPLSQL reports <em>${fmtPct(utPct)}</em> line coverage. <em class="t-${tone(brPct)}">${fmtPct(brPct)}</em> of the branches${mcPct !== null ? ` and <em class="t-${tone(mcPct)}">${fmtPct(mcPct)}</em> MC/DC` : ''} are tested.`
-    : 'Coverage measured by source code instrumentation';
-
-  const compareRows = [
-    `<div class="cmp-row ref">
-       <div class="cmp-label"><strong>Lines</strong><span>utPLSQL today (DBMS_PROFILER)</span></div>
-       ${bar(ut, 'ref')}
-       <div class="cmp-val"><b>${fmtPct(utPct)}</b><small>${ut.covered}/${ut.total}</small></div>
-     </div>`,
-    ...[...METRICS.map((m) => ({ ...m, v: totals[m.key] })), ...(muts ? [{ label: 'Mutation Score', help: MUT_HELP, v: mutScore(mutAll) }] : [])].map(({ label, help, v }) => `<div class="cmp-row">
-        <div class="cmp-label"><strong>${label}</strong><span>${esc(help)}</span></div>
-        ${bar(v)}
-        <div class="cmp-val"><b>${fmtPct(pctNum(v))}</b><small>${v.covered}/${v.total}</small></div>
-      </div>`),
-  ].join('');
-
-  // ---------------------------------------------------------------- run facts
-  const nTests = r.baseline.tests.length;
-  const passed = r.instrumentedRun.tests.filter((t) => t.status === 'passed').length;
-  const slowest = [...r.baseline.tests].sort((a, b) => b.time - a.time)[0];
-  const slowInstr = slowest && r.instrumentedRun.tests.find((t) => t.suite === slowest.suite && t.name === slowest.name);
-  const slowUt = slowest && r.utplsqlRun?.tests.find((t) => t.suite === slowest.suite && t.name === slowest.name);
-  const factor = slowest && slowInstr && slowest.time > 0 ? slowInstr.time / slowest.time : null;
-  const nObj = objs.filter((o) => !o.instrumentError).length;
-  const facts = `
-    <div class="facts">
-      <div class="fact ${r.equivalent ? 'f-ok' : 'f-bad'}">
-        <span class="fact-k">Behaviour unchanged</span>
-        <span class="fact-v">${r.equivalent ? `${nTests}/${nTests} tests identical` : 'Results differ'}</span>
-        <span class="fact-d">${r.equivalent ? `Every test gives the same result with and without instrumentation (${passed} passed).` : `Differing: ${(r.differingTests ?? []).map(esc).join('; ') || 'see log'}.`}${r.flakyTests?.length ? ` ${r.flakyTests.length} flaky test${r.flakyTests.length === 1 ? '' : 's'} excluded (result changes even without instrumentation): ${r.flakyTests.map((t) => esc(t.split('::').pop()!)).join(', ')}.` : ''}</span>
-      </div>
-      <div class="fact">
-        <span class="fact-k">Instrumentation (TypeScript)</span>
-        <span class="fact-v">${fmtMs(r.timings.instrumentMs)}</span>
-        <span class="fact-d">Parsing and placing probes for ${nObj} object${nObj === 1 ? '' : 's'}. Compiling in the database: ${fmtMs(r.timings.compileMs)}.</span>
-      </div>
-      ${slowest && slowInstr ? `<div class="fact">
-        <span class="fact-k">Runtime overhead</span>
-        <span class="fact-v">${factor !== null ? `× ${factor.toLocaleString('en-US', { maximumFractionDigits: 1 })}` : '–'}</span>
-        <span class="fact-d">Slowest test “${esc(slowest.name)}”: ${fmtMs(slowest.time * 1000)} without coverage${slowUt ? `, ${fmtMs(slowUt.time * 1000)} with utPLSQL coverage` : ''}, ${fmtMs(slowInstr.time * 1000)} with plgauge.</span>
-      </div>` : ''}
-      <div class="fact">
-        <span class="fact-k">Test runs total</span>
-        <span class="fact-v">${fmtMs(r.timings.instrumentedMs)}</span>
-        <span class="fact-d">Without coverage ${fmtMs(r.timings.baselineMs)}, with utPLSQL coverage ${fmtMs(r.timings.utplsqlCoverageMs)}.</span>
-      </div>
-    </div>`;
-
-  // ---------------------------------------------------------------- object table
-  const tableRows = objs.map((o, idx) => {
-    const cell = (v: Metric, cls = 'mini') => `<td><div class="cell">${bar(v, cls)}<span class="num">${fmtPct(pctNum(v))}</span></div></td>`;
-    return `<tr>
-      <th scope="row"><a href="#o${idx}">${esc(o.name.toLowerCase())}</a><span class="otype">${esc(o.type.toLowerCase())}</span></th>
-      ${cell(o.utplsql ?? { covered: 0, total: 0 }, 'mini ref')}
-      ${o.instrumentError ? `<td colspan="${METRICS.length}" class="err">${esc(o.instrumentError)}</td>` : METRICS.map((m) => cell(o.metrics[m.key])).join('')}
-      ${muts ? cell(mutScore([...(mutOf(o)?.values() ?? [])].flat())) : ''}
-      <td class="num find">${o.findings.length + (muts ? unchecked(o, mutOf(o)).length : 0)}</td>
-    </tr>`;
-  }).join('');
-
-  // ---------------------------------------------------------------- objects
-  const testNames = (r.tests ?? []).map((t) => (t.setup ? t.description : `${t.description} <span style="opacity:.7">(${t.path.split('.').slice(1).join('.')})</span>`));
-  const sections = objs.map((o, idx) => renderObject(o, idx, tip, testNames, muts ? mutOf(o) ?? new Map() : undefined)).join('');
-
-  return `<title>plgauge ${esc(r.schema)}</title>
+const pageHead = (title: string, css: string) => `<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(title)}</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wdth,wght@75..100,400..700&family=JetBrains+Mono:wght@400;600&display=swap">
-<style>
-/* Layout: report spine; summary first (claim → evidence → objects), code views below with findings beside the code. */
+<link rel="stylesheet" href="${css}">
+`;
+
+const LEGEND = `<div class="legend" aria-label="Legend">
+    <span><i class="sw" style="background:var(--ok)"></i>complete</span>
+    <span><i class="sw" style="background:var(--warn)"></i>partial (branch or condition missing)</span>
+    <span><i class="sw" style="background:var(--bad)"></i>never executed</span>
+    <span><i class="sw" style="background:var(--nf)"></i>NOT_FEASIBLE</span>
+    <span><span class="tf"><b class="on T">T</b><b class="on F">F</b><b class="on N">N</b></span>sub-condition was TRUE / FALSE / NULL</span>
+    <span><span class="ut"><i class="y"></i></span> line counted by utPLSQL</span>
+  </div>`;
+
+/**
+ * File names of the object pages: owner.name.type, lower case, other characters than
+ * [a-z0-9_$.-] (quoted identifiers) as "_"; names that still collide (case-insensitive file
+ * systems) get a number.
+ */
+export function pageNames(objs: Pick<ObjectResult, 'owner' | 'name' | 'type'>[]): string[] {
+  const used = new Set<string>();
+  return objs.map((o) => {
+    const stem = `${o.owner}.${o.name}.${o.type}`.toLowerCase().replace(/[^a-z0-9_$.-]/g, '_').slice(0, 200);
+    let f = `${stem}.html`;
+    for (let k = 2; used.has(f); k++) f = `${stem}-${k}.html`;
+    used.add(f);
+    return f;
+  });
+}
+
+/** Objects grouped by schema, in report order. */
+function bySchema<T extends Pick<ObjectResult, 'owner'>>(objs: T[]): [string, T[]][] {
+  const m = new Map<string, T[]>();
+  for (const o of objs) m.set(o.owner, [...(m.get(o.owner) ?? []), o]);
+  return [...m];
+}
+
+/** Instrumented, but no statement ran. */
+const unhit = (o: ObjectResult) => !o.instrumentError && o.metrics.stmt.covered === 0;
+
+/** Totals for the terminal, plus a line per schema when there are several. */
+export function summaryLines(r: RunReport): string[] {
+  const rates = (os: ObjectResult[]) => METRICS.map((m) => {
+    const v = sum(os, m.key);
+    return `${m.label} ${fmtPct(pctNum(v))} (${v.covered}/${v.total})`;
+  }).join(' · ');
+  const schemas = bySchema(r.objects);
+  const out = [`${r.objects.length} objects · ${rates(r.objects)}`];
+  if (schemas.length < 2) return out;
+  const w = Math.max(...schemas.map(([s]) => s.length));
+  for (const [s, os] of schemas) out.push(`  ${s.padEnd(w)}  ${os.length} objects, ${os.filter(unhit).length} without hits · ${rates(os)}`);
+  return out;
+}
+
+const CSS = `/* Layout: report spine; summary first (claim → evidence → objects), code views below with findings beside the code. */
 :root {
   --bg: #f3f5f4; --surface: #ffffff; --sunk: #eaeeec; --ink: #17201e; --muted: #5a6866; --line: #d9e0de;
   --accent: #0d6b74; --accent-ink: #ffffff;
@@ -327,56 +250,11 @@ aside.findings { background: var(--surface); border: 1px solid var(--line); bord
 #tip .row { display: flex; justify-content: space-between; gap: 16px; font-variant-numeric: tabular-nums; }
 #tip hr { border: 0; border-top: 1px solid currentColor; opacity: 0.25; margin: 6px 0; }
 @media (prefers-reduced-motion: no-preference) { .bar span { transition: width 0.6s ease; } }
-</style>
+.num small { color: var(--muted); }
+.brand a { color: inherit; text-decoration: none; }
+`;
 
-<div class="wrap">
-  <div class="top">
-    <div class="brand">pl<span>gauge</span></div>
-    <div class="meta">
-      <span>Schema <b>${esc(r.schema)}</b></span>
-      <span>${esc(r.database.replace(/ - Develop.*$/, ''))}</span>
-      <span>SQL probes ${r.sqlProbes ? 'on' : 'off'}</span>
-      <span>${esc(new Date(r.generated).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC' }))} UTC</span>
-    </div>
-  </div>
-
-  <section class="hero" aria-labelledby="h-hero">
-    <div class="eyebrow">Measured with the same ${nTests} utPLSQL tests</div>
-    <h1 id="h-hero">${headline}</h1>
-    <div class="compare">${compareRows}</div>
-    ${facts}
-  </section>
-
-  <section aria-labelledby="h-obj">
-    <header><div class="eyebrow">Objects</div><h2 id="h-obj">Coverage per program unit</h2></header>
-    <div class="tbl"><table>
-      <thead><tr><th>Object</th><th>Lines (utPLSQL)</th>${METRICS.map((m) => `<th>${m.label}</th>`).join('')}${muts ? '<th>Mutation Score</th>' : ''}<th class="find">Gaps</th></tr></thead>
-      <tbody>${tableRows}</tbody>
-    </table></div>
-  </section>
-
-  <div class="legend" aria-label="Legend">
-    <span><i class="sw" style="background:var(--ok)"></i>complete</span>
-    <span><i class="sw" style="background:var(--warn)"></i>partial (branch or condition missing)</span>
-    <span><i class="sw" style="background:var(--bad)"></i>never executed</span>
-    <span><i class="sw" style="background:var(--nf)"></i>NOT_FEASIBLE</span>
-    <span><span class="tf"><b class="on T">T</b><b class="on F">F</b><b class="on N">N</b></span>sub-condition was TRUE / FALSE / NULL</span>
-    <span><span class="ut"><i class="y"></i></span> line counted by utPLSQL</span>
-  </div>
-
-  ${sections}
-
-  <section class="method" aria-label="Method">
-    <div><h4>How it is measured</h4><p>plgauge reads the compiled source, places probes on every statement, decision and sub-condition and recompiles the code. The probes add no lines, so error messages keep their line numbers. Then the utPLSQL tests run, and the original code is restored.</p></div>
-    <div><h4>NULL and short-circuit</h4><p>Every sub-condition is counted as TRUE, FALSE or NULL. The probes return the value unchanged, so short-circuit evaluation and NULL semantics are preserved. MC/DC treats sub-conditions that were not evaluated as wildcards (unique cause with short-circuit).</p></div>
-    <div><h4>Limits</h4><p>Conditions in WHERE, ON and HAVING clauses are deliberately not instrumented, because that would change the execution plan. Dynamic SQL and code obfuscated with wrap are not measured. Hits from sessions of other users, and from parallel query slaves that run fewer than 1000 statements, are lost.</p></div>
-  </section>
-</div>
-
-<div id="tip" hidden></div>
-<div hidden>${tips.map((t, k) => `<div id="t${k}">${t}</div>`).join('')}</div>
-<script>
-(() => {
+const JS = `(() => {
   const tipEl = document.getElementById('tip');
   let current = null;
   const show = (el) => {
@@ -400,7 +278,228 @@ aside.findings { background: var(--surface); border: 1px solid var(--line); bord
   document.addEventListener('click', (e) => { const el = e.target.closest('[data-tip]'); if (el && el !== current) show(el); else if (!el) hide(); });
   window.addEventListener('scroll', hide, { passive: true });
 })();
-</script>`;
+`;
+
+function sum(objs: ObjectResult[], k: MetricKey): Metric {
+  return objs.reduce((a, o) => ({ covered: a.covered + o.metrics[k].covered, total: a.total + o.metrics[k].total }), { covered: 0, total: 0 });
+}
+
+function tone(v: number | null): string {
+  if (v === null) return 'none';
+  return v >= 90 ? 'ok' : v >= 70 ? 'warn' : 'bad';
+}
+
+function bar(m: Metric, cls = ''): string {
+  const v = pctNum(m);
+  return `<div class="bar ${cls} t-${tone(v)}" role="img" aria-label="${fmtPct(v)}"><span style="width:${v ?? 0}%"></span></div>`;
+}
+
+/** The parts of a mutation result (plgauge mutate run --json) the joint report reads. */
+export interface MutationResultLite {
+  unit: string;
+  line: number;
+  /** File line of the unit keyword; ALL_SOURCE line = line - unitLine + 1. */
+  unitLine?: number;
+  op: string;
+  original: string;
+  mutated: string;
+  status: string;
+  killedBy?: string;
+  detail?: string;
+}
+
+const MUT_HELP = 'Share of deliberately injected faults that a test notices. Shows whether executed code is also checked.';
+const DETECTED = new Set(['KILLED', 'TIMEOUT', 'MEMORY']);
+const VALID = new Set(['KILLED', 'TIMEOUT', 'MEMORY', 'SURVIVED', 'NOT_COVERED']);
+const mutScore = (rs: MutationResultLite[]): Metric => ({
+  covered: rs.filter((x) => DETECTED.has(x.status)).length,
+  total: rs.filter((x) => VALID.has(x.status)).length,
+});
+const STATUS_TEXT: Record<string, string> = {
+  KILLED: 'killed', TIMEOUT: 'timeout', MEMORY: 'memory limit', SURVIVED: 'survived', NOT_COVERED: 'not reached',
+  COMPILE_ERROR: 'does not compile', ERROR: 'error',
+};
+
+/** Mutation results per object key ("PACKAGE BODY NAME") and ALL_SOURCE line. */
+function mutationIndex(results: MutationResultLite[]): Map<string, Map<number, MutationResultLite[]>> {
+  const out = new Map<string, Map<number, MutationResultLite[]>>();
+  for (const m of results) {
+    const u = /^(PACKAGE BODY|TYPE BODY|PROCEDURE|FUNCTION|TRIGGER) (.+)$/.exec(m.unit);
+    if (!u) continue;
+    let name = u[2].slice(u[2].lastIndexOf('.') + 1);
+    name = name.startsWith('"') ? name.replace(/"/g, '') : name.toUpperCase();
+    const key = `${u[1]} ${name}`;
+    const line = m.line - (m.unitLine ?? 1) + 1;
+    let byLine = out.get(key);
+    if (!byLine) out.set(key, (byLine = new Map()));
+    byLine.set(line, [...(byLine.get(line) ?? []), m]);
+  }
+  return out;
+}
+
+/**
+ * The report as files, by path relative to the report folder: index.html (totals, a row per
+ * schema when there are several, the object list), objects/<owner>.<name>.<type>.html per
+ * object, and the shared report.css and report.js.
+ */
+export function renderReport(r: RunReport, opts: { mutation?: { results: MutationResultLite[] } } = {}): Record<string, string> {
+  const objs = r.objects;
+  const muts = opts.mutation ? mutationIndex(opts.mutation.results) : undefined;
+  const mutOf = (o: ObjectResult) => muts?.get(`${o.type} ${o.name}`);
+  const mutAll = muts ? objs.flatMap((o) => [...(mutOf(o)?.values() ?? [])].flat()) : [];
+  const ut = objs.reduce((a, o) => ({ covered: a.covered + (o.utplsql?.covered ?? 0), total: a.total + (o.utplsql?.total ?? 0) }), { covered: 0, total: 0 });
+  const totals = Object.fromEntries(METRICS.map((m) => [m.key, sum(objs, m.key)])) as Record<MetricKey, Metric>;
+  const pages = pageNames(objs);
+  const multi = new Set(objs.map((o) => o.owner)).size > 1;
+
+  // ---------------------------------------------------------------- hero
+  const utPct = pctNum(ut);
+  const brPct = pctNum(totals.branch);
+  const mcPct = pctNum(totals.mcdc);
+  const headline = utPct !== null && brPct !== null
+    ? `utPLSQL reports <em>${fmtPct(utPct)}</em> line coverage. <em class="t-${tone(brPct)}">${fmtPct(brPct)}</em> of the branches${mcPct !== null ? ` and <em class="t-${tone(mcPct)}">${fmtPct(mcPct)}</em> MC/DC` : ''} are tested.`
+    : 'Coverage measured by source code instrumentation';
+
+  const compareRows = [
+    `<div class="cmp-row ref">
+       <div class="cmp-label"><strong>Lines</strong><span>utPLSQL today (DBMS_PROFILER)</span></div>
+       ${bar(ut, 'ref')}
+       <div class="cmp-val"><b>${fmtPct(utPct)}</b><small>${ut.covered}/${ut.total}</small></div>
+     </div>`,
+    ...[...METRICS.map((m) => ({ ...m, v: totals[m.key] })), ...(muts ? [{ label: 'Mutation Score', help: MUT_HELP, v: mutScore(mutAll) }] : [])].map(({ label, help, v }) => `<div class="cmp-row">
+        <div class="cmp-label"><strong>${label}</strong><span>${esc(help)}</span></div>
+        ${bar(v)}
+        <div class="cmp-val"><b>${fmtPct(pctNum(v))}</b><small>${v.covered}/${v.total}</small></div>
+      </div>`),
+  ].join('');
+
+  // ---------------------------------------------------------------- run facts
+  const nTests = r.baseline.tests.length;
+  const passed = r.instrumentedRun.tests.filter((t) => t.status === 'passed').length;
+  const slowest = [...r.baseline.tests].sort((a, b) => b.time - a.time)[0];
+  const slowInstr = slowest && r.instrumentedRun.tests.find((t) => t.suite === slowest.suite && t.name === slowest.name);
+  const slowUt = slowest && r.utplsqlRun?.tests.find((t) => t.suite === slowest.suite && t.name === slowest.name);
+  const factor = slowest && slowInstr && slowest.time > 0 ? slowInstr.time / slowest.time : null;
+  const nObj = objs.filter((o) => !o.instrumentError).length;
+  const facts = `
+    <div class="facts">
+      <div class="fact ${r.equivalent ? 'f-ok' : 'f-bad'}">
+        <span class="fact-k">Behaviour unchanged</span>
+        <span class="fact-v">${r.equivalent ? `${nTests}/${nTests} tests identical` : 'Results differ'}</span>
+        <span class="fact-d">${r.equivalent ? `Every test gives the same result with and without instrumentation (${passed} passed).` : `Differing: ${(r.differingTests ?? []).map(esc).join('; ') || 'see log'}.`}${r.flakyTests?.length ? ` ${r.flakyTests.length} flaky test${r.flakyTests.length === 1 ? '' : 's'} excluded (result changes even without instrumentation): ${r.flakyTests.map((t) => esc(t.split('::').pop()!)).join(', ')}.` : ''}</span>
+      </div>
+      <div class="fact">
+        <span class="fact-k">Instrumentation (TypeScript)</span>
+        <span class="fact-v">${fmtMs(r.timings.instrumentMs)}</span>
+        <span class="fact-d">Parsing and placing probes for ${nObj} object${nObj === 1 ? '' : 's'}. Compiling in the database: ${fmtMs(r.timings.compileMs)}.</span>
+      </div>
+      ${slowest && slowInstr ? `<div class="fact">
+        <span class="fact-k">Runtime overhead</span>
+        <span class="fact-v">${factor !== null ? `× ${factor.toLocaleString('en-US', { maximumFractionDigits: 1 })}` : '–'}</span>
+        <span class="fact-d">Slowest test “${esc(slowest.name)}”: ${fmtMs(slowest.time * 1000)} without coverage${slowUt ? `, ${fmtMs(slowUt.time * 1000)} with utPLSQL coverage` : ''}, ${fmtMs(slowInstr.time * 1000)} with plgauge.</span>
+      </div>` : ''}
+      <div class="fact">
+        <span class="fact-k">Test runs total</span>
+        <span class="fact-v">${fmtMs(r.timings.instrumentedMs)}</span>
+        <span class="fact-d">Without coverage ${fmtMs(r.timings.baselineMs)}, with utPLSQL coverage ${fmtMs(r.timings.utplsqlCoverageMs)}.</span>
+      </div>
+    </div>`;
+
+  // ---------------------------------------------------------------- object table
+  const cell = (v: Metric, cls = 'mini') => `<td><div class="cell">${bar(v, cls)}<span class="num">${fmtPct(pctNum(v))}</span></div></td>`;
+  const tableRows = objs.map((o, idx) => {
+    return `<tr>
+      <th scope="row"><a href="objects/${pages[idx]}">${esc((multi ? `${o.owner}.${o.name}` : o.name).toLowerCase())}</a><span class="otype">${esc(o.type.toLowerCase())}</span></th>
+      ${cell(o.utplsql ?? { covered: 0, total: 0 }, 'mini ref')}
+      ${o.instrumentError ? `<td colspan="${METRICS.length}" class="err">${esc(o.instrumentError)}</td>` : METRICS.map((m) => cell(o.metrics[m.key])).join('')}
+      ${muts ? cell(mutScore([...(mutOf(o)?.values() ?? [])].flat())) : ''}
+      <td class="num find">${o.findings.length + (muts ? unchecked(o, mutOf(o)).length : 0)}</td>
+    </tr>`;
+  }).join('');
+
+  // ---------------------------------------------------------------- schemas (several only)
+  const counted = (v: Metric) => `<td><div class="cell">${bar(v, 'mini')}<span class="num">${fmtPct(pctNum(v))} <small>${v.covered}/${v.total}</small></span></div></td>`;
+  const schemaRows = !multi ? '' : bySchema(objs).map(([owner, os]) => `<tr>
+      <th scope="row">${esc(owner.toLowerCase())}</th>
+      <td class="num">${os.length}</td><td class="num">${os.filter(unhit).length}</td>
+      ${METRICS.map((m) => counted(sum(os, m.key))).join('')}
+    </tr>`).join('');
+
+  // ---------------------------------------------------------------- objects
+  const testNames = (r.tests ?? []).map((t) => (t.setup ? t.description : `${t.description} <span style="opacity:.7">(${t.path.split('.').slice(1).join('.')})</span>`));
+  const files: Record<string, string> = { 'report.css': CSS, 'report.js': JS };
+  const top = (home: string) => `<div class="top">
+    <div class="brand">${home ? `<a href="${home}" aria-label="Overview">pl<span>gauge</span></a>` : 'pl<span>gauge</span>'}</div>
+    <div class="meta">
+      ${home ? `<a href="${home}">← Overview</a>` : ''}
+      <span>Schema <b>${esc(r.schema.replace(/,/g, ', '))}</b></span>
+      <span>${esc(r.database.replace(/ - Develop.*$/, ''))}</span>
+      <span>SQL probes ${r.sqlProbes ? 'on' : 'off'}</span>
+      <span>${esc(new Date(r.generated).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC' }))} UTC</span>
+    </div>
+  </div>`;
+  objs.forEach((o, idx) => {
+    // tooltips per page: each page carries only its own
+    const tips: string[] = [];
+    const tip = (html: string) => `t${tips.push(html) - 1}`;
+    const section = renderObject(o, idx, tip, testNames, muts ? mutOf(o) ?? new Map() : undefined);
+    files[`objects/${pages[idx]}`] = `${pageHead(`plgauge ${o.owner}.${o.name}`, '../report.css')}
+<div class="wrap">
+  ${top('../index.html')}
+  ${LEGEND}
+  ${section}
+</div>
+
+<div id="tip" hidden></div>
+<div hidden>${tips.map((t, k) => `<div id="t${k}">${t}</div>`).join('')}</div>
+<script src="../report.js"></script>
+`;
+  });
+
+  files['index.html'] = `${pageHead(`plgauge ${r.schema}`, 'report.css')}
+<div class="wrap">
+  ${top('')}
+
+  <section class="hero" aria-labelledby="h-hero">
+    <div class="eyebrow">Measured with the same ${nTests} utPLSQL tests</div>
+    <h1 id="h-hero">${headline}</h1>
+    <div class="compare">${compareRows}</div>
+    ${facts}
+  </section>
+
+  ${schemaRows ? `<section aria-labelledby="h-schemas">
+    <header><div class="eyebrow">Schemas</div><h2 id="h-schemas">Coverage per schema</h2></header>
+    <div class="tbl"><table>
+      <thead><tr><th>Schema</th><th>Objects</th><th>Without hits</th>${METRICS.map((m) => `<th>${m.label}</th>`).join('')}</tr></thead>
+      <tbody>${schemaRows}</tbody>
+    </table></div>
+  </section>` : ''}
+
+  <section aria-labelledby="h-obj">
+    <header><div class="eyebrow">Objects</div><h2 id="h-obj">Coverage per program unit</h2></header>
+    <div class="tbl"><table>
+      <thead><tr><th>Object</th><th>Lines (utPLSQL)</th>${METRICS.map((m) => `<th>${m.label}</th>`).join('')}${muts ? '<th>Mutation Score</th>' : ''}<th class="find">Gaps</th></tr></thead>
+      <tbody>${tableRows}</tbody>
+    </table></div>
+  </section>
+
+  <section class="method" aria-label="Method">
+    <div><h4>How it is measured</h4><p>plgauge reads the compiled source, places probes on every statement, decision and sub-condition and recompiles the code. The probes add no lines, so error messages keep their line numbers. Then the utPLSQL tests run, and the original code is restored.</p></div>
+    <div><h4>NULL and short-circuit</h4><p>Every sub-condition is counted as TRUE, FALSE or NULL. The probes return the value unchanged, so short-circuit evaluation and NULL semantics are preserved. MC/DC treats sub-conditions that were not evaluated as wildcards (unique cause with short-circuit).</p></div>
+    <div><h4>Limits</h4><p>Conditions in WHERE, ON and HAVING clauses are deliberately not instrumented, because that would change the execution plan. Dynamic SQL and code obfuscated with wrap are not measured. Hits from sessions of other users, and from parallel query slaves that run fewer than 1000 statements, are lost.</p></div>
+  </section>
+</div>
+`;
+  return files;
+}
+
+/** Writes the report folder; returns the path of index.html. */
+export function writeReport(dir: string, r: RunReport, opts: { mutation?: { results: MutationResultLite[] } } = {}): string {
+  for (const [path, text] of Object.entries(renderReport(r, opts))) {
+    mkdirSync(dirname(join(dir, path)), { recursive: true });
+    writeFileSync(join(dir, path), text);
+  }
+  return join(dir, 'index.html');
 }
 
 // -------------------------------------------------------------------- object
