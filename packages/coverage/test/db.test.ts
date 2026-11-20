@@ -481,3 +481,78 @@ test('coverage without warm-up and utPLSQL comparison: fewer test runs, report w
     await conn.close();
   }
 });
+
+// Tests red already without instrumentation: the run says why (warning, coverage.json, exchange
+// format, report) and --fail-on-test-errors ends with exit code 5.
+test('tests failing before instrumentation: messages in the outputs, warning, exit code 5', { skip: !m && 'PLGAUGE_COV_DB not set', timeout: 300_000 }, async () => {
+  const { spawnSync } = await import('node:child_process');
+  const { mkdtempSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const conn = await oracledb.getConnection({ user: m![1], password: m![2], connectString: m![3] });
+  try {
+    await conn.execute(`create or replace function plgauge_msg_calc(n number) return number is
+    begin
+      if n > 0 then
+        return n * 2;
+      end if;
+      return 0;
+    end;`);
+    await conn.execute(`create or replace package plgauge_msg_ba is
+      --%suite
+
+      --%beforeall
+      procedure setup;
+      --%test
+      procedure t1;
+      --%test
+      procedure t2;
+    end;`);
+    await conn.execute(`create or replace package body plgauge_msg_ba is
+      procedure setup is begin raise_application_error(-20073, 'setup <broken>'); end;
+      procedure t1 is begin ut.expect(plgauge_msg_calc(1)).to_equal(2); end;
+      procedure t2 is begin ut.expect(plgauge_msg_calc(0)).to_equal(0); end;
+    end;`);
+    await conn.execute(`create or replace package plgauge_msg_fail is
+      --%suite
+
+      --%test
+      procedure t_ok;
+      --%test
+      procedure t_fail;
+    end;`);
+    await conn.execute(`create or replace package body plgauge_msg_fail is
+      procedure t_ok is begin ut.expect(plgauge_msg_calc(2)).to_equal(4); end;
+      procedure t_fail is begin ut.expect(plgauge_msg_calc(3)).to_equal(7); end;
+    end;`);
+    const dir = mkdtempSync(join(tmpdir(), 'plgauge-msg-'));
+    const cfg = join(dir, 'coverage-config.json');
+    // (the password comes from the environment, not from the file)
+    writeFileSync(cfg, JSON.stringify({ user: m![1], connectString: m![3], schema: m![1], include: '^PLGAUGE_MSG_CALC$', tests: ['plgauge_msg_ba', 'plgauge_msg_fail'], baselineRuns: 1 }));
+    const out = join(dir, 'out');
+    const cli = new URL('../../cli/src/cli.ts', import.meta.url).pathname;
+    const p = spawnSync(process.execPath, ['--import', 'tsx', cli, 'coverage', '--config', cfg, '--out', out, '--fail-on-test-errors'], {
+      encoding: 'utf8', env: { ...process.env, PLGAUGE_PASSWORD: m![2] },
+    });
+    assert.equal(p.status, 5, p.stderr);
+    assert.match(p.stderr, /WARNING: 2 tests of suite plgauge_msg_ba error before instrumentation: ORA-20073: setup <broken>\n/);
+    assert.match(p.stderr, /WARNING: test "t_fail" of suite plgauge_msg_fail fails before instrumentation: Actual: 6 \(number\) was expected to equal: 7 \(number\)\n/);
+    const { readFileSync } = await import('node:fs');
+    const report = JSON.parse(readFileSync(join(out, 'coverage.json'), 'utf8'));
+    const msg = (path: string) => report.tests.find((t: { path: string }) => t.path === `${m![1].toLowerCase()}.${path}`)?.message;
+    assert.equal(msg('plgauge_msg_ba.t1'), 'ORA-20073: setup <broken>');
+    assert.equal(msg('plgauge_msg_fail.t_fail'), 'Actual: 6 (number) was expected to equal: 7 (number)');
+    assert.equal(msg('plgauge_msg_fail.t_ok'), undefined);
+    const exp = JSON.parse(readFileSync(join(out, 'plgauge-coverage.json'), 'utf8'));
+    assert.deepEqual(exp.tests.filter((t: { message?: string }) => t.message).map((t: { status: string; message: string }) => [t.status, t.message]), [
+      ['excluded', 'ORA-20073: setup <broken>'], ['excluded', 'ORA-20073: setup <broken>'], ['excluded', 'Actual: 6 (number) was expected to equal: 7 (number)'],
+    ]);
+    assert.match(readFileSync(join(out, 'index.html'), 'utf8'), /2 tests of suite plgauge_msg_ba error before instrumentation: ORA-20073: setup &lt;broken&gt;/);
+    // without the option the same run passes
+    const q = spawnSync(process.execPath, ['--import', 'tsx', cli, 'coverage', '--config', cfg, '--out', out], { encoding: 'utf8', env: { ...process.env, PLGAUGE_PASSWORD: m![2] } });
+    assert.equal(q.status, 0, q.stderr);
+  } finally {
+    for (const o of ['package plgauge_msg_ba', 'package plgauge_msg_fail', 'function plgauge_msg_calc']) await conn.execute(`drop ${o}`).catch(() => undefined);
+    await conn.close();
+  }
+});

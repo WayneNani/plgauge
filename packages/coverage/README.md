@@ -83,8 +83,14 @@ Notes on `coverage`:
 - **Projects:** `--skip-install` skips the project's install scripts.
 - **Fewer test runs:** `--no-warmup` and `--no-utplsql-compare` skip the warm-up run and the run with utPLSQL's own
   coverage (see [Performance](#performance)).
-- **Exit codes:** 3 when a threshold is missed, 4 when test results differ with instrumentation, 1 when objects
-  could not be restored (then run `restore`) or an `afterTests` script failed.
+- **Tests red without instrumentation:** the run warns once per suite and message, e.g.
+  `WARNING: 86 tests of suite x.y error before instrumentation: ORA-04063: package body "X.TEST_Y" has errors`.
+  The code those tests would reach shows low coverage for that reason. The message of each failed test is also in
+  `coverage.json`, the exchange format, the JUnit export and the report. `--fail-on-test-errors` (or
+  `"failOnTestErrors": true` in the configuration) turns this into exit code 5.
+- **Exit codes:** 3 when a threshold is missed, 4 when test results differ with instrumentation, 5 with
+  `--fail-on-test-errors` when tests fail or error without instrumentation, 1 when objects could not be restored
+  (then run `restore`) or an `afterTests` script failed. When several apply: 1 before 5 before 3 before 4.
 
 ## Configuration
 
@@ -103,6 +109,7 @@ Example: [`examples/order_pricing/coverage-config.json`](../../examples/order_pr
 | `baselineRuns` | Test runs without coverage before measuring (default 2) |
 | `warmup` | A warm-up test run before them (default `true`); `false` = `--no-warmup` |
 | `utplsqlCompare` | A test run with utPLSQL's own coverage for the line-rate comparison (default `true`); `false` = `--no-utplsql-compare` |
+| `failOnTestErrors` | Exit code 5 when tests fail or error without instrumentation (like `--fail-on-test-errors`) |
 | `schemas`, `runtimeSchema` | Measure several schemas, see [Multiple schemas](#multiple-schemas) |
 | `beforeTests`, `afterTests` | SQL*Plus-style scripts, relative to the config file. `beforeTests` runs once before the first test run (switch test seams: synonyms to mocks, say); `afterTests` runs once at the very end, after the originals are restored, also when the run fails or is cancelled |
 
@@ -181,6 +188,10 @@ plgauge attributes every hit to the running utPLSQL test:
   | `excluded` | Already failing without instrumentation |
   | `flaky` | Result changes without instrumentation |
   | `unknown` | No result recorded |
+
+  Optional `message` (older readers ignore it): why a `failed`, `error` or `excluded` test failed, the first line of
+  utPLSQL's report (the error, e.g. `ORA-04063: …`, or the failed expectation, `Actual: … was expected to …`), at most
+  300 characters.
 
 - **Per object:**
   - `sourceSha256` (post-processed) and `rawSha256` (raw ALL_SOURCE)

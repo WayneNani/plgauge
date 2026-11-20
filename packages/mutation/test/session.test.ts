@@ -15,7 +15,7 @@ test('TeamCity messages are parsed with escapes', () => {
   assert.equal(t.length, 2);
   assert.deepEqual([t[0].name, t[0].failed, t[0].durationMs], ['plmut.test_shop_pricing.discount_above_threshold', false, 3]);
   assert.equal(t[1].failed, true);
-  assert.equal(t[1].message, "Failure Actual: 0 (number) was expected to equal: 15 (number)\n  at 'x'");
+  assert.equal(t[1].message, "Failure\nActual: 0 (number) was expected to equal: 15 (number)\n  at 'x'");
 });
 
 test('oracle:// URLs become connect data', () => {

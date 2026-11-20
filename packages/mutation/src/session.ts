@@ -232,7 +232,8 @@ export function parseTeamCity(out: string): TestResult[] {
     else if (kind === 'testFailed') {
       const t = get(name);
       t.failed = true;
-      t.message ||= `${a.message ?? ''} ${a.details ?? ''}`.trim();
+      // (one per line: failureMessage skips utPLSQL's generic "Error occured")
+      t.message ||= `${a.message ?? ''}\n${a.details ?? ''}`.trim();
     }
   }
   return [...index.values()];

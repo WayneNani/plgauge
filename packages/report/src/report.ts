@@ -4,7 +4,7 @@
  * line the mutants and their verdicts beside the coverage, and as a finding every
  * surviving mutant on an executed line (the tests run the code but do not check it).
  */
-import { tokenize } from '@plgauge/core';
+import { failureSummary, tokenize } from '@plgauge/core';
 import type { CondResult, Metric, ObjectResult } from '@plgauge/coverage';
 import type { RunReport } from '@plgauge/coverage';
 
@@ -135,6 +135,9 @@ export function renderHtml(r: RunReport, opts: { mutation?: { results: MutationR
   // no warm baseline run (warm-up skipped, one baseline run): its test times are no reference
   const warmBase = r.timings.baselineMs !== undefined;
   const skipped = [r.warmup === false ? 'warm-up run' : '', r.utplsqlCompare === false ? 'utPLSQL coverage run' : ''].filter(Boolean);
+  // red before instrumentation: why, so that the low coverage of their code is explained
+  const red = r.baseline.tests.filter((t) => t.status === 'failed' || t.status === 'error').length;
+  const redWhy = failureSummary(r.baseline.tests, 'before instrumentation').map((l) => `<li>${esc(l.replace(/^WARNING: /, ''))}</li>`).join('');
   const facts = `
     <div class="facts">
       <div class="fact ${r.equivalent ? 'f-ok' : 'f-bad'}">
@@ -142,6 +145,11 @@ export function renderHtml(r: RunReport, opts: { mutation?: { results: MutationR
         <span class="fact-v">${r.equivalent ? `${nTests}/${nTests} tests identical` : 'Results differ'}</span>
         <span class="fact-d">${r.equivalent ? `Every test gives the same result with and without instrumentation (${passed} passed).` : `Differing: ${(r.differingTests ?? []).map(esc).join('; ') || 'see log'}.`}${r.flakyTests?.length ? ` ${r.flakyTests.length} flaky test${r.flakyTests.length === 1 ? '' : 's'} excluded (result changes even without instrumentation): ${r.flakyTests.map((t) => esc(t.split('::').pop()!)).join(', ')}.` : ''}</span>
       </div>
+      ${red ? `<div class="fact f-bad">
+        <span class="fact-k">Red without instrumentation</span>
+        <span class="fact-v">${red} test${red === 1 ? '' : 's'}</span>
+        <span class="fact-d">Their code is measured as far as they ran.<ul class="why">${redWhy}</ul></span>
+      </div>` : ''}
       <div class="fact">
         <span class="fact-k">Instrumentation (TypeScript)</span>
         <span class="fact-v">${fmtMs(r.timings.instrumentMs)}</span>
@@ -242,6 +250,7 @@ a { color: var(--accent); }
 .fact-k { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
 .fact-v { font: 600 20px var(--font-code); font-variant-numeric: tabular-nums; }
 .fact-d { font-size: 13px; color: var(--muted); }
+.fact-d .why { margin: 4px 0 0; padding-left: 18px; overflow-wrap: anywhere; }
 .f-ok .fact-v { color: var(--ok); } .f-bad .fact-v { color: var(--bad); }
 
 /* table */

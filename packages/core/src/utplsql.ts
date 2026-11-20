@@ -10,6 +10,8 @@ export interface TestCase {
   name: string;
   status: 'passed' | 'failed' | 'error' | 'skipped';
   time: number;
+  /** Why a failed or erroring test failed: the first meaningful line of utPLSQL's report. */
+  message?: string;
 }
 
 export interface TestRun {
@@ -71,19 +73,66 @@ export async function runTestsJunit(conn: oracledb.Connection, paths: string[], 
 }
 
 function unescapeXml(s: string): string {
-  return s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
+  return s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+    .replace(/&#(x?)([0-9a-f]+);/gi, (_, x, n) => String.fromCodePoint(parseInt(n, x ? 16 : 10))).replace(/&amp;/g, '&');
+}
+
+/** Text content of XML: CDATA as is (utPLSQL splits "]]>" over two sections), tags dropped, the rest unescaped. */
+const xmlText = (s: string) => s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>|<[^>]*>|[^<]+/g, (m, cd?: string) => cd ?? (m[0] === '<' ? '' : unescapeXml(m)));
+
+/**
+ * The first line of a failure that says something: utPLSQL's error stack starts with the error
+ * (ORA-04063: package body … has errors), a failed expectation with "Actual: … expected …";
+ * its TeamCity reporter puts the generic "Error occured" / "Test exception:" in front (all a
+ * failing beforeall gets there: then that line).
+ */
+export function failureMessage(text: string, max = 300): string | undefined {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const line = lines.find((l) => !/^(error occured|failure|test exception:)$/i.test(l)) ?? lines[0];
+  return line && line.length > max ? `${line.slice(0, max - 1)}…` : line;
 }
 
 export function parseJunit(xml: string): TestCase[] {
   const out: TestCase[] = [];
   const re = /<testcase\b([^>]*?)(\/>|>([\s\S]*?)<\/testcase>)/g;
   for (let m; (m = re.exec(xml)); ) {
-    const attr = (n: string) => unescapeXml(new RegExp(`\\b${n}="([^"]*)"`).exec(m![1])?.[1] ?? '');
-    const body = m[3] ?? '';
+    const attr = (n: string, a = m![1]) => unescapeXml(new RegExp(`\\b${n}="([^"]*)"`).exec(a)?.[1] ?? '');
+    // (a message in CDATA may well contain "<error")
+    const body = (m[3] ?? '').replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, '');
     const status = /<error\b/.test(body) ? 'error' : /<failure\b/.test(body) ? 'failed' : /<skipped\b/.test(body) ? 'skipped' : 'passed';
-    out.push({ suite: attr('classname'), name: attr('name'), status, time: Number(attr('time')) || 0 });
+    const t: TestCase = { suite: attr('classname'), name: attr('name'), status, time: Number(attr('time')) || 0 };
+    if (status === 'error' || status === 'failed') {
+      // utPLSQL writes the stack as CDATA body, other tools a message attribute
+      const el = /<(error|failure)\b([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/.exec(m[3] ?? '');
+      const message = el && failureMessage(`${xmlText(el[3] ?? '')}\n${attr('message', el[2])}`);
+      if (message) t.message = message;
+    }
+    out.push(t);
   }
   return out;
+}
+
+/**
+ * Tests that fail or error, grouped by suite, status and message: a whole suite usually fails
+ * for one reason (a beforeall that raises, a test package that does not compile). At most max lines.
+ */
+export function failureSummary(tests: Pick<TestCase, 'suite' | 'name' | 'status' | 'message'>[], when: string, max = 10): string[] {
+  const groups = new Map<string, { suite: string; status: string; message: string; names: string[] }>();
+  for (const t of tests) {
+    if (t.status !== 'failed' && t.status !== 'error') continue;
+    const message = t.message ?? 'no message';
+    const k = `${t.suite}\0${t.status}\0${message}`;
+    (groups.get(k) ?? groups.set(k, { suite: t.suite, status: t.status, message, names: [] }).get(k)!).names.push(t.name);
+  }
+  const all = [...groups.values()].sort((a, b) => b.names.length - a.names.length);
+  const lines = all.slice(0, max).map((g) => {
+    const verb = g.status === 'error' ? 'error' : 'fail';
+    const who = g.names.length === 1 ? `test "${g.names[0]}" of suite ${g.suite} ${verb}s` : `${g.names.length} tests of suite ${g.suite} ${verb}`;
+    return `WARNING: ${who} ${when}: ${g.message}`;
+  });
+  const rest = all.slice(max);
+  if (rest.length) lines.push(`WARNING: … and ${rest.reduce((n, g) => n + g.names.length, 0)} more tests in ${rest.length} more groups`);
+  return lines;
 }
 
 export function parseSonar(xml: string): Map<string, LineCoverage> {

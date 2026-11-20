@@ -145,4 +145,6 @@ export interface TestInfo {
   status: 'passed' | 'failed' | 'error' | 'skipped' | 'unknown' | 'flaky';
   baselineStatus: 'passed' | 'failed' | 'error' | 'skipped' | 'unknown';
   ms: number;
+  /** Why the test failed: utPLSQL's first line (instrumented run, else the baseline). */
+  message?: string;
 }

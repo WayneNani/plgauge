@@ -19,7 +19,7 @@ import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import oracledb from 'oracledb';
 import {
-  dbIdent, ensureJournal, journalEntries, loadObject, restoreJournal, lockRun, RUN_LOCK, objectErrors, replaceSourceDetailed, restoreAll, runScript, runTestHooks, sha256, splitScript, touches,
+  dbIdent, ensureJournal, failureMessage, failureSummary, journalEntries, loadObject, restoreJournal, lockRun, RUN_LOCK, objectErrors, replaceSourceDetailed, restoreAll, runScript, runTestHooks, sha256, splitScript, touches,
   type ChangedLines, type SourceObject,
 } from '@plgauge/core';
 import type { CoverageExport } from '@plgauge/coverage';
@@ -1070,7 +1070,11 @@ class Run {
       last = r.tests;
     }
     const ok = last.filter((t) => !failedNames.has(t.name) && !t.ignored);
-    for (const [n, msg] of failedNames) this.logf(`excluded, fails without mutants: ${n}: ${msg.split(/\s+/).join(' ').slice(0, 60)}`);
+    // grouped: a whole suite usually fails for one reason (beforeall, a test package that does not compile)
+    const red = [...failedNames].map(([n, msg]) => ({
+      suite: n.split('.').slice(0, -1).join('.'), name: n.split('.').pop()!, status: /^error occured/i.test(msg) ? 'error' as const : 'failed' as const, message: failureMessage(msg),
+    }));
+    for (const w of failureSummary(red, 'without mutants (excluded)')) this.logf(w);
     if (!ok.length) throw new Error('Baseline: no test passes without mutants');
     this.excluded = failedNames.size;
     this.passing = ok.map((t) => t.name);
@@ -1107,7 +1111,7 @@ class Run {
           // a test that fails without a mutant is unreliable; a timeout or a lost connection says nothing
           if (!run.err && !run.timedOut && failed(run)) {
             flaky.add(name);
-            this.logf(`flaky, fails without a mutant too: ${name}: ${firstFailure(run, 'message').slice(0, 60)}`);
+            this.logf(`flaky, fails without a mutant too: ${name}: ${failureMessage(firstFailure(run, 'message')) ?? ''}`);
           } else if (run.err || run.timedOut) {
             this.logf(`recheck of ${name} without a result: ${run.timedOut ? 'timeout' : firstLine(run.err!)}`);
           }
@@ -1748,7 +1752,7 @@ async function record(run: Run, tests: TestResult[], ids: number[], loopCount: n
   const intact = (await w.test.conn.execute<[number]>(`select plgauge_ctl.intact from dual`)).rows?.[0]?.[0] === 1;
   // A test that passed the baseline but fails now depends on state or order.
   const flakyNow = r.tests.filter((t) => t.failed);
-  for (const t of flakyNow) run.logf(`flaky, fails in the recording run: ${t.name}: ${t.message.split(/\s+/).join(' ').slice(0, 60)}`);
+  for (const t of flakyNow) run.logf(`flaky, fails in the recording run: ${t.name}: ${failureMessage(t.message) ?? ''}`);
   if (flakyNow.length) {
     // (run.passing are the names of tests: both come from the baseline)
     run.exclude(new Set(flakyNow.map((t) => t.name)));
