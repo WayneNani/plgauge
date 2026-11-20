@@ -94,11 +94,17 @@ export async function databaseInfo(conn: oracledb.Connection): Promise<DatabaseI
 }
 
 export interface ObjectFilter {
-  /** Regular expressions on object names. */
+  /** Regular expressions, tested on NAME and on OWNER.NAME (so `^CORE\.` picks a schema). */
   include?: string;
   exclude?: string;
   /** Object names never loaded (runtime packages). */
   skip?: string[];
+}
+
+/** include/exclude on NAME and on OWNER.NAME: a plain name pattern works as before, `^CORE\.` picks a schema. */
+export function filterAccepts(filter: ObjectFilter, owner: string, name: string): boolean {
+  const hit = (re: string) => [name, `${owner}.${name}`].some((x) => new RegExp(re, 'i').test(x));
+  return (!filter.include || hit(filter.include)) && (!filter.exclude || !hit(filter.exclude));
 }
 
 /**
@@ -121,9 +127,7 @@ export async function loadObjects(conn: oracledb.Connection, schema: string, fil
   const skip = new Set((filter.skip ?? []).map((s) => s.toUpperCase()));
   const out: SourceObject[] = [];
   for (const [name, type] of res.rows ?? []) {
-    if (skip.has(name)) continue;
-    if (filter.include && !new RegExp(filter.include, 'i').test(name)) continue;
-    if (filter.exclude && new RegExp(filter.exclude, 'i').test(name)) continue;
+    if (skip.has(name) || !filterAccepts(filter, schema, name)) continue;
     out.push(await loadObject(conn, schema, name, type));
   }
   return out;

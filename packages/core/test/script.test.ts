@@ -284,3 +284,14 @@ line2');
 select 1 from dual;
 `), ['select 1 from dual']);
 });
+
+test('filterAccepts: include/exclude match NAME or OWNER.NAME', async () => {
+  const { filterAccepts } = await import('../src/db.js');
+  assert.equal(filterAccepts({ include: '^PRICING$' }, 'CORE', 'PRICING'), true, 'a plain name pattern keeps working');
+  assert.equal(filterAccepts({ include: '^CORE\\.' }, 'CORE', 'PRICING'), true);
+  assert.equal(filterAccepts({ include: '^CORE\\.' }, 'UTIL', 'PRICING'), false);
+  assert.equal(filterAccepts({ include: '^util\\.log$' }, 'UTIL', 'LOG'), true, 'case-insensitive');
+  assert.equal(filterAccepts({ exclude: '^UTIL\\.LOG$' }, 'UTIL', 'LOG'), false);
+  assert.equal(filterAccepts({ exclude: '^UTIL\\.LOG$' }, 'CORE', 'LOG'), true, 'the same name in another schema stays');
+  assert.equal(filterAccepts({}, 'CORE', 'LOG'), true);
+});
