@@ -12,7 +12,8 @@ set -euo pipefail
 NAME=${PLGAUGE_NAME:-plgauge-db}
 PORT=${PLGAUGE_PORT:-1521}
 APP=${PLGAUGE_USER:-app}
-IMAGE=${PLGAUGE_IMAGE:-docker.io/gvenzl/oracle-free:23-slim}
+# a fixed release, so that a new image cannot break CI unnoticed; PLGAUGE_IMAGE picks another
+IMAGE=${PLGAUGE_IMAGE:-docker.io/gvenzl/oracle-free:23.26.4-slim}
 UTPLSQL=${PLGAUGE_UTPLSQL:-v3.2.2}
 pw() { head -c18 /dev/urandom | base64 | tr -dc A-Za-z0-9 | head -c 16; }
 ORACLE_PASSWORD=${ORACLE_PASSWORD:-$(pw)}

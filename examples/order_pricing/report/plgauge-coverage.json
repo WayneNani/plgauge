@@ -1,7 +1,7 @@
 {
  "format": "plgauge-coverage/1",
- "generated": "2026-11-15T13:16:54.514Z",
- "database": "Oracle AI Database 26ai Free Release 23.26.3.0.0 - Develop, Learn, and Run for Free",
+ "generated": "2026-11-20T13:25:23.011Z",
+ "database": "Oracle AI Database 26ai Free Release 23.26.4.0.0 - Develop, Learn, and Run for Free",
  "schema": "APP",
  "coordinates": "all_source",
  "tests": [
@@ -9,70 +9,70 @@
    "path": "app.test_order_pricing.archive_in_batches",
    "setup": false,
    "status": "passed",
-   "ms": 0.987,
+   "ms": 1.008,
    "baselineRuns": 2
   },
   {
    "path": "app.test_order_pricing.bulk_discount",
    "setup": false,
    "status": "passed",
-   "ms": 3.01,
+   "ms": 2.906,
    "baselineRuns": 2
   },
   {
    "path": "app.test_order_pricing.coupon_discount",
    "setup": false,
    "status": "passed",
-   "ms": 0.601,
+   "ms": 0.612,
    "baselineRuns": 2
   },
   {
    "path": "app.test_order_pricing.no_discount",
    "setup": false,
    "status": "passed",
-   "ms": 0.587,
+   "ms": 0.605,
    "baselineRuns": 2
   },
   {
    "path": "app.test_order_pricing.pricing_load",
    "setup": false,
    "status": "passed",
-   "ms": 131.226,
+   "ms": 127.676,
    "baselineRuns": 2
   },
   {
    "path": "app.test_order_pricing.risk_high",
    "setup": false,
    "status": "passed",
-   "ms": 5.874,
+   "ms": 5.816,
    "baselineRuns": 2
   },
   {
    "path": "app.test_order_pricing.risk_unknown",
    "setup": false,
    "status": "passed",
-   "ms": 0.631,
+   "ms": 0.676,
    "baselineRuns": 2
   },
   {
    "path": "app.test_order_pricing.shipping_de",
    "setup": false,
    "status": "passed",
-   "ms": 0.571,
+   "ms": 0.588,
    "baselineRuns": 2
   },
   {
    "path": "app.test_order_pricing.shipping_unknown_country",
    "setup": false,
    "status": "passed",
-   "ms": 0.579,
+   "ms": 0.582,
    "baselineRuns": 2
   },
   {
    "path": "app.test_order_pricing.vip_large_order",
    "setup": false,
    "status": "passed",
-   "ms": 0.85,
+   "ms": 0.861,
    "baselineRuns": 2
   },
   {

@@ -172,7 +172,7 @@ including full mutation runs in both modes. Known gaps:
 - **Versions:** only Oracle 23ai/26ai is tested.
 
 How the code is organised, how to run the tests against a database and how parity with the earlier prototypes
-was checked is in [DEVELOPMENT.md](DEVELOPMENT.md).
+was checked is in [DEVELOPMENT.md](DEVELOPMENT.md). Changes between versions are in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
