@@ -170,7 +170,12 @@ export async function loadObject(conn: oracledb.Connection, owner: string, name:
     { t: type, o: owner, n: name, x: { dir: oracledb.BIND_OUT, type: oracledb.DB_TYPE_CLOB } },
   );
   const lob = (pp.outBinds as { x: oracledb.Lob | null }).x;
-  const processed = lob ? String(await lob.getData()) : original;
+  let processed = lob ? String(await lob.getData()) : original;
+  if (type === 'TRIGGER') {
+    const whole = triggerSource(original, processed);
+    if (whole === undefined) console.warn(`Trigger ${owner}.${name}: post-processed body does not line up with ALL_SOURCE, measured on the unprocessed text`);
+    processed = whole ?? original;
+  }
   const st = await conn.execute<[number, string, string, string, string, string | null, string | null]>(
     `select plsql_optimize_level, plsql_code_type, plsql_ccflags, nls_length_semantics, plscope_settings, plsql_warnings, plsql_debug
        from all_plsql_object_settings where owner = :o and name = :n and type = :t`, { o: owner, n: name, t: type },
@@ -192,6 +197,25 @@ export async function loadObject(conn: oracledb.Connection, owner: string, name:
       ...(status === 'DISABLED' ? { trigger_status: 'DISABLED' } : {}),
     },
   };
+}
+
+/**
+ * DBMS_PREPROCESSOR returns a trigger without its header (23.26: from DECLARE, BEGIN, COMPOUND
+ * TRIGGER or the CALL target on): ALL_SOURCE's header goes back in front, so lines and columns
+ * match ALL_SOURCE. The body ends where ALL_SOURCE ends, so its first line is found by counting
+ * from the end; undefined when that line does not end with it (conditional compilation on it).
+ */
+export function triggerSource(original: string, body: string): string | undefined {
+  if (body === original || /^\s*trigger\b/i.test(body)) return body;
+  const src = original.split('\n');
+  const lines = body.split('\n');
+  const first = lines[0].trimEnd();
+  const h = src.length - lines.length;
+  if (h < 0 || !src[h].trimEnd().endsWith(first)) return undefined;
+  const line = src[h].trimEnd();
+  const head = [...src.slice(0, h), line.slice(0, line.length - first.length)].join('\n');
+  // a CALL trigger's body gets a ";" that CREATE TRIGGER refuses; it has no PL/SQL to preprocess
+  return /\bcall\s*$/i.test(head) ? original : head + body;
 }
 
 /**

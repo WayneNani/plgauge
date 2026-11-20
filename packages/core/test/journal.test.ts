@@ -37,6 +37,22 @@ test('the journal restores code left changed by a killed run', { skip: !m && 'PL
   }
 });
 
+test('a trigger body from DBMS_PREPROCESSOR gets the ALL_SOURCE header back', async () => {
+  const { triggerSource } = await import('@plgauge/core');
+  const src = 'trigger t\n  after insert on x\n  for each row\ndeclare\n  l number;\nbegin\n  l := 1;\nend;';
+  assert.equal(triggerSource(src, 'declare\n  l number;\nbegin\n  l := 1;\nend;'), src);
+  assert.equal(triggerSource(src, src), src); // already with its header
+  const inline = 'trigger t before insert on x for each row begin\n  null; end;';
+  assert.equal(triggerSource(inline, 'begin\n  null; end;'), inline);
+  const cc = 'trigger t before insert on x for each row\nbegin\n  $if true $then null; $end\nend;';
+  assert.equal(triggerSource(cc, 'begin\n    null; \nend;'), 'trigger t before insert on x for each row\nbegin\n    null; \nend;');
+  // CALL: the preprocessor appends a ";" CREATE TRIGGER refuses
+  const call = 'trigger t before insert on x for each row\n  call p(:new.n)\n';
+  assert.equal(triggerSource(call, 'p(:new.n)\n;'), call);
+  // conditional compilation on the body's first line: no alignment
+  assert.equal(triggerSource('trigger t before insert on x for each row begin $if true $then null; $end end;', 'begin  null;  end;'), undefined);
+});
+
 test('fingerprint ignores whitespace and CREATE keywords, nothing else (marked x)', async () => {
   const { fingerprint } = await import('@plgauge/core');
   const a = `CREATE OR REPLACE EDITIONABLE function f return varchar2 is begin return 'Grüße'; end;`;

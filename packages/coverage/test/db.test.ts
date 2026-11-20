@@ -11,6 +11,7 @@ import oracledb from 'oracledb';
 import { instrument } from '@plgauge/coverage';
 import { newIds } from '@plgauge/coverage';
 import { installRuntime } from '@plgauge/coverage';
+import { ensureJournal, loadObject, loadObjects, replaceSourceDetailed, restoreAll } from '@plgauge/core';
 
 const db = process.env.PLGAUGE_COV_DB;
 const m = db ? /^([^/]+)\/([^@]+)@(.+)$/.exec(db) : null;
@@ -115,7 +116,10 @@ end plgauge_constructs_trg;`;
 
     const ids = newIds();
     const rb = instrument(body, m![1].toUpperCase(), ids, { sqlProbes: true });
-    const rt = instrument(trigger, m![1].toUpperCase(), ids, { sqlProbes: true });
+    // the trigger as a run loads it (the preprocessor's text starts at COMPOUND TRIGGER)
+    const obj = await loadObject(conn, m![1].toUpperCase(), 'PLGAUGE_CONSTRUCTS_TRG', 'TRIGGER');
+    assert.equal(obj.processed, obj.original);
+    const rt = instrument(obj.processed, m![1].toUpperCase(), ids, { sqlProbes: true });
     assert.deepEqual([...rb.map.gaps, ...rt.map.gaps], []);
     await conn.execute(`create or replace ${rb.instrumented}`);
     await conn.execute(`create or replace ${rt.instrumented}`);
@@ -140,6 +144,123 @@ end plgauge_constructs_trg;`;
   } finally {
     await conn.execute(`drop table plgauge_constructs_t`).catch(() => undefined);
     await conn.execute(`drop package plgauge_constructs`).catch(() => undefined);
+    await conn.close();
+  }
+});
+
+test('triggers loaded from the database: header kept, measured, behaviour unchanged, restored', { skip: !m && 'PLGAUGE_COV_DB not set' }, async () => {
+  const conn = await oracledb.getConnection({ user: m![1], password: m![2], connectString: m![3] });
+  const owner = m![1].toUpperCase();
+  // DBMS_PREPROCESSOR returns each of these without its header (23.26)
+  const triggers = [
+    `trigger plgauge_trg_decl
+  after insert or delete or update
+  on plgauge_trg_t
+  for each row
+declare
+  l varchar2(10);
+begin
+  if inserting then l := 'I'; elsif deleting then l := 'D'; else l := 'U'; end if;
+  insert into plgauge_trg_log (s) values ('decl:' || l);
+end;`,
+    `trigger plgauge_trg_begin before insert on plgauge_trg_t for each row begin
+  if :new.n < 0 then :new.n := 0; end if;
+end;`,
+    `trigger plgauge_trg_inline before update on plgauge_trg_t for each row declare
+  d number := 1; begin :new.n := :new.n + d; end;`,
+    `trigger plgauge_trg_stmt after update on plgauge_trg_t
+-- a header comment with begin and declare
+/* declare */
+begin
+  insert into plgauge_trg_log (s) values ('stmt');
+end;`,
+    `trigger plgauge_trg_when before insert on plgauge_trg_t for each row
+  when (new.n > 100)
+declare x varchar2(10) := 'big'; begin
+  :new.s := x;
+end;`,
+    `trigger plgauge_trg_call after insert on plgauge_trg_t for each row
+  call plgauge_trg_proc(:new.n)
+`,
+    `trigger plgauge_trg_cc after insert on plgauge_trg_t for each row
+begin
+  $if dbms_db_version.version >= 12 $then
+  insert into plgauge_trg_log (s) values ('cc:new');
+  $else
+  insert into plgauge_trg_log (s) values ('cc:old');
+  $end
+end;`,
+  ];
+  // the order of triggers of the same timing is not fixed: sorted
+  const run = async () => {
+    const r = await conn.execute(`declare l varchar2(4000); begin
+        delete from plgauge_trg_t; delete from plgauge_trg_log;
+        insert into plgauge_trg_t (n) values (1); insert into plgauge_trg_t (n) values (-5); insert into plgauge_trg_t (n) values (200);
+        update plgauge_trg_t set n = n + 1;
+        delete from plgauge_trg_t where n > 100;
+        select listagg(n || s, ',') within group (order by n) into l from plgauge_trg_t;
+        select l || '|' || listagg(s, ',') within group (order by s) into l from plgauge_trg_log;
+        :r := l;
+      end;`, { r: { dir: oracledb.BIND_OUT, type: oracledb.STRING, maxSize: 4000 } });
+    return (r.outBinds as { r: string }).r;
+  };
+  try {
+    await installRuntime(conn);
+    await ensureJournal(conn);
+    await conn.execute(`create table plgauge_trg_t (n number, s varchar2(10))`);
+    await conn.execute(`create table plgauge_trg_log (s varchar2(20))`);
+    await conn.execute(`create or replace procedure plgauge_trg_proc(n number) is begin insert into plgauge_trg_log (s) values ('call:' || n); end;`);
+    for (const t of triggers) await conn.execute(`create or replace ${t}`);
+    const expected = await run();
+    assert.equal(expected, '2,3|call:0,call:1,call:200,cc:new,cc:new,cc:new,decl:D,decl:I,decl:I,decl:I,decl:U,decl:U,decl:U,stmt');
+
+    const objs = (await loadObjects(conn, owner, { include: '^PLGAUGE_TRG_' })).filter((o) => o.type === 'TRIGGER');
+    assert.equal(objs.length, triggers.length);
+    for (const o of objs) {
+      // the header is back and the lines are those of ALL_SOURCE
+      assert.match(o.processed, /^trigger plgauge_trg_\w+\s/, o.name);
+      assert.equal(o.processed.split('\n').length, o.original.split('\n').length, o.name);
+      if (o.name !== 'PLGAUGE_TRG_CC') assert.equal(o.processed, o.original, o.name);
+    }
+    assert.doesNotMatch(objs.find((o) => o.name === 'PLGAUGE_TRG_CC')!.processed, /\$if/);
+
+    const ids = newIds();
+    const maps = new Map<string, ReturnType<typeof instrument>['map']>();
+    for (const o of objs) {
+      const r = instrument(o.processed, owner, ids, { sqlProbes: true });
+      maps.set(o.name, r.map);
+      const out = await replaceSourceDetailed(conn, o, r.instrumented, 'coverage');
+      assert.equal(out.error, null, o.name);
+    }
+    // statements sit on their ALL_SOURCE lines (the INSERT of plgauge_trg_decl is line 9)
+    assert.ok(maps.get('PLGAUGE_TRG_DECL')!.statements.some((s) => s.line === 9 && s.col === 3 && s.kind === 'sql'));
+    await conn.execute(`begin cov$.reset; end;`);
+    assert.equal(await run(), expected);
+    await conn.execute(`begin cov$.flush('triggers'); end;`);
+    const hit = new Set((await conn.execute<[string]>(`select k from plgauge_hits where run_id = 'triggers' and kind = 'S'`)).rows!.map((r) => Number(r[0])));
+    for (const [name, map] of maps) {
+      // a CALL trigger has no PL/SQL of its own
+      if (name === 'PLGAUGE_TRG_CALL') assert.deepEqual(map.statements, [], name);
+      else assert.ok(map.statements.length > 0 && map.statements.every((s) => hit.has(s.id)), name);
+    }
+
+    assert.equal(await restoreAll(conn, objs, () => {}, false), 0);
+    for (const o of objs) {
+      const now = (await conn.execute<[string]>(`select text from user_source where name = :n and type = 'TRIGGER' order by line`, { n: o.name })).rows!.map((r) => r[0]).join('');
+      assert.equal(now, o.original.trimEnd(), o.name); // compile drops trailing whitespace
+    }
+    const errs = await conn.execute(`select name, line, text from user_errors where name like 'PLGAUGE\\_TRG\\_%' escape '\\'`);
+    assert.deepEqual(errs.rows, []);
+    assert.equal(await run(), expected);
+    await conn.execute(`delete from plgauge_hits where run_id = 'triggers'`);
+    await conn.commit();
+  } finally {
+    await conn.execute(`drop table plgauge_trg_t`).catch(() => undefined);
+    await conn.execute(`drop table plgauge_trg_log`).catch(() => undefined);
+    await conn.execute(`drop procedure plgauge_trg_proc`).catch(() => undefined);
+    // entries a failed run left: their objects are gone
+    await conn.execute(`delete from plgauge_journal where name like 'PLGAUGE\\_TRG\\_%' escape '\\'`).catch(() => undefined);
+    await conn.commit();
     await conn.close();
   }
 });
