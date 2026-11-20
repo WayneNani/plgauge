@@ -40,6 +40,9 @@ src=$(mktemp -d)
 git clone -q --depth 1 --branch "$UTPLSQL" https://github.com/utPLSQL/utPLSQL.git "$src/utPLSQL"
 $C cp "$src/utPLSQL/source" "$NAME:/tmp/utplsql"
 rm -rf "$src"
+# docker cp creates the files as root (podman as the container's user): the install scripts spool
+# helper files into this directory, and without write access the public synonyms are not created
+$C exec -u 0 "$NAME" chown -R oracle /tmp/utplsql
 # Rights: utPLSQL; V$SESSION and ALTER SYSTEM for the time limit of mutation runs (CANCEL SQL,
 # KILL SESSION of the own test session); CREATE ANY CONTEXT for loop limits.
 # install_headless.sql ends SQL*Plus itself: the grants need a session of their own.
@@ -58,7 +61,15 @@ grant create view, create synonym, create materialized view, create job to $APP;
 -- a second schema for the tests with several schemas (PLGAUGE_LIB_SCHEMA=${APP}_LIB)
 create user ${APP}_lib no authentication quota unlimited on users;
 grant create any procedure, execute any procedure to $APP;
+-- install_headless.sql does not stop on every error: check that utPLSQL is usable for everyone
+declare
+  n number;
+begin
+  select count(*) into n from dba_synonyms where owner = 'PUBLIC' and synonym_name = 'UT_RUNNER';
+  if n = 0 then raise_application_error(-20000, 'utPLSQL installed without its public synonyms'); end if;
+end;
+/
 exit
-SQL" || { $C exec "$NAME" cat /tmp/grants.log >&2; exit 1; }
+SQL" || { $C exec "$NAME" bash -c 'cat /tmp/grants.log; echo "--- utPLSQL install log:"; tail -40 /tmp/utplsql.log' >&2; exit 1; }
 echo "utPLSQL $UTPLSQL installed" >&2
 echo "oracle://$APP:$APP_PASSWORD@127.0.0.1:$PORT/FREEPDB1"
