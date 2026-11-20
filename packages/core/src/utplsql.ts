@@ -74,7 +74,11 @@ export async function runTestsJunit(conn: oracledb.Connection, paths: string[], 
 
 function unescapeXml(s: string): string {
   return s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'")
-    .replace(/&#(x?)([0-9a-f]+);/gi, (_, x, n) => String.fromCodePoint(parseInt(n, x ? 16 : 10))).replace(/&amp;/g, '&');
+    .replace(/&#(?:(\d+)|x([0-9a-f]+));/gi, (_, d?: string, x?: string) => {
+      const n = d ? parseInt(d, 10) : parseInt(x!, 16);
+      // beyond Unicode or a surrogate: no character (fromCodePoint would throw and end the parse)
+      return n > 0x10ffff || (n >= 0xd800 && n <= 0xdfff) ? '\ufffd' : String.fromCodePoint(n);
+    }).replace(/&amp;/g, '&');
 }
 
 /** Text content of XML: CDATA as is (utPLSQL splits "]]>" over two sections), tags dropped, the rest unescaped. */
@@ -89,22 +93,27 @@ const xmlText = (s: string) => s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>|<[^>]*>|[^<
 export function failureMessage(text: string, max = 300): string | undefined {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const line = lines.find((l) => !/^(error occured|failure|test exception:)$/i.test(l)) ?? lines[0];
-  return line && line.length > max ? `${line.slice(0, max - 1)}…` : line;
+  // by code points: a cut through a surrogate pair leaves half a character
+  const cps = [...(line ?? '')];
+  return line && cps.length > max ? `${cps.slice(0, max - 1).join('')}…` : line;
 }
 
 export function parseJunit(xml: string): TestCase[] {
   const out: TestCase[] = [];
-  const re = /<testcase\b([^>]*?)(\/>|>([\s\S]*?)<\/testcase>)/g;
-  for (let m; (m = re.exec(xml)); ) {
+  // CDATA blanked (same length, offsets hold): the quoted failing line may contain "</testcase>" or "<error"
+  const masked = xml.replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, (c) => ' '.repeat(c.length));
+  const re = /<testcase\b([^>]*?)(\/>|>([\s\S]*?)<\/testcase>)/dg;
+  for (let m; (m = re.exec(masked)); ) {
     const attr = (n: string, a = m![1]) => unescapeXml(new RegExp(`\\b${n}="([^"]*)"`).exec(a)?.[1] ?? '');
-    // (a message in CDATA may well contain "<error")
-    const body = (m[3] ?? '').replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, '');
+    const body = m[3] ?? '';
     const status = /<error\b/.test(body) ? 'error' : /<failure\b/.test(body) ? 'failed' : /<skipped\b/.test(body) ? 'skipped' : 'passed';
     const t: TestCase = { suite: attr('classname'), name: attr('name'), status, time: Number(attr('time')) || 0 };
     if (status === 'error' || status === 'failed') {
       // utPLSQL writes the stack as CDATA body, other tools a message attribute
-      const el = /<(error|failure)\b([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/.exec(m[3] ?? '');
-      const message = el && failureMessage(`${xmlText(el[3] ?? '')}\n${attr('message', el[2])}`);
+      const el = /<(error|failure)\b([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/d.exec(body);
+      const at = m.indices![3]![0];
+      const text = el?.indices![3] ? xml.slice(at + el.indices[3][0], at + el.indices[3][1]) : '';
+      const message = el && failureMessage(`${xmlText(text)}\n${attr('message', el[2])}`);
       if (message) t.message = message;
     }
     out.push(t);

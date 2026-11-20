@@ -86,7 +86,10 @@ function files(exp: CoverageExport, map?: SourceMap): FileCov[] {
   return [...out.values()].sort((a, b) => (a.path < b.path ? -1 : 1));
 }
 
-const xml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+// characters XML 1.0 does not allow (control characters, U+FFFE/U+FFFF, lone surrogates: with /u a pair is one
+// code point, so the range only meets lone halves) are dropped; a parser rejects the whole file for one
+const xml = (s: string) => s.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\uFFFE\uFFFF\uD800-\uDFFF]/gu, '')
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 /** SonarQube Generic Test Coverage (sonar.coverageReportPaths). */
 export function toSonar(exp: CoverageExport, map?: SourceMap): string {

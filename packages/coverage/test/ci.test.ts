@@ -84,6 +84,16 @@ test('ci: JUnit carries the failure message (escaped) and the reason of an exclu
   assert.equal(back.find((t) => t.name === 'b')!.message, e.tests[1].message);
 });
 
+test('ci: characters XML 1.0 forbids are dropped from JUnit, Sonar and Cobertura', () => {
+  const e = exp(1, [0]);
+  e.tests[1].message = 'bell \u0007 nul \u0000 lone \uD800 \uFFFE kept 😀\ttab';
+  e.objects[0].name = 'P\u0001';
+  const bad = /[\x00-\x08\x0B\x0C\x0E-\x1F\uFFFE\uFFFF\uD800-\uDFFF]/u;
+  for (const x of [toJunit(e), toSonar(e), toCobertura(e)]) assert.ok(!bad.test(x), x);
+  // (minimal well-formedness: the parser reads it back)
+  assert.equal(parseJunit(toJunit(e)).find((t) => t.name === 'b')!.message, 'bell  nul  lone   kept 😀\ttab');
+});
+
 test('ci: merging adds hits and joins test lists; thresholds read the merged hits', () => {
   const a = exp(0, [0]);
   const b = { ...exp(1, [0]), tests: [exp(1, [0]).tests[1], exp(1, [0]).tests[0]] }; // other order

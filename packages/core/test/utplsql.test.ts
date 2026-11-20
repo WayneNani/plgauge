@@ -133,3 +133,16 @@ test('failureSummary groups by suite and message, the largest first, capped', ()
   assert.equal(s[3], 'WARNING: … and 10 more tests in 10 more groups');
   assert.deepEqual(failureSummary(t.filter((x) => x.status === 'passed'), 'x'), []);
 });
+
+test('junit: bad numeric entities do not end the parse, "</testcase>" quoted in CDATA keeps the message, cut by code points', () => {
+  const xml = `<testcase classname="a.b" name="&#x110000;&#99999999;&#xD800;&#12ab;&#65;&#x42;" time="1"/>
+<testcase classname="a.b" name="q" time="1"><failure><![CDATA[Actual: 1 was expected to equal 2
+at "S.T", line 3 l := '</testcase><error>';]]></failure></testcase>
+<testcase classname="a.b" name="r" time="1"/>`;
+  const t = parseJunit(xml);
+  assert.deepEqual(t.map((x) => [x.name, x.status]), [['���&#12ab;AB', 'passed'], ['q', 'failed'], ['r', 'passed']]);
+  assert.equal(t[1].message, 'Actual: 1 was expected to equal 2');
+  const cut = failureMessage(`${'x'.repeat(298)}😀😀😀`)!;
+  assert.equal(cut, `${'x'.repeat(298)}😀…`);
+  assert.ok(!/[\uD800-\uDFFF]/u.test(cut), 'no lone surrogate');
+});
