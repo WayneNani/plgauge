@@ -336,3 +336,77 @@ test('a leftover journal entry does not overwrite newer work in the unit', { ski
     await conn.close();
   }
 });
+
+test('beforeTests switches a test seam for the tests, afterTests switches it back at the end, also when the run fails', { skip: !db && 'PLGAUGE_DB not set', timeout: 900_000 }, async () => {
+  const p = mkdtempSync(join(tmpdir(), 'plgauge-hooks-'));
+  mkdirSync(join(p, 'src'));
+  // the code under test reads the seam (a synonym); its test passes only with the mock behind it
+  writeFileSync(join(p, 'src', 'seam.sql'), `CREATE OR REPLACE FUNCTION plgauge_seam_real RETURN VARCHAR2 IS BEGIN RETURN 'real'; END;
+/
+CREATE OR REPLACE FUNCTION plgauge_seam_mock RETURN VARCHAR2 IS BEGIN RETURN 'mock'; END;
+/
+CREATE OR REPLACE SYNONYM plgauge_seam FOR plgauge_seam_real
+/
+CREATE OR REPLACE FUNCTION plgauge_hooked(p_x NUMBER) RETURN NUMBER IS
+BEGIN
+  IF plgauge_seam = 'mock' THEN
+    RETURN p_x + 1;
+  END IF;
+  RETURN p_x;
+END;
+/
+CREATE OR REPLACE PACKAGE plgauge_hooked_test AS
+  --%suite
+
+  --%test
+  PROCEDURE mocked;
+END;
+/
+CREATE OR REPLACE PACKAGE BODY plgauge_hooked_test AS
+  PROCEDURE mocked IS BEGIN ut.expect(plgauge_hooked(1)).to_equal(2); END;
+END;
+/
+`);
+  writeFileSync(join(p, 'before.sql'), 'CREATE OR REPLACE SYNONYM plgauge_seam FOR plgauge_seam_mock\n/\n');
+  writeFileSync(join(p, 'after.sql'), 'CREATE OR REPLACE SYNONYM plgauge_seam FOR plgauge_seam_real\n/\n');
+  writeFileSync(join(p, 'broken.sql'), 'SELECT * FROM plgauge_no_such_table\n/\n');
+  const project = (before: string[], after: string[]) =>
+    writeFileSync(join(p, 'plgauge.json'), JSON.stringify({ install: ['src/seam.sql'], mutate: ['src/seam.sql'], tests: ['plgauge_hooked_test'], beforeTests: before, afterTests: after }));
+  const conn = await oracledb.getConnection(parseDbUrl(db!));
+  const target = async () => (await conn.execute<[string]>(`select table_name from user_synonyms where synonym_name = 'PLGAUGE_SEAM'`)).rows?.[0]?.[0];
+  try {
+    project(['before.sql'], ['after.sql']);
+    const cov = await runCoverage(await projectCoverageConfig(p, db!, true), () => {});
+    assert.deepEqual(cov.baseline.tests.map((t) => t.status), ['passed'], 'the tests ran against the mock');
+    assert.equal(cov.afterTestsFailed, undefined);
+    assert.equal(await target(), 'PLGAUGE_SEAM_REAL', 'coverage: seam back after the run');
+    const mut = await runMutation({ dir: p, dbUrls: [db!], mode: 'schema' });
+    assert.equal(mut.tests, 1, 'the test passed the baseline: it ran against the mock');
+    assert.ok(mut.results.some((r) => r.status === 'KILLED'));
+    assert.equal(mut.afterTestsFailed, undefined);
+    assert.equal(await target(), 'PLGAUGE_SEAM_REAL', 'mutation: seam back after the run');
+
+    // a failing beforeTests script fails the run; afterTests resets what the first script switched
+    project(['before.sql', 'broken.sql'], ['after.sql']);
+    await assert.rejects(runCoverage(await projectCoverageConfig(p, db!, false), () => {}), /broken\.sql/);
+    assert.equal(await target(), 'PLGAUGE_SEAM_REAL', 'coverage: seam back after a failed run');
+    await assert.rejects(runMutation({ dir: p, dbUrls: [db!], mode: 'schema', skipInstall: true }), /broken\.sql/);
+    assert.equal(await target(), 'PLGAUGE_SEAM_REAL', 'mutation: seam back after a failed run');
+
+    // a failing afterTests script is reported; the scripts after it still run, the originals are back
+    project(['before.sql'], ['broken.sql', 'after.sql']);
+    const bad = await runCoverage(await projectCoverageConfig(p, db!, false), () => {});
+    assert.match(bad.afterTestsFailed ?? '', /broken\.sql/);
+    assert.equal(await target(), 'PLGAUGE_SEAM_REAL', 'the later afterTests script ran');
+    const src = await conn.execute<[number]>(`select count(*) from user_source where name = 'PLGAUGE_HOOKED' and lower(text) like '%cov$%'`);
+    assert.equal(src.rows![0][0], 0, 'originals restored');
+    const badMut = await runMutation({ dir: p, dbUrls: [db!], mode: 'schema', skipInstall: true });
+    assert.match(badMut.afterTestsFailed?.join() ?? '', /broken\.sql/);
+    assert.equal(await target(), 'PLGAUGE_SEAM_REAL');
+  } finally {
+    for (const s of ['drop package plgauge_hooked_test', 'drop function plgauge_hooked', 'drop synonym plgauge_seam', 'drop function plgauge_seam_mock', 'drop function plgauge_seam_real']) {
+      await conn.execute(s).catch(() => undefined);
+    }
+    await conn.close();
+  }
+});

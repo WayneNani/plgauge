@@ -82,7 +82,7 @@ Notes on `coverage`:
   the merge base. It needs the source files: a project, or `--src dir`.
 - **Projects:** `--skip-install` skips the project's install scripts.
 - **Exit codes:** 3 when a threshold is missed, 4 when test results differ with instrumentation, 1 when objects
-  could not be restored (then run `restore`).
+  could not be restored (then run `restore`) or an `afterTests` script failed.
 
 ## Configuration
 
@@ -100,12 +100,19 @@ Example: [`examples/order_pricing/coverage-config.json`](../../examples/order_pr
 | `perTest` | Record which test reaches which probe (default `true`) |
 | `baselineRuns` | Test runs without coverage before measuring (default 2) |
 | `schemas`, `runtimeSchema` | Measure several schemas, see [Multiple schemas](#multiple-schemas) |
+| `beforeTests`, `afterTests` | SQL*Plus-style scripts, relative to the config file. `beforeTests` runs once before the first test run (switch test seams: synonyms to mocks, say); `afterTests` runs once at the very end, after the originals are restored, also when the run fails or is cancelled |
 
 ### Projects (`plgauge.json`)
 
 A project is a directory with `plgauge.json` (`install`, `mutate`, `tests`), the same file the mutation tool reads.
 `bin/plgauge coverage <dir> --db oracle://…` runs the install scripts and measures exactly the units of the
-`mutate` files with the project's `tests`. No `coverage-config.json` is needed.
+`mutate` files with the project's `tests`. No `coverage-config.json` is needed. Its `beforeTests` and
+`afterTests` work as in `coverage-config.json`, relative to the project.
+
+The scripts run on a connection of their own, in the same schema as the install scripts, and are committed
+at the end. What the tests need must therefore persist: DDL or committed data, not session state. A failing
+`beforeTests` script fails the run. A failing `afterTests` script never stops the restore or the later
+`afterTests` scripts; it is reported and the run exits with code 1.
 
 ### Environment variables
 
@@ -123,7 +130,8 @@ A project is a directory with `plgauge.json` (`install`, `mutate`, `tests`), the
    the original settings (`plsql_optimize_level`, `plsql_code_type`, `plsql_ccflags`, …). If an object does not
    compile, the original stays active.
 4. Test run on the instrumented code; collect the probes.
-5. Restore the originals (also on errors, in a `finally`) and recompile invalidated dependents.
+5. Restore the originals (also on errors, in a `finally`) and recompile invalidated dependents, then run the
+   `afterTests` scripts (`beforeTests` ran before step 1).
 6. Compare the test results of steps 1 and 4 and write the report.
 
 Before instrumenting, each original is saved in a journal; a new run (or `restore`) first restores whatever an

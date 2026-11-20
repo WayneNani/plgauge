@@ -26,5 +26,7 @@ export async function projectCoverageConfig(dir: string, db: string, install: bo
     include: names.size ? `^(${[...names].map(esc).join('|')})$` : undefined,
     sqlProbes: 'auto',
     installScripts,
+    beforeTests: p.beforeTests.map((s) => join(dir, s)),
+    afterTests: p.afterTests.map((s) => join(dir, s)),
   };
 }

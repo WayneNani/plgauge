@@ -8,7 +8,9 @@
  */
 import oracledb from 'oracledb';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { tokenize } from './lexer.js';
+import { splitScript } from './script.js';
 import { codeFingerprint, fingerprint, journalForget, journalNote, journalRemember, journalSettle, journalUnnote, type JournalEntry } from './journal.js';
 
 export interface ConnectConfig {
@@ -541,4 +543,23 @@ export async function runScript(conn: oracledb.Connection, statements: string[],
   } finally {
     await conn.execute(`alter session set current_schema = ${quoteIdent(home)}`).catch(() => {});
   }
+}
+
+/**
+ * The scripts of beforeTests / afterTests, committed at the end like SQL*Plus does on exit (the
+ * caller's connection is closed after them). allOf: a failing script does not stop the later
+ * ones, so a teardown resets what it can; the failures come as one error at the end.
+ */
+export async function runTestHooks(conn: oracledb.Connection, paths: string[], allOf = false): Promise<void> {
+  const failed: string[] = [];
+  for (const p of paths) {
+    try {
+      await runScript(conn, splitScript(readFileSync(p, 'utf8')), p);
+    } catch (e) {
+      if (!allOf) throw e;
+      failed.push(firstLine(e));
+    }
+  }
+  await conn.commit();
+  if (failed.length) throw new Error(failed.join('; '));
 }
