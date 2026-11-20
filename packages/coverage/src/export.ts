@@ -9,7 +9,8 @@
  * Probes reached outside any test (suite beforeall/afterall) are attributed to explicit
  * setup entries ("#owner.package", setup: true) instead of to a test.
  * Optional since plgauge: `statements` with their line range, so that a consumer can find
- * the statement around a position (mutation testing selects tests with it).
+ * the statement around a position (mutation testing selects tests with it); per test the
+ * `message` of a failure.
  */
 import type { RunReport } from './run.js';
 import type { Span } from './model.js';
@@ -27,6 +28,8 @@ export interface CoverageExport {
     status: 'passed' | 'failed' | 'error' | 'skipped' | 'excluded' | 'flaky' | 'unknown';
     ms: number;
     baselineRuns: number;
+    /** Optional: why the test failed (first line of utPLSQL's report). */
+    message?: string;
   }[];
   objects: {
     owner: string;
@@ -64,6 +67,7 @@ export function toCoverageExport(r: RunReport): CoverageExport {
       status: t.setup ? 'unknown' : t.status === 'flaky' ? 'flaky' : t.baselineStatus !== 'passed' && t.baselineStatus !== 'unknown' ? 'excluded' : t.status,
       ms: Math.round(t.ms * 1000) / 1000,
       baselineRuns: r.baselineRuns ?? 1,
+      ...(t.message ? { message: t.message } : {}),
     })),
     objects: r.objects.map((o) => {
       const lines: Record<string, { hits: number; tests: number[] }> = {};

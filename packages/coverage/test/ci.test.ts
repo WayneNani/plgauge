@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { parseUnifiedDiff } from '@plgauge/core';
+import { parseJunit, parseUnifiedDiff } from '@plgauge/core';
 import {
   checkQuotas, mergeExports, quotas, restrictToChanged, sourceMap, toCobertura, toJunit, toLcov, toSonar, type CoverageExport,
 } from '@plgauge/coverage';
@@ -70,6 +70,18 @@ test('ci: JUnit lists the tests per package', () => {
   const j = toJunit(exp(1, [0]));
   assert.match(j, /<testsuite name="s.t" tests="2" failures="1" errors="0" skipped="0" time="0.007">/);
   assert.match(j, /<testcase classname="s.t" name="b" time="0.004"><failure message="failed"\/><\/testcase>/);
+});
+
+test('ci: JUnit carries the failure message (escaped) and the reason of an exclusion', () => {
+  const e = exp(1, [0]);
+  e.tests[1].message = `Actual: 'a<b>&"c"' (varchar2) was expected to equal: 'x' (varchar2)`;
+  e.tests.push({ path: 's.t.c', setup: false, status: 'excluded', ms: 0, baselineRuns: 1, message: 'ORA-04063: package body "S.T" has errors' });
+  const j = toJunit(e);
+  assert.match(j, /<failure message="Actual: 'a&lt;b&gt;&amp;&quot;c&quot;' \(varchar2\)/);
+  assert.match(j, /<skipped message="excluded: ORA-04063: package body &quot;S.T&quot; has errors"\/>/);
+  // round trip through the parser
+  const back = parseJunit(j);
+  assert.equal(back.find((t) => t.name === 'b')!.message, e.tests[1].message);
 });
 
 test('ci: merging adds hits and joins test lists; thresholds read the merged hits', () => {

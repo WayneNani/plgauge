@@ -14,7 +14,7 @@ import oracledb from 'oracledb';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import {
-  connect, databaseInfo, dbIdent, firstLine, utInfoContext, restoreJournal, ensureJournal, journalEntries, loadObjects, lockRun, replaceSourceDetailed, restoreAll, RUN_LOCK, runScript, sha256, splitScript,
+  connect, databaseInfo, dbIdent, failureSummary, firstLine, utInfoContext, restoreJournal, ensureJournal, journalEntries, loadObjects, lockRun, replaceSourceDetailed, restoreAll, RUN_LOCK, runScript, sha256, splitScript,
   runTestsJunit as runTests, suiteTests, tryExecute, type SourceObject, type TestCase, type TestRun,
 } from '@plgauge/core';
 import { instrument } from './instrument.js';
@@ -51,6 +51,8 @@ export interface RunConfig {
    * crashed run left: installed earlier, they would be overwritten by those old originals.
    */
   installScripts?: string[];
+  /** Exit with code 5 (CLI) when tests fail or error already without instrumentation. */
+  failOnTestErrors?: boolean;
 }
 
 export type { TestCase, TestRun } from '@plgauge/core';
@@ -239,6 +241,8 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       baseline = await testRun(cfg.tests, null);
       observed.push(baseline.run.tests);
     }
+    // red before any instrumentation: their objects' coverage is low for that reason, not for missing tests
+    for (const w of failureSummary(baseline.run.tests, 'before instrumentation')) say(w);
     say('2/4 Test run with utPLSQL coverage (DBMS_PROFILER) …');
     await fresh();
     const utCov = await testRun(cfg.tests, schemas);
@@ -489,8 +493,10 @@ async function loadTestCatalog(
       const run = caseOf(instrumented, suite, description);
       const status = run?.status ?? 'unknown';
       if (status === 'unknown' && !hits.perTest.has(full)) continue; // not part of this run
+      const base = caseOf(baseline, suite, description);
+      const message = run?.message ?? base?.message;
       tests.push({
-        path: full, suite, description, setup: false, status, baselineStatus: caseOf(baseline, suite, description)?.status ?? 'unknown', ms: (run?.time ?? 0) * 1000,
+        path: full, suite, description, setup: false, status, baselineStatus: base?.status ?? 'unknown', ms: (run?.time ?? 0) * 1000, ...(message ? { message } : {}),
       });
     }
   }

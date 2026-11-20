@@ -4,6 +4,7 @@
  *
  *   plgauge coverage --config coverage-config.json [--out report]  measure coverage, write report ("run" is the old name)
  *   plgauge coverage [dir] --db oracle://…               same for a project with plgauge.json (its units, its tests)
+ *        --fail-on-test-errors                          exit code 5 if tests fail or error already without instrumentation
  *   plgauge instrument <file.sql> [--no-sql]             print instrumented source (offline)
  *   plgauge deploy <file.sql ...> --config coverage-config.json    run SQL*Plus-style scripts (demo setup)
  *   plgauge report <coverage.json> [--mutation run.json] re-render HTML from saved JSON; with mutation results: joint report
@@ -112,6 +113,7 @@ async function main() {
       const configFile = opt('config');
       const db = opt('db') ?? process.env.PLGAUGE_DB?.split(',')[0];
       const skipInstall = flag('skip-install');
+      const failOnTestErrors = flag('fail-on-test-errors');
       const th = thresholds();
       const diffRef = opt('diff');
       const src = opt('src');
@@ -137,6 +139,12 @@ async function main() {
         console.error(`Changed code (since ${diffRef}): statements ${q.stmt.covered}/${q.stmt.total} · branches ${q.branch.covered}/${q.branch.total} · conditions ${q.cond.covered}/${q.cond.total}`);
       }
       enforce(checkQuotas(exp, th.cov));
+      // tests red without instrumentation (the run printed why): the coverage of their code says little
+      const red = report.baseline.tests.filter((t) => t.status === 'failed' || t.status === 'error').length;
+      if (red && (failOnTestErrors || cfg.failOnTestErrors)) {
+        console.error(`${red} tests fail or error without instrumentation`);
+        process.exitCode = 5;
+      }
       // changed code left in the schema: always a failure (set after the gate above)
       if (report.unrestored) {
         console.error(`ERROR: ${report.unrestored} objects not restored: plgauge restore`);

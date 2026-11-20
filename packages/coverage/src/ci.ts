@@ -184,8 +184,9 @@ export function toJunit(exp: CoverageExport): string {
     out.push(`  <testsuite name="${xml(suite)}" tests="${ts.length}" failures="${fail}" errors="${err}" skipped="${skip}" time="${time.toFixed(3)}">`);
     for (const t of ts) {
       const name = t.path.split('.').pop()!;
-      const body = t.status === 'failed' ? '<failure message="failed"/>' : t.status === 'error' ? '<error message="error"/>'
-        : SKIPPED.has(t.status) ? `<skipped message="${t.status}"/>` : '';
+      const msg = xml(t.message ?? t.status);
+      const body = t.status === 'failed' ? `<failure message="${msg}"/>` : t.status === 'error' ? `<error message="${msg}"/>`
+        : SKIPPED.has(t.status) ? `<skipped message="${xml(t.status + (t.message ? `: ${t.message}` : ''))}"/>` : '';
       out.push(`    <testcase classname="${xml(suite)}" name="${xml(name)}" time="${(t.ms / 1000).toFixed(3)}"${body ? `>${body}</testcase>` : '/>'}`);
     }
     out.push('  </testsuite>');
@@ -212,7 +213,7 @@ export function mergeExports(list: CoverageExport[]): CoverageExport {
       k = tests.length;
       testIdx.set(t.path, k);
       tests.push({ ...t });
-    } else if (t.status === 'failed' || t.status === 'error') tests[k].status = t.status;
+    } else if (t.status === 'failed' || t.status === 'error') Object.assign(tests[k], { status: t.status, message: t.message });
     return k;
   });
   const objs = new Map<string, Obj>();
