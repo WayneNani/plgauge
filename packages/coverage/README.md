@@ -81,6 +81,8 @@ Notes on `coverage`:
 - **Diff mode:** `--diff origin/main` (on `coverage` and `check`) applies the thresholds only to lines changed since
   the merge base. It needs the source files: a project, or `--src dir`.
 - **Projects:** `--skip-install` skips the project's install scripts.
+- **Fewer test runs:** `--no-warmup` and `--no-utplsql-compare` skip the warm-up run and the run with utPLSQL's own
+  coverage (see [Performance](#performance)).
 - **Exit codes:** 3 when a threshold is missed, 4 when test results differ with instrumentation, 1 when objects
   could not be restored (then run `restore`).
 
@@ -99,6 +101,8 @@ Example: [`examples/order_pricing/coverage-config.json`](../../examples/order_pr
 | `sqlProbes` | Instrument SQL as well; `"auto"` = from 23ai on |
 | `perTest` | Record which test reaches which probe (default `true`) |
 | `baselineRuns` | Test runs without coverage before measuring (default 2) |
+| `warmup` | A warm-up test run before them (default `true`); `false` = `--no-warmup` |
+| `utplsqlCompare` | A test run with utPLSQL's own coverage for the line-rate comparison (default `true`); `false` = `--no-utplsql-compare` |
 | `schemas`, `runtimeSchema` | Measure several schemas, see [Multiple schemas](#multiple-schemas) |
 
 ### Projects (`plgauge.json`)
@@ -117,8 +121,10 @@ A project is a directory with `plgauge.json` (`install`, `mutate`, `tests`), the
 
 ## How a run works
 
-1. A warm-up run, then `baselineRuns` test runs **without** coverage (reference for results and run time).
-2. A test run **with** utPLSQL coverage (line rate for comparison).
+1. A warm-up run (utPLSQL builds its annotation cache), then `baselineRuns` test runs **without** coverage
+   (reference for results and run time). Without the warm-up (`warmup: false`) the first baseline run warms up:
+   its results count, but the run time comes from the last run, and with `baselineRuns: 1` there is none.
+2. A test run **with** utPLSQL coverage (line rate for comparison), unless `utplsqlCompare` is `false`.
 3. Fetch the source through `DBMS_PREPROCESSOR` (conditional compilation resolved), instrument it and compile it with
    the original settings (`plsql_optimize_level`, `plsql_code_type`, `plsql_ccflags`, …). If an object does not
    compile, the original stays active.
@@ -182,7 +188,8 @@ plgauge attributes every hit to the running utPLSQL test:
 
 ## Flaky tests
 
-Before measuring, the tests run twice without coverage (`baselineRuns`), then once with utPLSQL coverage. Every run
+Before measuring, the tests run twice without coverage (`baselineRuns`), then once with utPLSQL coverage (unless
+`utplsqlCompare` is `false`; then only the baseline runs are compared). Every run
 starts with fresh package state (`DBMS_SESSION.RESET_PACKAGE`), like the run on the freshly compiled instrumented code.
 
 A test whose result changes between these runs is flaky:
@@ -256,6 +263,14 @@ with spaces. The database run still uses `DBMS_PREPROCESSOR`.
   plgauge takes 48–90 ms, compared with 6 ms without coverage and 30–50 ms with utPLSQL's own coverage. For code with
   a real SQL share the relative overhead is much smaller.
 - The runtime package `cov$` is compiled with `plsql_optimize_level = 3`, natively where allowed.
+- **Fewer test runs.** A run takes the tests up to five times: warm-up, two baseline runs, utPLSQL coverage,
+  instrumented. On a code base with 5,238 tests (62 s per plain run) the warm-up and the run with utPLSQL's own coverage
+  (about 83 s with `DBMS_PROFILER`) were 43 % of a 339 s run. If you only need plgauge's metrics:
+  - `--no-utplsql-compare` (`utplsqlCompare: false`) drops the run with utPLSQL coverage. The report then leaves out
+    the utPLSQL line rate instead of showing 0 %; the exports never contained it.
+  - `--no-warmup` (`warmup: false`) lets the first baseline run warm up. Keep `baselineRuns` at 2 or more if you want
+    the baseline run time in the report.
+  - `coverage.json` records both choices (`warmup`, `utplsqlCompare`), and the report names the skipped runs.
 
 ## Tests
 
