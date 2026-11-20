@@ -21,7 +21,8 @@ Contents:
 
 ## Quick start
 
-plgauge is not published on npm; run it from a checkout with `bin/plgauge`.
+The examples below run from a checkout with `bin/plgauge`; an installed plgauge (`npm install -g plgauge`) takes the
+same commands as `plgauge`.
 
 ```bash
 export PLGAUGE_DB=oracle://user:pw@host:port/service          # several workers: comma-separated

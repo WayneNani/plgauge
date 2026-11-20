@@ -6,6 +6,7 @@
  *   plgauge coverage [dir] --db oracle://…               same for a project with plgauge.json (its units, its tests)
  *        --no-warmup --no-utplsql-compare               skip the warm-up run / the run with utPLSQL's own coverage
  *        --fail-on-test-errors                          exit code 5 if tests fail or error already without instrumentation
+ *   plgauge --version                                    the version of a release build
  *   plgauge instrument <file.sql> [--no-sql]             print instrumented source (offline)
  *   plgauge deploy <file.sql ...> --config coverage-config.json    run SQL*Plus-style scripts (demo setup)
  *   plgauge report <coverage.json> [--mutation run.json] re-render HTML from saved JSON; with mutation results: joint report
@@ -41,6 +42,9 @@ import {
   loadConfig as loadProject, mutateFiles, projectCoverageConfig, projectMutants, runMutation, switchable, textReport,
   type LinkedResult, type Point,
 } from '@plgauge/mutation';
+
+/** Set by the npm build (scripts/build.mjs); a checkout has none. */
+declare const PLGAUGE_VERSION: string | undefined;
 
 const args = process.argv.slice(2);
 const cmd = args.shift();
@@ -113,6 +117,10 @@ function loadConfig(path: string | undefined): RunConfig {
 
 async function main() {
   switch (cmd) {
+    case '--version':
+    case 'version':
+      console.log(typeof PLGAUGE_VERSION === 'string' ? PLGAUGE_VERSION : 'checkout (not a release build)');
+      break;
     case 'coverage':
     case 'run': {
       const configFile = opt('config');

@@ -2,8 +2,7 @@
 # Copy into .gitlab-ci.yml of a project with plgauge.json. Needs a runner with Docker-in-Docker.
 # Coverage appears in merge requests (Cobertura), test results as JUnit.
 variables:
-  PLGAUGE_REPO: https://github.com/WayneNani/plgauge.git
-  PLGAUGE_REF: main
+  PLGAUGE_VERSION: "0.1"                                   # npm version range of plgauge
   DOCKER_HOST: tcp://docker:2375
   DOCKER_TLS_CERTDIR: ""
   GIT_DEPTH: 0                                             # the diff mode needs the merge base
@@ -15,10 +14,10 @@ plsql:
   timeout: 45 minutes
   before_script:
     - apt-get update -qq && apt-get install -y -qq docker.io >/dev/null
-    - git clone --depth 1 --branch "$PLGAUGE_REF" "$PLGAUGE_REPO" /opt/plgauge && (cd /opt/plgauge && npm ci)
-    - export PLGAUGE=/opt/plgauge/bin/plgauge
+    - npm install --prefix /opt/plgauge --no-audit --no-fund "plgauge@$PLGAUGE_VERSION"
+    - export PLGAUGE=/opt/plgauge/node_modules/.bin/plgauge
     # the database container runs next to the job: reach it through the dind host
-    - export PLGAUGE_DB=$(/opt/plgauge/ci/setup-db.sh | tail -1 | sed 's/127.0.0.1/docker/')
+    - export PLGAUGE_DB=$(/opt/plgauge/node_modules/plgauge/ci/setup-db.sh | tail -1 | sed 's/127.0.0.1/docker/')
   script:
     - $PLGAUGE coverage . --out coverage --min-branch 70 --min-stmt 80
     - $PLGAUGE export coverage/coverage.json --format cobertura --src . --out coverage/cobertura.xml

@@ -3,6 +3,18 @@
 All notable changes to plgauge are listed here. Versions follow [Semantic Versioning](https://semver.org/);
 until 1.0, a minor version may change options, file formats and output.
 
+## [0.1.1] - 2026-11-20
+
+### Added
+
+- plgauge is on npm: `npm install -g plgauge` or `npx plgauge`. The package is one bundled JavaScript file plus
+  the Oracle driver in thin mode; `ci/setup-db.sh` comes with it.
+- `plgauge --version`.
+
+### Changed
+
+- The CI templates install plgauge from npm (`PLGAUGE_VERSION`) instead of cloning the repository.
+
 ## [0.1.0] - 2026-11-20
 
 First public release. plgauge merges two earlier prototypes, plcov (coverage) and plmut (mutation testing),
@@ -45,4 +57,5 @@ onto one TypeScript core with a single PL/SQL parser.
 - Oracle Database 23ai/26ai only.
 - Not on npm yet: run it from a checkout (`bin/plgauge`).
 
+[0.1.1]: https://github.com/WayneNani/plgauge/releases/tag/v0.1.1
 [0.1.0]: https://github.com/WayneNani/plgauge/releases/tag/v0.1.0

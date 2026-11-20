@@ -42,7 +42,8 @@ The same test suite (10 utPLSQL tests), measured on Oracle AI Database 26ai Free
 
 ## Quick start
 
-Prerequisites: Node.js 22 or newer and Docker or Podman. plgauge is not published on npm; run it from a checkout with `bin/plgauge`.
+Prerequisites: Node.js 22 or newer and Docker or Podman. The examples live in the repository, so this runs from a
+checkout with `bin/plgauge`; an installed plgauge (`npm install -g plgauge`) takes the same commands as `plgauge`.
 
 ```bash
 npm ci
@@ -58,7 +59,7 @@ connection config instead of a project: `bin/plgauge coverage --config coverage-
 
 ## Commands
 
-All commands are subcommands of `bin/plgauge`. `run` is the old name of `coverage` and still works.
+All commands are subcommands of `plgauge` (`bin/plgauge` in a checkout). `run` is the old name of `coverage` and still works.
 
 | Command | Purpose |
 |---|---|

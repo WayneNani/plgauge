@@ -8,3 +8,4 @@ eval/*.html
 examples/*/report.*
 corpus/db.local.json
 *.tsbuildinfo
+dist/

@@ -12,13 +12,13 @@ no build step.
 | `packages/mutation` | Mutation point finder on the core parser, schema and naive rewriters, runs, reports |
 | `packages/report` | HTML report (coverage, optionally joined with mutation results) |
 | `packages/cli` | The `plgauge` command |
-| `bin/plgauge` | Wrapper that runs the CLI from a checkout |
+| `bin/plgauge` | Wrapper that runs the CLI from the sources of a checkout |
 | `examples/` | `order_pricing` (coverage demo) and `shop_pricing` (mutation, with the expected verdicts in `expected.tsv`) |
 | `eval/` | Runs on public open-source code; `src` links into `corpus/.cache` |
 | `corpus/` | `fetch.sh` downloads the robustness corpus at fixed commits into `corpus/.cache` (not checked in) |
 | `ci/` | `setup-db.sh` (Oracle Free plus utPLSQL in a container) and CI templates for users |
 | `baseline/` | Frozen output of the earlier prototypes (plcov, plmut in Go) for the parity checks |
-| `scripts/` | Parity checks and debugging helpers |
+| `scripts/` | Parity checks, debugging helpers, the npm build (`build.mjs`) and the package test (`pack-test.sh`) |
 
 ## One parser for both tools
 
@@ -82,7 +82,20 @@ Intended differences from the earlier versions are listed in `baseline/plmut/PAR
 `scripts/sql-compile-check.ts` compiles the schema rewrite of a corpus in a scratch schema. It checks that
 switched SQL mutants are valid SQL.
 
-## History
+## Releases
+
+The npm package `plgauge` is one file, `dist/plgauge.mjs`, that esbuild bundles from `packages/cli/src/cli.ts`
+(`npm run build`). Only `oracledb` stays a dependency. The internal packages `@plgauge/*` are not published.
+`npm run pack:test` packs the package, installs it into an empty project and runs it through `npx`; with
+`PLGAUGE_PACK_DB` (an oracle:// URL of a scratch schema) it also runs a coverage run against that database.
+
+A release:
+
+1. Set the version everywhere: `npm version <x.y.z> --no-git-tag-version --workspaces --include-workspace-root`.
+2. Add a section to `CHANGELOG.md`, commit.
+3. `npm publish`. `prepublishOnly` runs the typecheck, the tests, the build and the package test first.
+4. Tag `v<x.y.z>`, push branch and tag, and create the GitHub release from the changelog section.
+
 
 plgauge merges two prototypes:
 

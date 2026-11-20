@@ -1,29 +1,59 @@
 {
   "name": "plgauge",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Measures how good your utPLSQL tests are: branch, condition and MC/DC coverage plus mutation testing",
+  "keywords": [
+    "plsql",
+    "oracle",
+    "utplsql",
+    "coverage",
+    "mc/dc",
+    "mutation-testing",
+    "testing"
+  ],
+  "homepage": "https://github.com/WayneNani/plgauge#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WayneNani/plgauge.git"
+  },
+  "bugs": {
+    "url": "https://github.com/WayneNani/plgauge/issues"
+  },
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "plgauge": "dist/plgauge.mjs"
+  },
+  "files": [
+    "dist/",
+    "ci/setup-db.sh",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "typecheck": "tsc",
     "test": "node --import tsx --test --test-concurrency=1 packages/*/test/*.test.ts",
     "plgauge": "tsx packages/cli/src/cli.ts",
     "parity:finder": "tsx scripts/finder-parity.ts",
     "parity:coverage": "tsx scripts/coverage-parity.ts",
-    "demo": "tsx packages/cli/src/cli.ts coverage --config examples/order_pricing/coverage-config.json"
+    "demo": "tsx packages/cli/src/cli.ts coverage --config examples/order_pricing/coverage-config.json",
+    "build": "node scripts/build.mjs",
+    "pack:test": "bash scripts/pack-test.sh",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build && npm run pack:test"
   },
-  "license": "Apache-2.0",
-  "dependencies": {},
+  "dependencies": {
+    "oracledb": "^26.0.0"
+  },
   "devDependencies": {
     "@types/node": "^26.6.6",
     "@types/oracledb": "^26.0.1",
+    "esbuild": "^0.28.2",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3"
   },
-  "private": true,
-  "type": "module",
   "workspaces": [
     "packages/*"
-  ],
-  "engines": {
-    "node": ">=22"
-  }
+  ]
 }

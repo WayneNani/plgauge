@@ -43,11 +43,21 @@ a check that is missing. On the `shop_pricing` example, 17 of 81 mutants survive
 - Node.js 22 or newer.
 - Oracle Database 23ai/26ai with utPLSQL 3.2.2 or newer. The Free edition is enough. Other versions are not
   tested.
-- For the quick start: Docker or Podman.
+- For the quick start: Docker or Podman, and git.
 
 > **Use a development or test schema, never production.** plgauge recompiles the code it measures. Mutation
 > testing also needs strong rights: `CREATE ANY CONTEXT`, and `ALTER SYSTEM` to end a hung test session.
 > [`ci/setup-db.sh`](ci/setup-db.sh) shows exactly what it grants.
+
+## Install
+
+```bash
+npm install -g plgauge
+plgauge --version
+```
+
+Or per project: `npm install --save-dev plgauge`, then `npx plgauge …`. The package is one JavaScript file plus
+the Oracle driver in thin mode, so no Oracle client is needed.
 
 ## Quick start
 
@@ -86,8 +96,8 @@ Mutation Score 77.8 % · 14 Tests · Baseline 77ms · run time 19.929s
 
 When you are done, remove the database with `docker rm -f plgauge-db` (or `podman rm -f plgauge-db`).
 
-`bin/plgauge` runs the tool from the checkout; plgauge is not on npm yet. To call it from anywhere, put the
-`bin` directory on your `PATH` or create a symlink to `bin/plgauge`.
+The quick start uses the checkout for its examples and `bin/plgauge` to run the tool from the sources. For your
+own projects, install plgauge from npm as shown above.
 
 ## Use it on your own code
 
@@ -112,8 +122,8 @@ Then:
 
 ```bash
 export PLGAUGE_DB=oracle://user:password@host:1521/service
-bin/plgauge coverage path/to/project --out coverage
-bin/plgauge mutate run path/to/project --json mutation.json --report mutation.html
+plgauge coverage path/to/project --out coverage
+plgauge mutate run path/to/project --json mutation.json --report mutation.html
 ```
 
 If the code is already installed, add `--skip-install`. For a faster run without utPLSQL's own line rate, add
@@ -124,8 +134,8 @@ and the [coverage documentation](packages/coverage/README.md#configuration).
 ## In CI
 
 Copy [`ci/templates/github-actions.yml`](ci/templates/github-actions.yml) or
-[`ci/templates/gitlab-ci.yml`](ci/templates/gitlab-ci.yml) into your project. They start a database with
-`ci/setup-db.sh` and then:
+[`ci/templates/gitlab-ci.yml`](ci/templates/gitlab-ci.yml) into your project. They install plgauge from npm,
+start a database with `ci/setup-db.sh` (it comes with the package) and then:
 
 - measure coverage and fail below the thresholds (`--min-stmt`, `--min-branch`, `--min-cond`, `--min-mcdc`);
 - check only the changed lines in pull requests (`--diff origin/main`);
@@ -166,10 +176,7 @@ The parser is also checked offline on a corpus of about 900 PL/SQL bodies from t
 ## Status
 
 plgauge is young (version 0.1). There are 178 automated tests, 31 of them against a real Oracle database,
-including full mutation runs in both modes. Known gaps:
-
-- **Distribution:** plgauge is not on npm; run it from a checkout.
-- **Versions:** only Oracle 23ai/26ai is tested.
+including full mutation runs in both modes. Known gap: only Oracle 23ai/26ai is tested.
 
 How the code is organised, how to run the tests against a database and how parity with the earlier prototypes
 was checked is in [DEVELOPMENT.md](DEVELOPMENT.md). Changes between versions are in [CHANGELOG.md](CHANGELOG.md).

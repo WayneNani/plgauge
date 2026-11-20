@@ -18,6 +18,8 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+      - name: npm package (packed, installed, run through npx)
+        run: npm run build && npm run pack:test
 
   database:
     needs: offline
@@ -37,3 +39,5 @@ jobs:
           echo "PLGAUGE_LIB_SCHEMA=PLMUT_LIB" >> "$GITHUB_ENV"
           echo "PLGAUGE_COV_DB=$(echo "$url" | sed -E 's#^oracle://([^:]+):([^@]+)@(.*)$#\1/\2@\3#')" >> "$GITHUB_ENV"
       - run: npm test
+      - name: npm package against the database
+        run: npm run build && PLGAUGE_PACK_DB=$PLGAUGE_DB npm run pack:test

@@ -1,14 +1,13 @@
 # GitHub Actions: PL/SQL tests with coverage and mutation testing (plgauge).
 # Copy to .github/workflows/plsql.yml of a project with plgauge.json, adapt the thresholds.
-# plgauge is cloned from GitHub (PLGAUGE_REPO below); point it to a fork or mirror if you like.
+# plgauge comes from npm (PLGAUGE_VERSION below, an npm version range).
 name: PL/SQL
 on:
   push:
   pull_request:
 
 env:
-  PLGAUGE_REPO: https://github.com/WayneNani/plgauge.git
-  PLGAUGE_REF: main
+  PLGAUGE_VERSION: "0.1"
 
 jobs:
   plsql:
@@ -23,11 +22,10 @@ jobs:
           node-version: 26
       - name: plgauge
         run: |
-          git clone --depth 1 --branch "$PLGAUGE_REF" "$PLGAUGE_REPO" "$RUNNER_TEMP/plgauge"
-          (cd "$RUNNER_TEMP/plgauge" && npm ci)
-          echo "PLGAUGE=$RUNNER_TEMP/plgauge/bin/plgauge" >> "$GITHUB_ENV"
+          npm install --prefix "$RUNNER_TEMP/plgauge" --no-audit --no-fund "plgauge@$PLGAUGE_VERSION"
+          echo "PLGAUGE=$RUNNER_TEMP/plgauge/node_modules/.bin/plgauge" >> "$GITHUB_ENV"
       - name: Oracle 23ai Free and utPLSQL
-        run: echo "PLGAUGE_DB=$("$RUNNER_TEMP/plgauge/ci/setup-db.sh" | tail -1)" >> "$GITHUB_ENV"
+        run: echo "PLGAUGE_DB=$("$RUNNER_TEMP/plgauge/node_modules/plgauge/ci/setup-db.sh" | tail -1)" >> "$GITHUB_ENV"
       - name: Coverage
         run: $PLGAUGE coverage . --out coverage --min-branch 70 --min-stmt 80
       - name: Coverage of the changed code
