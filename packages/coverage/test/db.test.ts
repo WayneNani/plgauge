@@ -265,6 +265,59 @@ end;`,
   }
 });
 
+test('subqueries in SQL CASE conditions: IN / ANY / ALL left alone, EXISTS and scalar ones measured, behaviour unchanged', { skip: !m && 'PLGAUGE_COV_DB not set' }, async () => {
+  const conn = await oracledb.getConnection({ user: m![1], password: m![2], connectString: m![3] });
+  const body = `package body plgauge_subq is
+  function check_all return varchar2 is
+    ids sys.odcivarchar2list := sys.odcivarchar2list(' 1', '3 ');
+    l varchar2(400);
+  begin
+    delete from plgauge_subq_t;
+    insert into plgauge_subq_t (id, n)
+      select level, case when to_char(level) in (select trim(column_value) from table(ids)) then 1 else 0 end from dual connect by level <= 4;
+    insert into plgauge_subq_t (id, n) values (5, case when 5 > all (select to_number(column_value) from table(ids)) then 1 end);
+    update plgauge_subq_t set n = n + case when id not in (select 2 from dual) then 10 else 20 end,
+      s = case when exists (select 1 from dual where id = 3) then 'e' when id = (select 4 from dual) then 's' else '-' end;
+    merge into plgauge_subq_t t using (
+      select id, case when (id, 1) in (select level, 1 from dual connect by level <= 2) then true else false end as b,
+        case when (select count(*) from dual where id > 1) > 0 then 'y' else 'n' end as c
+      from plgauge_subq_t) s on (t.id = s.id) when matched then update set t.b = s.b, t.s = t.s || s.c;
+    for r in (select id, n, s, case when b then 'T' else 'F' end b, case when id = any (select 2 from dual) then '!' end x
+              from plgauge_subq_t order by id) loop
+      l := l || r.id || r.n || r.s || r.b || r.x || ';';
+    end loop;
+    return l;
+  end;
+end;`;
+  try {
+    await installRuntime(conn);
+    await conn.execute(`create table plgauge_subq_t (id number, n number, s varchar2(10), b boolean)`).catch(() => undefined);
+    await conn.execute(`create or replace package plgauge_subq is function check_all return varchar2; end;`);
+    const check = async () => {
+      const r = await conn.execute(`begin :r := plgauge_subq.check_all; end;`, { r: { dir: oracledb.BIND_OUT, type: oracledb.STRING, maxSize: 400 } });
+      return (r.outBinds as { r: string }).r;
+    };
+    await conn.execute(`create or replace ${body}`);
+    const expected = await check();
+    assert.equal(expected, '111-nT;220-yT!;311eyF;410syF;511-yF;');
+
+    const r = instrument(body, m![1].toUpperCase(), newIds(), { sqlProbes: true });
+    await conn.execute(`create or replace ${r.instrumented}`);
+    const errs = await conn.execute(`select line, text from user_errors where name = 'PLGAUGE_SUBQ'`);
+    assert.deepEqual(errs.rows, [], 'instrumented package compiles');
+    // the five CASEs with IN / ANY / ALL are gaps; EXISTS, the scalar subqueries and CASE WHEN b stay measured
+    assert.equal(r.map.gaps.length, 5);
+    assert.deepEqual(r.map.decisions.filter((d) => d.ctx === 'sql').map((d) => d.text),
+      ['exists (select 1 from dual where id = 3)', 'id = (select 4 from dual)', '(select count(*) from dual where id > 1) > 0', 'b']);
+    await conn.execute(`begin cov$.reset; end;`);
+    assert.equal(await check(), expected);
+  } finally {
+    await conn.execute(`drop table plgauge_subq_t`).catch(() => undefined);
+    await conn.execute(`drop package plgauge_subq`).catch(() => undefined);
+    await conn.close();
+  }
+});
+
 // Several schemas (A4): needs a second schema and CREATE ANY PROCEDURE, EXECUTE ANY PROCEDURE for the
 // connected user, e.g. PLGAUGE_LIB_SCHEMA=DEMO_LIB (ci/setup-db.sh creates it as APP_LIB).
 const lib = process.env.PLGAUGE_LIB_SCHEMA;

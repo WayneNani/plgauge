@@ -277,8 +277,9 @@ npm run typecheck
   Sessions of other users, and parallel query slaves that execute fewer than 1000 statements, are still lost.
 - **Not measured:** dynamic SQL (the `EXECUTE IMMEDIATE` statement itself counts), code encrypted with `wrap`, and
   trigger `WHEN` clauses (Oracle allows no PL/SQL calls there; whether the body ran shows in its first statement).
-  CASE expressions in conditions and in loop bounds are not measured either. The report lists such places under
-  "Not measured".
+  CASE expressions in conditions and in loop bounds are not measured either, nor a CASE in SQL with `IN`, `NOT IN`,
+  `ANY`/`SOME` or `ALL` and a subquery in a `WHEN` condition (Oracle refuses such a predicate as a BOOLEAN argument;
+  `EXISTS` and scalar subqueries are measured). The report lists such places under "Not measured".
 - **Measured** (listed here for clarity):
   - compound triggers: each timing point is treated like a block;
   - simple `CASE x WHEN …` expressions: a branch probe before each result,
