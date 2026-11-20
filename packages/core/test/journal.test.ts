@@ -49,8 +49,21 @@ test('a trigger body from DBMS_PREPROCESSOR gets the ALL_SOURCE header back', as
   // CALL: the preprocessor appends a ";" CREATE TRIGGER refuses
   const call = 'trigger t before insert on x for each row\n  call p(:new.n)\n';
   assert.equal(triggerSource(call, 'p(:new.n)\n;'), call);
-  // conditional compilation on the body's first line: no alignment
-  assert.equal(triggerSource('trigger t before insert on x for each row begin $if true $then null; $end end;', 'begin  null;  end;'), undefined);
+  // a comment between CALL and the target, no trailing newline, all on one line: the body decides
+  for (const c of ['trigger t before insert on x for each row\n  call /* x */ p(:new.n)\n', 'trigger t before insert on x for each row\n  call -- x\n  p(:new.n)\n',
+    'trigger t before insert on x for each row\n  call p(:new.n)', 'trigger t before insert on x for each row call p(:new.n)', 'trigger t before insert on x for each row call compound(:new.n)']) {
+    assert.equal(triggerSource(c, c.slice(c.search(/\b(p|compound)\(/)).trimEnd() + '\n;'), c);
+  }
+  // conditional compilation on the body's first line: header up to the keyword, then the body
+  assert.equal(triggerSource('trigger t before insert on x for each row begin $if true $then null; $end end;', 'begin  null;  end;'),
+    'trigger t before insert on x for each row begin  null;  end;');
+  const d = 'trigger t\n  before insert on x for each row -- begin\ndeclare $if true $then l number; $end\nbegin\n  null;\nend;';
+  assert.equal(triggerSource(d, 'declare   l number; \nbegin\n  null;\nend;'), 'trigger t\n  before insert on x for each row -- begin\ndeclare   l number; \nbegin\n  null;\nend;');
+  const ct = 'trigger compound for insert on compound compound trigger $if true $then\n  before statement is begin null; end before statement; $end\nend;';
+  const cb = 'compound trigger \n  before statement is begin null; end before statement; \nend;';
+  assert.equal(triggerSource(ct, cb), 'trigger compound for insert on compound ' + cb);
+  // the body's keyword is not on the line counted from the end: no alignment
+  assert.equal(triggerSource('trigger t before insert on x for each row\nbegin\n  null;\nend;', 'begin\n  null; end;'), undefined);
 });
 
 test('fingerprint ignores whitespace and CREATE keywords, nothing else (marked x)', async () => {

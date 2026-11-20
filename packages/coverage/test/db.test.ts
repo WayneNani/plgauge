@@ -182,6 +182,23 @@ end;`,
     `trigger plgauge_tsrc_call after insert on plgauge_tsrc_t for each row
   call plgauge_tsrc_proc(:new.n)
 `,
+    // a comment between CALL and its target, no line break at the end
+    `trigger plgauge_tsrc_call_c after delete on plgauge_tsrc_t for each row
+  call /* x */ plgauge_tsrc_proc(:old.n)`,
+    `trigger plgauge_tsrc_call_l after delete on plgauge_tsrc_t for each row call -- x
+  plgauge_tsrc_proc(-:old.n)`,
+    // conditional compilation on the body's first line
+    `trigger plgauge_tsrc_cc_decl before insert on plgauge_tsrc_t for each row
+declare $if dbms_db_version.version >= 12 $then l varchar2(10) := 'new'; $else l varchar2(10) := 'old'; $end
+begin
+  insert into plgauge_tsrc_log (s) values ('ccd:' || l);
+end;`,
+    `trigger plgauge_tsrc_cc_comp for update on plgauge_tsrc_t compound trigger $if dbms_db_version.version >= 12 $then
+  after statement is begin insert into plgauge_tsrc_log (s) values ('ccc:new'); end after statement;
+  $else
+  after statement is begin insert into plgauge_tsrc_log (s) values ('ccc:old'); end after statement;
+  $end
+end plgauge_tsrc_cc_comp;`,
     `trigger plgauge_tsrc_cc after insert on plgauge_tsrc_t for each row
 begin
   $if dbms_db_version.version >= 12 $then
@@ -214,7 +231,7 @@ end;`,
     await conn.execute(`create or replace procedure plgauge_tsrc_proc(n number) is begin insert into plgauge_tsrc_log (s) values ('call:' || n); end;`);
     for (const t of triggers) await conn.execute(`create or replace ${t}`);
     const expected = await run();
-    assert.equal(expected, '2,3|call:0,call:1,call:200,cc:new,cc:new,cc:new,decl:D,decl:I,decl:I,decl:I,decl:U,decl:U,decl:U,stmt');
+    assert.equal(expected, '2,3|call:-202,call:0,call:1,call:200,call:202,cc:new,cc:new,cc:new,ccc:new,ccd:new,ccd:new,ccd:new,decl:D,decl:I,decl:I,decl:I,decl:U,decl:U,decl:U,stmt');
 
     const objs = (await loadObjects(conn, owner, { include: '^PLGAUGE_TSRC_' })).filter((o) => o.type === 'TRIGGER');
     assert.equal(objs.length, triggers.length);
@@ -222,9 +239,9 @@ end;`,
       // the header is back and the lines are those of ALL_SOURCE
       assert.match(o.processed, /^trigger plgauge_tsrc_\w+\s/, o.name);
       assert.equal(o.processed.split('\n').length, o.original.split('\n').length, o.name);
-      if (o.name !== 'PLGAUGE_TSRC_CC') assert.equal(o.processed, o.original, o.name);
+      if (o.name.startsWith('PLGAUGE_TSRC_CC')) assert.doesNotMatch(o.processed, /\$if/, o.name);
+      else assert.equal(o.processed, o.original, o.name);
     }
-    assert.doesNotMatch(objs.find((o) => o.name === 'PLGAUGE_TSRC_CC')!.processed, /\$if/);
 
     const ids = newIds();
     const maps = new Map<string, ReturnType<typeof instrument>['map']>();
@@ -242,7 +259,7 @@ end;`,
     const hit = new Set((await conn.execute<[string]>(`select k from plgauge_hits where run_id = 'triggers' and kind = 'S'`)).rows!.map((r) => Number(r[0])));
     for (const [name, map] of maps) {
       // a CALL trigger has no PL/SQL of its own
-      if (name === 'PLGAUGE_TSRC_CALL') assert.deepEqual(map.statements, [], name);
+      if (name.startsWith('PLGAUGE_TSRC_CALL')) assert.deepEqual(map.statements, [], name);
       else assert.ok(map.statements.length > 0 && map.statements.every((s) => hit.has(s.id)), name);
     }
 
@@ -284,9 +301,10 @@ test('subqueries in SQL CASE conditions: IN / ANY / ALL left alone, EXISTS and s
       select id, case when (id, 1) in (select level, 1 from dual connect by level <= 2) then true else false end as b,
         case when (select count(*) from dual where id > 1) > 0 then 'y' else 'n' end as c
       from plgauge_subq_t) s on (t.id = s.id) when matched then update set t.b = s.b, t.s = t.s || s.c;
-    for r in (select id, n, s, case when b then 'T' else 'F' end b, case when id = any (select 2 from dual) then '!' end x
+    for r in (select id, n, s, case when b then 'T' else 'F' end b, case when id = any (select 2 from dual) then '!' end x,
+              case when id in ((select 2 from dual), 3) then '+' end y
               from plgauge_subq_t order by id) loop
-      l := l || r.id || r.n || r.s || r.b || r.x || ';';
+      l := l || r.id || r.n || r.s || r.b || r.x || r.y || ';';
     end loop;
     return l;
   end;
@@ -301,16 +319,17 @@ end;`;
     };
     await conn.execute(`create or replace ${body}`);
     const expected = await check();
-    assert.equal(expected, '111-nT;220-yT!;311eyF;410syF;511-yF;');
+    assert.equal(expected, '111-nT;220-yT!+;311eyF+;410syF;511-yF;');
 
     const r = instrument(body, m![1].toUpperCase(), newIds(), { sqlProbes: true });
     await conn.execute(`create or replace ${r.instrumented}`);
     const errs = await conn.execute(`select line, text from user_errors where name = 'PLGAUGE_SUBQ'`);
     assert.deepEqual(errs.rows, [], 'instrumented package compiles');
-    // the five CASEs with IN / ANY / ALL are gaps; EXISTS, the scalar subqueries and CASE WHEN b stay measured
+    // the five CASEs with IN / ANY / ALL (subquery) are gaps; EXISTS, the scalar subqueries, CASE WHEN b
+    // and IN with a subquery among other values stay measured
     assert.equal(r.map.gaps.length, 5);
     assert.deepEqual(r.map.decisions.filter((d) => d.ctx === 'sql').map((d) => d.text),
-      ['exists (select 1 from dual where id = 3)', 'id = (select 4 from dual)', '(select count(*) from dual where id > 1) > 0', 'b']);
+      ['exists (select 1 from dual where id = 3)', 'id = (select 4 from dual)', '(select count(*) from dual where id > 1) > 0', 'b', 'id in ((select 2 from dual), 3)']);
     await conn.execute(`begin cov$.reset; end;`);
     assert.equal(await check(), expected);
   } finally {

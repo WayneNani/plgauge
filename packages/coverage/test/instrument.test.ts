@@ -161,6 +161,7 @@ test('SQL: CASE with IN / ANY / ALL (subquery) is left alone, EXISTS and scalar 
     'a = (select 1 from dual)',
     '(select count(*) from dual) > 0',
     'a in (1, (select 2 from dual))',
+    'a in ((select 2 from dual), 1)',
     '(case when a in (select 1 from dual) then 1 end) = 1',
   ];
   for (const cond of measured) {
@@ -169,6 +170,9 @@ test('SQL: CASE with IN / ANY / ALL (subquery) is left alone, EXISTS and scalar 
     assert.ok(r.instrumented.includes('cov$.qd(1,'), cond);
     assert.ok(!r.map.gaps.some((g) => g.reason.includes('subquery')), cond);
   }
+  // a CASE in another condition of the CASE left alone is reported, as on the measured path
+  const r = run(proc('  select case when (case when b > 2 then 1 end) = 1 then 0 when a in (select 1 from dual) then 1 end into x from dual;'));
+  assert.deepEqual(r.map.gaps.map((g) => g.reason).sort(), ['CASE expression in a condition is not measured', 'CASE with IN, ANY or ALL (subquery) in its condition in SQL is not measured']);
 });
 
 test('MC/DC: detects independence pairs and proposes the missing vector', () => {

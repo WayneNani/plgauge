@@ -630,6 +630,7 @@ class Instrumenter {
       this.gap(this.t[refused.a].line, 'CASE with IN, ANY or ALL (subquery) in its condition in SQL is not measured');
       for (const k of n.kids) {
         const res = k.kids[k.kids.length - 1];
+        if (k.k === 'when') this.caseGaps(k.kids[0].a, k.kids[0].b, 'a condition'); // as decision() would
         if (k.k === 'when' || k.k === 'else') this.scanRegion(res.a, res.b, ctx, clause, [res]);
       }
       return;
@@ -663,9 +664,10 @@ class Instrumenter {
       if (tk.kind === 'ident' && tk.up === 'CASE') caseDepth++;
       else if (tk.kind === 'ident' && tk.up === 'END' && caseDepth) caseDepth--;
       if (tk.kind !== 'op' || tk.up !== '(') continue;
+      // x in ((select …)) as well, but not x in ((select …), 1): extra parens only around the query alone
       let s = k;
-      while (this.t[s].kind === 'op' && this.t[s].up === '(') s++; // x in ((select …)) as well
-      if (this.upAt(s) !== 'SELECT' && this.upAt(s) !== 'WITH') continue;
+      while (this.upAt(s + 1) === '(' && this.match[s + 1] === this.match[s] - 1) s++;
+      if (this.upAt(s + 1) !== 'SELECT' && this.upAt(s + 1) !== 'WITH') continue;
       if (!caseDepth && ['IN', 'ANY', 'SOME', 'ALL'].includes(this.upAt(k - 1))) return true;
       if (this.match[k] > k) k = this.match[k];
     }
