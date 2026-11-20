@@ -623,6 +623,17 @@ class Instrumenter {
   }
 
   private caseExpr(n: Node, ctx: 'plsql' | 'sql', clause: string) {
+    // SQL refuses IN / ANY / ALL with a subquery as a BOOLEAN argument (PLS-00306): such a CASE stays
+    // as it is (measuring only its other WHENs would leave the ELSE without a decision)
+    const refused = ctx === 'sql' ? n.kids.find((k) => k.k === 'when' && this.subqueryPredicate(k.kids[0].a, k.kids[0].b)) : undefined;
+    if (refused) {
+      this.gap(this.t[refused.a].line, 'CASE with IN, ANY or ALL (subquery) in its condition in SQL is not measured');
+      for (const k of n.kids) {
+        const res = k.kids[k.kids.length - 1];
+        if (k.k === 'when' || k.k === 'else') this.scanRegion(res.a, res.b, ctx, clause, [res]);
+      }
+      return;
+    }
     const c = this.newConstruct('case-expr', ctx, this.t[n.a]);
     let last: Decision | null = null;
     for (const k of n.kids) {
@@ -639,6 +650,26 @@ class Instrumenter {
       }
     }
     c.branches.push(this.br('ELSE (implicit → NULL)', this.t[n.b - 1], { derived: { decision: last!.id, outcome: 'notT' } }));
+  }
+
+  /**
+   * Does [a, b) hold IN, NOT IN, ANY / SOME or ALL with a subquery at its own level? Predicates inside a
+   * subquery or a CASE are not wrapped and do not count; EXISTS and scalar subqueries compile wrapped.
+   */
+  private subqueryPredicate(a: number, b: number): boolean {
+    let caseDepth = 0;
+    for (let k = a; k < b; k++) {
+      const tk = this.t[k];
+      if (tk.kind === 'ident' && tk.up === 'CASE') caseDepth++;
+      else if (tk.kind === 'ident' && tk.up === 'END' && caseDepth) caseDepth--;
+      if (tk.kind !== 'op' || tk.up !== '(') continue;
+      let s = k;
+      while (this.t[s].kind === 'op' && this.t[s].up === '(') s++; // x in ((select …)) as well
+      if (this.upAt(s) !== 'SELECT' && this.upAt(s) !== 'WITH') continue;
+      if (!caseDepth && ['IN', 'ANY', 'SOME', 'ALL'].includes(this.upAt(k - 1))) return true;
+      if (this.match[k] > k) k = this.match[k];
+    }
+    return false;
   }
 
   /** CASE x WHEN v THEN r …: a branch probe in front of every result, also for the implicit ELSE. */

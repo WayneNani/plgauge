@@ -134,6 +134,43 @@ test('SQL probes can be switched off for databases before 23ai', () => {
   assert.match(r.map.gaps[0].reason, /23ai/);
 });
 
+test('SQL: CASE with IN / ANY / ALL (subquery) is left alone, EXISTS and scalar subqueries are measured', () => {
+  // Oracle refuses these as BOOLEAN arguments in SQL (PLS-00306 on cov$.qc / qd)
+  const refused = [
+    'a in (select column_value from table(ids))',
+    'a not in (select 1 from dual)',
+    '(a, b) in (select 1, 2 from dual)',
+    'a in ((select 1 from dual))',
+    'a > any (select 1 from dual)',
+    'a = some (select 1 from dual)',
+    'a > all (select 1 from dual)',
+    'b > 1 and (a in (with w as (select 1 c from dual) select c from w))',
+  ];
+  for (const cond of refused) {
+    const r = run(proc(`  select case when b = 0 then 0 when ${cond} then 1 else case when b > 2 then 2 end end into x from dual;
+  update t set v = case when ${cond} then 1 end, w = case when c then 1 end;`));
+    // neither qd nor qc around them; only the nested CASE and the other CASE in SET remain
+    assert.ok(!r.instrumented.includes('cov$.qd(1,b = 0') && r.instrumented.includes(`when ${cond} then`), cond);
+    assert.deepEqual(r.map.decisions.map((d) => d.text), ['b > 2', 'c'], cond);
+    assert.deepEqual(r.map.constructs.map((c) => c.branches.map((b) => b.derived!.decision)), [[1, 1], [2, 2]], cond);
+    assert.deepEqual(r.map.gaps.map((g) => [g.line, g.reason]), [3, 4].map((l) => [l, 'CASE with IN, ANY or ALL (subquery) in its condition in SQL is not measured']), cond);
+  }
+  const measured = [
+    'exists (select 1 from dual where a in (select 1 from dual))',
+    'not exists (select 1 from dual)',
+    'a = (select 1 from dual)',
+    '(select count(*) from dual) > 0',
+    'a in (1, (select 2 from dual))',
+    '(case when a in (select 1 from dual) then 1 end) = 1',
+  ];
+  for (const cond of measured) {
+    const r = run(proc(`  select case when ${cond} then 1 end into x from dual;`));
+    assert.equal(r.map.decisions.length, 1, cond);
+    assert.ok(r.instrumented.includes('cov$.qd(1,'), cond);
+    assert.ok(!r.map.gaps.some((g) => g.reason.includes('subquery')), cond);
+  }
+});
+
 test('MC/DC: detects independence pairs and proposes the missing vector', () => {
   const r = run(proc('  if a > 1 and b > 1 then null; end if;'));
   const hits: Hits = { stmt: new Map(), branch: new Map(), cond: new Map(), dec: new Map(), vec: new Map(), loop: new Map(), perTest: new Map() };
