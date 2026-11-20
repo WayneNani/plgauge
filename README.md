@@ -144,7 +144,7 @@ Copy [`ci/templates/github-actions.yml`](ci/templates/github-actions.yml) or
 | `plgauge check <file> --min-branch 70 …` | Thresholds on saved results (exit code 3 if one is missed) |
 | `plgauge merge a.json b.json --out all.json` | Merge the coverage of several runs |
 | `plgauge restore --config <file> [--list]` | Put back code that a killed run left changed |
-| `plgauge uninstall --config <file>` | Remove the runtime a run leaves in the schema: `cov$`, its grants, the `plgauge_*` tables (`--db` for a project) |
+| `plgauge uninstall --config <file>` | Remove the runtime runs of either tool leave in the schema: `cov$`, `plgauge_ctl`, `plgauge_rt`, their grants, the `plgauge_*` tables, the mutation context (`--db` for a project) |
 | `plgauge mutate points <dir>` | List the mutants without a database |
 | `plgauge instrument <file.sql>` | Show the instrumented source without a database |
 

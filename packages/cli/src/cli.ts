@@ -17,7 +17,7 @@
  *                                                       CI thresholds; exit code 3 if one is missed
  *   plgauge corpus <dir ...> [--db coverage-config.json]           robustness check on a corpus of PL/SQL files
  *   plgauge restore --config coverage-config.json [--list]         put back code left changed by a killed run (journal)
- *   plgauge uninstall --config coverage-config.json      remove cov$, its grants and the plgauge_* tables (--db: the user's schema)
+ *   plgauge uninstall --config coverage-config.json      remove the runtime of both tools (cov$, plgauge_ctl, plgauge_rt, their grants, the plgauge_* tables, the context; --db: the user's schema)
  *   plgauge mutate run [dir] [--mode schema|naive] …     mutation testing of a project with plgauge.json
  *        --diff origin/main                             only mutants on lines changed since the merge base (also coverage, check)
  *   plgauge mutate points|schema [dir]                   list mutants / print the schema rewrite (offline)

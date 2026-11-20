@@ -8,15 +8,8 @@
  *   survives package state resets), records reached points per test (UT3_INFO) and
  *   counts loop iterations for the loop guards.
  */
-import { createHash } from 'node:crypto';
-
-/**
- * A context name is global in the database: one per schema, so that runs of several users
- * in one database do not take each other's context away: PLGAUGE_CTX_<hash of the schema>.
- */
-export function contextName(schema: string): string {
-  return `PLGAUGE_CTX_${createHash('sha256').update(schema.toUpperCase()).digest('hex').slice(0, 12).toUpperCase()}`;
-}
+// (in core: plgauge uninstall drops the context too)
+export { contextName } from '@plgauge/core';
 
 export const RT_SPEC = "CREATE OR REPLACE PACKAGE plgauge_rt AUTHID CURRENT_USER AS\n  PROCEDURE run_tests(p_paths CLOB, p_out OUT CLOB);\nEND plgauge_rt;";
 

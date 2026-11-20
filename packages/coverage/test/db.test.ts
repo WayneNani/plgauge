@@ -326,7 +326,10 @@ const lib = process.env.PLGAUGE_LIB_SCHEMA;
 test('several schemas: code of another schema is measured, the runtime stays with the user, no grant stays; uninstall', { skip: (!m || !lib) && 'PLGAUGE_COV_DB / PLGAUGE_LIB_SCHEMA not set', timeout: 300_000 }, async () => {
   const conn = await oracledb.getConnection({ user: m![1], password: m![2], connectString: m![3] });
   const L = lib!.toUpperCase();
+  const U = m![1].toUpperCase();
   try {
+    // a grant an earlier run or test left would count as one that was there before
+    await conn.execute(`revoke execute on cov$ from ${L}`).catch(() => undefined);
     await conn.execute(`create or replace package ${L}.plgauge_calc is function grade(n number) return varchar2; end;`);
     await conn.execute(`create or replace package body ${L}.plgauge_calc is
       function grade(n number) return varchar2 is
@@ -347,11 +350,12 @@ test('several schemas: code of another schema is measured, the runtime stays wit
       procedure top is begin ut.expect(${L}.plgauge_calc.grade(95)).to_equal('A'); end;
       procedure middle is begin ut.expect(${L}.plgauge_calc.grade(60)).to_equal('B'); end;
     end;`);
-    const { runCoverage } = await import('@plgauge/coverage');
-    const r = await runCoverage({
+    const { runCoverage, revokeRuntime } = await import('@plgauge/coverage');
+    const multi = () => runCoverage({
       user: m![1], password: m![2], connectString: m![3], schema: m![1], schemas: [L], include: `^${L}\\.PLGAUGE_CALC$`, // OWNER.NAME
       tests: ['plgauge_multi_test'], baselineRuns: 1,
     }, () => {});
+    const r = await multi();
     assert.ok(r.equivalent, 'same results with instrumentation');
     const o = r.objects.find((x) => x.name === 'PLGAUGE_CALC')!;
     assert.equal(o.owner, L);
@@ -362,9 +366,18 @@ test('several schemas: code of another schema is measured, the runtime stays wit
     const src = await conn.execute<[string]>(`select text from all_source where owner = :o and name = 'PLGAUGE_CALC' and type = 'PACKAGE BODY' and text like '%cov$%'`, { o: L });
     assert.equal(src.rows!.length, 0);
     // the run took back its grant on cov$
-    const U = m![1].toUpperCase();
     const grants = `select count(*) from all_tab_privs where table_schema = '${U}' and table_name = 'COV$'`;
     assert.equal((await conn.execute<[number]>(grants)).rows![0][0], 0, 'no grant on cov$ left');
+    // a grant that was there before the run stays
+    await conn.execute(`grant execute on cov$ to ${L}`);
+    assert.ok((await multi()).equivalent);
+    assert.equal((await conn.execute<[number]>(grants)).rows![0][0], 1, 'the earlier grant stays');
+    // revokeRuntime reports only what it really took back
+    const noted: string[] = [];
+    assert.deepEqual(await revokeRuntime(conn, U, [L], (x) => noted.push(x)), [L]);
+    assert.equal((await conn.execute<[number]>(grants)).rows![0][0], 0, 'revoked');
+    assert.deepEqual(await revokeRuntime(conn, U, [L], (x) => noted.push(x)), [], 'nothing left to revoke');
+    assert.deepEqual(noted, []);
 
     // uninstall: refused while the journal has an entry
     const { uninstallRuntime } = await import('@plgauge/coverage');
@@ -379,7 +392,7 @@ test('several schemas: code of another schema is measured, the runtime stays wit
     await conn.execute(`grant execute on cov$ to ${L}`);
     await uninstallRuntime(cfg, U, (x) => said.push(x));
     const runtime = async () => (await conn.execute(`select object_type || ' ' || object_name from user_objects
-      where object_name in ('COV$', 'COV$_LOGOFF', 'PLGAUGE_HITS', 'PLGAUGE_RUNS', 'PLGAUGE_JOURNAL', 'PLGAUGE_LOCK')`)).rows;
+      where object_name in ('COV$', 'COV$_LOGOFF', 'PLGAUGE_HITS', 'PLGAUGE_RUNS', 'PLGAUGE_JOURNAL', 'PLGAUGE_LOCK', 'PLGAUGE_CTL', 'PLGAUGE_RT', 'PLGAUGE_MARKER')`)).rows;
     assert.deepEqual(await runtime(), [], 'runtime gone');
     assert.equal((await conn.execute<[number]>(grants)).rows![0][0], 0, 'no grant on cov$');
     assert.ok(said.some((x) => x.includes(`revoked from ${L}`)), said.join('\n'));
@@ -391,6 +404,60 @@ test('several schemas: code of another schema is measured, the runtime stays wit
   } finally {
     await conn.execute(`drop package plgauge_multi_test`).catch(() => undefined);
     await conn.execute(`drop package ${L}.plgauge_calc`).catch(() => undefined);
+    await conn.close();
+  }
+});
+
+// Test seams: beforeTests runs before the objects are read, so a unit it replaces (a mock) is the one
+// measured; afterTests runs also when it is the only hook.
+test('beforeTests replacing a measured unit: the replacement is measured; afterTests alone runs too', { skip: !m && 'PLGAUGE_COV_DB not set', timeout: 300_000 }, async () => {
+  const { mkdtempSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { runCoverage } = await import('@plgauge/coverage');
+  const conn = await oracledb.getConnection({ user: m![1], password: m![2], connectString: m![3] });
+  const dir = mkdtempSync(join(tmpdir(), 'plgauge-fa-'));
+  const file = (name: string, text: string) => {
+    writeFileSync(join(dir, name), text);
+    return join(dir, name);
+  };
+  const real = `CREATE OR REPLACE FUNCTION plgauge_fa_unit RETURN VARCHAR2 IS BEGIN RETURN 'real'; END;\n/\n`;
+  const before = file('before.sql', `CREATE OR REPLACE FUNCTION plgauge_fa_unit RETURN VARCHAR2 IS\nBEGIN\n  IF sysdate > DATE '2000-01-01' THEN\n    RETURN 'mock';\n  END IF;\n  RETURN 'never';\nEND;\n/\n`);
+  const after = file('after.sql', real);
+  const broken = file('broken.sql', 'SELECT * FROM plgauge_fa_no_such_table\n/\n');
+  const unit = async () => (await conn.execute<[string]>(`select plgauge_fa_unit from dual`)).rows![0][0];
+  try {
+    for (const o of ['package plgauge_fa_test', 'function plgauge_fa_unit']) await conn.execute(`drop ${o}`).catch(() => undefined);
+    await conn.execute(real.replace(/\/\n$/, ''));
+    await conn.execute(`create or replace package plgauge_fa_test is
+      --%suite
+
+      --%test
+      procedure mocked;
+    end;`);
+    await conn.execute(`create or replace package body plgauge_fa_test is
+      procedure mocked is begin ut.expect(plgauge_fa_unit).to_equal('mock'); end;
+    end;`);
+    const base = { user: m![1], password: m![2], connectString: m![3], schema: m![1], include: '^PLGAUGE_FA_UNIT$', tests: ['plgauge_fa_test'], baselineRuns: 1, warmup: false, utplsqlCompare: false };
+    const r = await runCoverage({ ...base, beforeTests: [before], afterTests: [after] }, () => {});
+    assert.ok(r.equivalent, r.differingTests?.join('; ') ?? 'not equivalent');
+    assert.deepEqual(r.instrumentedRun.tests.map((t) => t.status), ['passed']);
+    const o = r.objects.find((x) => x.name === 'PLGAUGE_FA_UNIT')!;
+    assert.equal(o.instrumentError, undefined);
+    assert.ok(o.lines.some((l) => l.includes(`'mock'`)), 'the replacement is measured');
+    assert.deepEqual(o.metrics.branch, { covered: 1, total: 2 });
+    assert.equal(await unit(), 'real', 'afterTests ran');
+
+    // afterTests without beforeTests runs too
+    await conn.execute(`create or replace function plgauge_fa_unit return varchar2 is begin return 'mock'; end;`);
+    const a = await runCoverage({ ...base, afterTests: [after] }, () => {});
+    assert.equal(a.afterTestsFailed, undefined);
+    assert.equal(await unit(), 'real', 'afterTests alone ran');
+    // and a failing one is reported
+    const b = await runCoverage({ ...base, afterTests: [broken] }, () => {});
+    assert.match(b.afterTestsFailed ?? '', /broken\.sql/);
+  } finally {
+    for (const o of ['package plgauge_fa_test', 'function plgauge_fa_unit']) await conn.execute(`drop ${o}`).catch(() => undefined);
     await conn.close();
   }
 });

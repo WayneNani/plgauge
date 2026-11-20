@@ -10,9 +10,9 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import oracledb from 'oracledb';
-import { journalEntries, loadObject, lockRun, replaceSource, RUN_LOCK } from '@plgauge/core';
+import { contextName, journalEntries, loadObject, lockRun, replaceSource, RUN_LOCK } from '@plgauge/core';
 import { CoverageIndex, crossCheck, parseDbUrl, projectCoverageConfig, runMutation, type Result } from '@plgauge/mutation';
-import { runCoverage, toCoverageExport } from '@plgauge/coverage';
+import { runCoverage, toCoverageExport, uninstallRuntime } from '@plgauge/coverage';
 
 const db = process.env.PLGAUGE_DB?.split(',')[0];
 const dir = fileURLToPath(new URL('../../../examples/shop_pricing', import.meta.url));
@@ -112,12 +112,35 @@ END;
 `);
   writeFileSync(join(p, 'plgauge.json'), JSON.stringify({ install: ['src/calc.sql', 'src/test.sql'], mutate: ['src/calc.sql'], tests: ['plgauge_mcalc_test'] }));
   const verdict = (rs: Result[]) => rs.map((r) => `${r.op} ${r.original.trim()} → ${r.mutated.trim()}: ${r.status === 'NOT_COVERED' ? 'SURVIVED' : r.status}`).sort();
-  const schema = await runMutation({ dir: p, dbUrls: [db!], mode: 'schema' });
-  const naive = await runMutation({ dir: p, dbUrls: [db!], mode: 'naive', skipInstall: true });
-  assert.equal(schema.results.length, 6); // RET ×2, ROR ×3 on n > 100, AOR on n * 0.02
-  assert.deepEqual(verdict(schema.results), verdict(naive.results));
-  // the boundary n > 100 → n >= 100 is not tested: survives; everything else is killed
-  assert.deepEqual(schema.results.filter((r) => r.status === 'SURVIVED').map((r) => r.mutated.trim()), ['n >= 100']);
+  const conn = await oracledb.getConnection(parseDbUrl(db!));
+  const U = parseDbUrl(db!).user.toUpperCase();
+  const grants = async () => (await conn.execute<[number]>(`select count(*) from all_tab_privs where table_schema = :u and table_name = 'PLGAUGE_CTL' and grantee = :l`, { u: U, l: L.toUpperCase() })).rows![0][0];
+  try {
+    // a grant an earlier run left would count as one that was there before
+    await conn.execute(`revoke execute on plgauge_ctl from ${L}`).catch(() => undefined);
+    const schema = await runMutation({ dir: p, dbUrls: [db!], mode: 'schema' });
+    assert.equal(await grants(), 0, 'the run took back its grant on plgauge_ctl');
+    // a grant that was there before the run stays
+    await conn.execute(`grant execute on plgauge_ctl to ${L}`);
+    const naive = await runMutation({ dir: p, dbUrls: [db!], mode: 'naive', skipInstall: true });
+    assert.equal(await grants(), 1, 'the earlier grant stays');
+    assert.equal(schema.results.length, 6); // RET ×2, ROR ×3 on n > 100, AOR on n * 0.02
+    assert.deepEqual(verdict(schema.results), verdict(naive.results));
+    // the boundary n > 100 → n >= 100 is not tested: survives; everything else is killed
+    assert.deepEqual(schema.results.filter((r) => r.status === 'SURVIVED').map((r) => r.mutated.trim()), ['n >= 100']);
+
+    // uninstall removes the mutation runtime with its grants; the context needs DROP ANY CONTEXT
+    const said: string[] = [];
+    await uninstallRuntime(parseDbUrl(db!), U, (x) => said.push(x));
+    const left = await conn.execute(`select object_type || ' ' || object_name from user_objects where object_name in ('PLGAUGE_CTL', 'PLGAUGE_RT', 'PLGAUGE_MARKER', 'PLGAUGE_JOURNAL', 'PLGAUGE_LOCK')`);
+    assert.deepEqual(left.rows, [], said.join('\n'));
+    assert.equal(await grants(), 0, 'no grant on plgauge_ctl');
+    assert.ok(said.some((x) => x.includes(`plgauge_ctl revoked from ${L.toUpperCase()}`)), said.join('\n'));
+    const ctx = contextName(U);
+    assert.ok(said.some((x) => x.includes(`context ${ctx.toLowerCase()}`) || x.includes(`drop context ${ctx}`)), said.join('\n'));
+  } finally {
+    await conn.close();
+  }
 });
 
 // Cursor declarations (UNION ALL), cursor FOR loops (duplicated) and dynamic SQL (literal switched in place)
@@ -375,7 +398,8 @@ END;
   const conn = await oracledb.getConnection(parseDbUrl(db!));
   const target = async () => (await conn.execute<[string]>(`select table_name from user_synonyms where synonym_name = 'PLGAUGE_SEAM'`)).rows?.[0]?.[0];
   try {
-    project(['before.sql'], ['after.sql']);
+    // (an absolute path in plgauge.json is taken as it is)
+    project(['before.sql'], [join(p, 'after.sql')]);
     const cov = await runCoverage(await projectCoverageConfig(p, db!, true), () => {});
     assert.deepEqual(cov.baseline.tests.map((t) => t.status), ['passed'], 'the tests ran against the mock');
     assert.equal(cov.afterTestsFailed, undefined);
@@ -403,6 +427,14 @@ END;
     const badMut = await runMutation({ dir: p, dbUrls: [db!], mode: 'schema', skipInstall: true });
     assert.match(badMut.afterTestsFailed?.join() ?? '', /broken\.sql/);
     assert.equal(await target(), 'PLGAUGE_SEAM_REAL');
+
+    // afterTests without beforeTests runs too (the seam switched by hand)
+    project([], ['broken.sql', join(p, 'after.sql')]);
+    await conn.execute(`create or replace synonym plgauge_seam for plgauge_seam_mock`);
+    const alone = await runMutation({ dir: p, dbUrls: [db!], mode: 'schema', skipInstall: true });
+    assert.equal(alone.tests, 1, 'the test ran against the mock');
+    assert.match(alone.afterTestsFailed?.join() ?? '', /broken\.sql/);
+    assert.equal(await target(), 'PLGAUGE_SEAM_REAL', 'afterTests alone ran');
   } finally {
     for (const s of ['drop package plgauge_hooked_test', 'drop function plgauge_hooked', 'drop synonym plgauge_seam', 'drop function plgauge_seam_mock', 'drop function plgauge_seam_real']) {
       await conn.execute(s).catch(() => undefined);

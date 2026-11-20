@@ -22,7 +22,7 @@ import {
   dbIdent, ensureJournal, failureMessage, failureSummary, journalEntries, loadObject, restoreJournal, lockRun, RUN_LOCK, objectErrors, replaceSourceDetailed, restoreAll, runScript, runTestHooks, sha256, splitScript, touches,
   type ChangedLines, type SourceObject,
 } from '@plgauge/core';
-import type { CoverageExport } from '@plgauge/coverage';
+import { revokeRuntime, type CoverageExport } from '@plgauge/coverage';
 import { CoverageIndex, unitLineOf } from './link.js';
 import { expand, mutatedUnit, objectName, objectOwner, unitKey, withoutCreate, withoutLeadingComments, type Mutant, type Point } from './mutant.js';
 import { findPoints } from './find.js';
@@ -310,7 +310,7 @@ class Worker {
     if (!this.run.opt.skipInstall) {
       const scripts: [string, string[]][] = [];
       for (const s of this.run.cfg.install) {
-        const path = join(this.run.opt.dir, s);
+        const path = resolve(this.run.opt.dir, s);
         const stmts = splitScript(readFileSync(path, 'utf8'));
         await runScript(this.deploy, stmts, path);
         scripts.push([path, stmts]);
@@ -324,20 +324,19 @@ class Worker {
     await ensureJournal(this.deploy);
     await installRuntime(this.deploy);
     // also after a reset (a fresh database); on a connection of their own, like the journal
-    // restore: their session state must not reach the deploy connection
-    if (this.run.cfg.beforeTests.length) {
-      this.seams = true;
-      await this.hooks(this.run.cfg.beforeTests);
-    }
+    // restore: their session state must not reach the deploy connection. From here on afterTests
+    // runs at the end, also without beforeTests
+    this.seams = true;
+    if (this.run.cfg.beforeTests.length) await this.hooks(this.run.cfg.beforeTests);
   }
 
-  /** beforeTests ran (or started) here: afterTests runs at the end. */
+  /** The worker reached its beforeTests (configured or not): afterTests runs at the end. */
   seams = false;
 
   private async hooks(scripts: string[], allOf = false): Promise<void> {
     const c = await oracledb.getConnection(this.db);
     try {
-      await runTestHooks(c, scripts.map((s) => join(this.run.opt.dir, s)), allOf);
+      await runTestHooks(c, scripts.map((s) => resolve(this.run.opt.dir, s)), allOf);
     } finally {
       await c.close().catch(() => {});
     }
@@ -458,7 +457,9 @@ class Worker {
       const same = [...this.objects.values()].find((x) => x.owner === owner && x.name === objectName(name) && x.type === type);
       o = same ?? (await loadObject(this.deploy, owner, objectName(name), type));
       if (owner !== user && !this.granted.has(owner)) {
-        await this.deploy.execute(`grant execute on plgauge_ctl to ${dbIdent(owner)}`).catch(() => {});
+        // a grant that was there before (deliberate, or kept for unrestored code) is not this run's to take back
+        const had = await this.deploy.execute(`select 1 from all_tab_privs where table_schema = :u and table_name = 'PLGAUGE_CTL' and grantee = :o and privilege = 'EXECUTE'`, { u: user, o: owner });
+        if (!had.rows?.length) await this.deploy.execute(`grant execute on plgauge_ctl to ${dbIdent(owner)}`).then(() => this.added.add(owner), () => {});
         this.granted.add(owner);
       }
       this.objects.set(key, o);
@@ -468,6 +469,30 @@ class Worker {
 
   schemaName?: string;
   private granted = new Set<string>();
+  /** Schemas this run gave EXECUTE on plgauge_ctl (kept across reconnects): taken back at the end. */
+  private added = new Set<string>();
+
+  /**
+   * End of the run, after the restore: EXECUTE on plgauge_ctl back from the schemas this run
+   * granted it to, except those whose changed code stays in the journal (it would turn invalid).
+   */
+  async revokeGrants(): Promise<void> {
+    if (!this.added.size || this.foreign) return;
+    try {
+      await this.ensureLock();
+      this.guard();
+      const c = await oracledb.getConnection(this.db);
+      try {
+        const left = new Set((await journalEntries(c)).map((e) => e.owner));
+        const home = (await c.execute<[string]>(`select sys_context('USERENV','CURRENT_SCHEMA') from dual`)).rows![0][0];
+        await revokeRuntime(c, home, [...this.added].filter((o) => !left.has(o)), this.logf, 'plgauge_ctl');
+      } finally {
+        await c.close().catch(() => {});
+      }
+    } catch (e) {
+      this.logf(`WARNING${this.name}: execute on plgauge_ctl not revoked: ${firstLine(e as Error)}`);
+    }
+  }
 
   async currentSchema(): Promise<string> {
     this.schemaName ??= (await this.deploy.execute<[string]>(`select sys_context('USERENV','CURRENT_SCHEMA') from dual`)).rows![0][0];
@@ -1320,6 +1345,7 @@ export async function runMutation(opt: Options): Promise<Report> {
       (opt.log ?? console.error)(msg);
       if (report) report.unrestored = left;
     }
+    await Promise.all(run.workers.filter((w) => w.held).map((w) => w.revokeGrants()));
     const hooks = (await Promise.all(run.workers.map((w) => w.afterTests()))).filter((f): f is string => !!f);
     if (hooks.length) {
       (opt.log ?? console.error)(`ERROR: afterTests: ${hooks.join('; ')} (the test seams may still be switched)`);

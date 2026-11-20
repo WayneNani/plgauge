@@ -50,7 +50,7 @@ A project is a directory with a `plgauge.json`. Coverage and mutation read the s
 | `mutate` | Globs of the files whose units are mutated. |
 | `tests` | utPLSQL paths. Empty runs the whole schema. |
 | `beforeTests` | Scripts, relative to the project, run once per worker database before the first test run, after the install (and again after a `--reset-cmd` reset). For test seams: synonyms to mocks, say. A failing script fails the run. |
-| `afterTests` | Scripts run once per worker database at the very end, after the originals are restored, also when the run fails or is cancelled. A failing script does not stop the later ones; it is reported and the run exits with code 1. |
+| `afterTests` | Scripts run once per worker database at the very end, after the originals are restored, also when the run fails or is cancelled, and also without `beforeTests`. A failing script does not stop the later ones; it is reported and the run exits with code 1. |
 
 The `install` scripts are read like SQL*Plus with default settings:
 
@@ -61,7 +61,9 @@ The `install` scripts are read like SQL*Plus with default settings:
 
 `beforeTests` and `afterTests` are read the same way. They run on a connection of their own as the
 connected user and are committed at the end. The tests run in another session, so what they need must
-persist: DDL or committed data, not session state.
+persist: DDL or committed data, not session state. Only a cancel by SIGINT or SIGTERM (Ctrl-C, a CI cancel)
+still runs `afterTests`; after a hard kill (SIGKILL, a crash) the next run restores the originals, but the
+`afterTests` scripts must be run by hand.
 
 ## Commands and options
 
@@ -422,13 +424,16 @@ its whole duration (own connection, never committed).
 | `PLGAUGE_JOURNAL` | Restore journal |
 | `PLGAUGE_LOCK` | Run lock |
 
+`plgauge uninstall --db oracle://…` removes them (see [Removing the runtime](../coverage/README.md#removing-the-runtime)).
+
 ## Several schemas
 
 A unit written with a schema (`CREATE OR REPLACE PACKAGE BODY app_util.calc …`) is mutated in that
 schema.
 
 - The runtime package `plgauge_ctl` stays with the logged-in user and is called qualified; the run
-  grants `EXECUTE` on it.
+  grants `EXECUTE` on it and revokes the grants it added at the end (not those of schemas whose
+  mutated code could not be restored; they stay until `plgauge uninstall`).
 - Privileges are the same as for coverage (`CREATE ANY PROCEDURE`, `EXECUTE ANY PROCEDURE`).
 - The context for loop limits has a different name per schema, so runs of different users in one
   database do not interfere.

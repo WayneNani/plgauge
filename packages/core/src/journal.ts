@@ -167,6 +167,14 @@ export async function journalEntries(conn: oracledb.Connection): Promise<Journal
   }));
 }
 
+/**
+ * The application context of mutation runs: a context name is global in the database, one per
+ * schema, so that runs of several users in one database do not take each other's context away.
+ */
+export function contextName(schema: string): string {
+  return `PLGAUGE_CTX_${createHash('sha256').update(schema.toUpperCase()).digest('hex').slice(0, 12).toUpperCase()}`;
+}
+
 /** The lock both tools take: a coverage run and a mutation run must not share a schema either. */
 export const RUN_LOCK = 'plgauge';
 

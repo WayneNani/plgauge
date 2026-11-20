@@ -119,7 +119,7 @@ Example: [`examples/order_pricing/coverage-config.json`](../../examples/order_pr
 | `utplsqlCompare` | A test run with utPLSQL's own coverage for the line-rate comparison (default `true`); `false` = `--no-utplsql-compare` |
 | `failOnTestErrors` | Exit code 5 when tests fail or error without instrumentation (like `--fail-on-test-errors`) |
 | `schemas`, `runtimeSchema` | Measure several schemas, see [Multiple schemas](#multiple-schemas) |
-| `beforeTests`, `afterTests` | SQL*Plus-style scripts, relative to the config file. `beforeTests` runs once before the first test run (switch test seams: synonyms to mocks, say); `afterTests` runs once at the very end, after the originals are restored, also when the run fails or is cancelled |
+| `beforeTests`, `afterTests` | SQL*Plus-style scripts, relative to the config file. `beforeTests` runs once before the objects are read and the first test run (switch test seams: synonyms to mocks, say), so a unit it replaces is measured as replaced; `afterTests` runs once at the very end, after the originals are restored, also when the run fails or is cancelled, and also without `beforeTests` |
 
 ### Projects (`plgauge.json`)
 
@@ -131,7 +131,9 @@ A project is a directory with `plgauge.json` (`install`, `mutate`, `tests`), the
 The scripts run on a connection of their own, in the same schema as the install scripts, and are committed
 at the end. What the tests need must therefore persist: DDL or committed data, not session state. A failing
 `beforeTests` script fails the run. A failing `afterTests` script never stops the restore or the later
-`afterTests` scripts; it is reported and the run exits with code 1.
+`afterTests` scripts; it is reported and the run exits with code 1. Only a cancel by SIGINT or SIGTERM
+(Ctrl-C, a CI cancel) still runs `afterTests`; after a hard kill (SIGKILL, a crash) the next run restores the
+originals, but the `afterTests` scripts must be run by hand.
 
 ### Environment variables
 
@@ -247,8 +249,9 @@ With `"schemas": ["APP_CORE", "APP_UTIL"]`, one run measures the objects of seve
 
 - The runtime package `cov$` and the hit table stay in the schema of the connected user (or `runtimeSchema`).
 - Instrumented code in other schemas calls it qualified (`user.cov$`); the run grants `EXECUTE` on `cov$` to those schemas
-  and revokes it at the end. A schema whose instrumented code could not be restored keeps its grant until
-  `plgauge restore`, so that code stays valid.
+  and revokes it at the end. A grant that existed before the run stays. A schema whose instrumented code could
+  not be restored keeps its grant, so that code stays valid; `plgauge restore` does not revoke it, and later runs
+  take it for an existing grant: it stays until `plgauge uninstall`.
 - Code is compiled in the object's own schema.
 - The tests (`tests`) run with their owner's privileges, as usual.
 - Without `schemas`, runtime and objects live in `schema`.
@@ -266,7 +269,10 @@ Minimum privileges of the connected user:
 A run leaves its runtime in the runtime schema for the next run: the package `cov$` and the tables
 `plgauge_hits`, `plgauge_runs`, `plgauge_journal` and `plgauge_lock` (the last two are shared with mutation runs).
 `plgauge uninstall --config coverage-config.json` removes them, together with the logoff trigger of an aborted run
-and every `EXECUTE` grant on `cov$`. With `--db` (or `PLGAUGE_DB`) instead of a config, it works on the user's own
+and every `EXECUTE` grant on `cov$`. It also removes what mutation runs leave there: the packages `plgauge_ctl` and
+`plgauge_rt` with every `EXECUTE` grant on them, the table `plgauge_marker` and the context `PLGAUGE_CTX_<hash>`.
+Dropping the context needs `DROP ANY CONTEXT`; without it, the context stays and `uninstall` prints the
+`drop context` statement for a DBA. With `--db` (or `PLGAUGE_DB`) instead of a config, it works on the user's own
 schema and the session's `CURRENT_SCHEMA`.
 
 - It refuses while the restore journal has entries: run `plgauge restore` first.
