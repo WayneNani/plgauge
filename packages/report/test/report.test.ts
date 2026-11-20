@@ -4,8 +4,11 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { analyze, instrument, newIds, toCobertura, toCoverageExport, type Hits, type ObjectResult, type RunReport } from '@plgauge/coverage';
-import { pageNames, renderReport, summaryLines } from '@plgauge/report';
+import { pageNames, renderReport, summaryLines, writeReport } from '@plgauge/report';
 
 const hits = (stmts: number[]): Hits => ({
   stmt: new Map(stmts.map((s) => [s, 1])), branch: new Map(), cond: new Map(), dec: new Map(), vec: new Map(), loop: new Map(), perTest: new Map(),
@@ -134,4 +137,44 @@ test('report: tests red without instrumentation get a card with the reasons on t
   assert.match(files['index.html'], /Red without instrumentation[\s\S]*?1 test<[\s\S]*?<li>test &quot;b&quot; of suite s\.t errors before instrumentation: ORA-20073: setup &lt;broken&gt;<\/li>/);
   assert.doesNotMatch(files['objects/s.p.package_body.html'], /Red without instrumentation/);
   assert.doesNotMatch(index(fixedReport({})), /Red without instrumentation/);
+});
+
+test('report: test descriptions, suite paths and test names are escaped on the object pages and the overview', () => {
+  const evil = '<img src=x onerror=alert(1)>';
+  const files = renderReport(fixedReport({
+    tests: [{ path: `s.t${evil}.a`, suite: 's.t', description: evil, setup: false, status: 'passed', baselineStatus: 'passed', ms: 500 }],
+    baseline: { tests: [{ suite: 's.t', name: evil, status: 'passed', time: 0.5 }], ms: 500 },
+    instrumentedRun: { tests: [{ suite: 's.t', name: evil, status: 'passed', time: 0.5 }], ms: 500 },
+  }));
+  for (const html of [files['index.html'], files['objects/s.p.package_body.html']]) {
+    assert.doesNotMatch(html, /<img/);
+    assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
+    assert.doesNotMatch(html, /&amp;lt;/, 'escaped once');
+  }
+  assert.match(files['objects/s.p.package_body.html'], /<div>• &lt;img src=x onerror=alert\(1\)&gt; <span style="opacity:\.7">\(t&lt;img src=x onerror=alert\(1\)&gt;\.a\)<\/span><\/div>/);
+  assert.doesNotMatch(files['report.js'], /innerHTML/);
+});
+
+test('report: joint report with the same unit in two schemas puts each mutant on its own object only', () => {
+  const two = fixedReport({ schema: 'A,B', objects: [{ ...fixed(), owner: 'A' }, { ...fixed(), owner: 'B' }] });
+  const mut = (unit: string, status: string) => ({ unit, line: 3, op: 'ROR', original: '1', mutated: '2', status });
+  const files = renderReport(two, { mutation: { results: [mut('PACKAGE BODY a.p', 'SURVIVED'), mut('PACKAGE BODY p', 'KILLED')] } });
+  assert.match(files['objects/a.p.package_body.html'], /✱ 0\/1 mutants/);
+  assert.doesNotMatch(files['objects/b.p.package_body.html'], /mutants/, 'no owner and two candidates: no object');
+  assert.match(files['index.html'], /<strong>Mutation Score<\/strong>[\s\S]*?<small>0\/1<\/small>/, 'counted once');
+  // one schema: a unit without owner is that object's
+  const one = renderReport(fixedReport({}), { mutation: { results: [mut('PACKAGE BODY p', 'KILLED')] } });
+  assert.match(one['objects/s.p.package_body.html'], /✱ 1\/1 mutants/);
+});
+
+test('report: a new render removes object pages of earlier ones, nothing else', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'plgauge-report-'));
+  mkdirSync(join(dir, 'objects'));
+  writeFileSync(join(dir, 'objects/s.gone.procedure.html'), 'stale');
+  writeFileSync(join(dir, 'objects/notes.txt'), 'mine');
+  writeFileSync(join(dir, 'README.md'), 'mine');
+  writeReport(dir, fixedReport({}));
+  assert.ok(!existsSync(join(dir, 'objects/s.gone.procedure.html')));
+  assert.ok(existsSync(join(dir, 'objects/s.p.package_body.html')));
+  assert.ok(existsSync(join(dir, 'objects/notes.txt')) && existsSync(join(dir, 'README.md')));
 });

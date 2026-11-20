@@ -6,7 +6,7 @@
  * report: per line the mutants and their verdicts beside the coverage, and as a finding
  * every surviving mutant on an executed line (the tests run the code but do not check it).
  */
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { failureSummary, tokenize } from '@plgauge/core';
 import type { CondResult, Metric, ObjectResult } from '@plgauge/coverage';
@@ -263,7 +263,8 @@ const JS = `(() => {
     const src = document.getElementById(el.dataset.tip);
     if (!src) return;
     current = el;
-    tipEl.innerHTML = src.innerHTML;
+    // copies the nodes; no second HTML parse of their text
+    tipEl.replaceChildren(...[...src.childNodes].map((n) => n.cloneNode(true)));
     tipEl.hidden = false;
     const r = el.getBoundingClientRect();
     const w = tipEl.offsetWidth, h = tipEl.offsetHeight;
@@ -322,15 +323,25 @@ const STATUS_TEXT: Record<string, string> = {
   COMPILE_ERROR: 'does not compile', ERROR: 'error',
 };
 
-/** Mutation results per object key ("PACKAGE BODY NAME") and ALL_SOURCE line. */
-function mutationIndex(results: MutationResultLite[]): Map<string, Map<number, MutationResultLite[]>> {
+/**
+ * Mutation results per object key ("OWNER PACKAGE BODY NAME") and ALL_SOURCE line. The unit
+ * names its owner only when the source does (create … other_schema.name); without one it
+ * belongs to the one measured object of that type and name, and to none when several owners have one.
+ */
+function mutationIndex(results: MutationResultLite[], objs: ObjectResult[]): Map<string, Map<number, MutationResultLite[]>> {
+  const owners = new Map<string, string[]>();
+  for (const o of objs) owners.set(`${o.type} ${o.name}`, [...(owners.get(`${o.type} ${o.name}`) ?? []), o.owner]);
+  const ident = (s: string) => (s.startsWith('"') ? s.replace(/"/g, '') : s.toUpperCase());
   const out = new Map<string, Map<number, MutationResultLite[]>>();
   for (const m of results) {
     const u = /^(PACKAGE BODY|TYPE BODY|PROCEDURE|FUNCTION|TRIGGER) (.+)$/.exec(m.unit);
     if (!u) continue;
-    let name = u[2].slice(u[2].lastIndexOf('.') + 1);
-    name = name.startsWith('"') ? name.replace(/"/g, '') : name.toUpperCase();
-    const key = `${u[1]} ${name}`;
+    const dot = u[2].lastIndexOf('.');
+    const name = ident(u[2].slice(dot + 1));
+    const named = owners.get(`${u[1]} ${name}`) ?? [];
+    const owner = dot >= 0 ? ident(u[2].slice(0, dot).trim()) : named.length === 1 ? named[0] : undefined;
+    if (!owner) continue;
+    const key = `${owner} ${u[1]} ${name}`;
     const line = m.line - (m.unitLine ?? 1) + 1;
     let byLine = out.get(key);
     if (!byLine) out.set(key, (byLine = new Map()));
@@ -346,8 +357,8 @@ function mutationIndex(results: MutationResultLite[]): Map<string, Map<number, M
  */
 export function renderReport(r: RunReport, opts: { mutation?: { results: MutationResultLite[] } } = {}): Record<string, string> {
   const objs = r.objects;
-  const muts = opts.mutation ? mutationIndex(opts.mutation.results) : undefined;
-  const mutOf = (o: ObjectResult) => muts?.get(`${o.type} ${o.name}`);
+  const muts = opts.mutation ? mutationIndex(opts.mutation.results, objs) : undefined;
+  const mutOf = (o: ObjectResult) => muts?.get(`${o.owner} ${o.type} ${o.name}`);
   const mutAll = muts ? objs.flatMap((o) => [...(mutOf(o)?.values() ?? [])].flat()) : [];
   // a run without the utPLSQL comparison (older reports: always with it) hides its column and rows
   const hasUt = r.utplsqlCompare !== false;
@@ -443,7 +454,8 @@ export function renderReport(r: RunReport, opts: { mutation?: { results: Mutatio
     </tr>`).join('');
 
   // ---------------------------------------------------------------- objects
-  const testNames = (r.tests ?? []).map((t) => (t.setup ? t.description : `${t.description} <span style="opacity:.7">(${t.path.split('.').slice(1).join('.')})</span>`));
+  // (descriptions are --%test(...) text of the test packages: HTML for the tooltips only escaped)
+  const testNames = (r.tests ?? []).map((t) => (t.setup ? esc(t.description) : `${esc(t.description)} <span style="opacity:.7">(${esc(t.path.split('.').slice(1).join('.'))})</span>`));
   const files: Record<string, string> = { 'report.css': CSS, 'report.js': JS };
   const top = (home: string) => `<div class="top">
     <div class="brand">${home ? `<a href="${home}" aria-label="Overview">pl<span>gauge</span></a>` : 'pl<span>gauge</span>'}</div>
@@ -512,6 +524,11 @@ export function renderReport(r: RunReport, opts: { mutation?: { results: Mutatio
 
 /** Writes the report folder; returns the path of index.html. */
 export function writeReport(dir: string, r: RunReport, opts: { mutation?: { results: MutationResultLite[] } } = {}): string {
+  // pages of objects an earlier render had (only plgauge's pages: the folder may hold other files)
+  const pagesDir = join(dir, 'objects');
+  try {
+    for (const f of readdirSync(pagesDir)) if (f.endsWith('.html')) rmSync(join(pagesDir, f), { force: true });
+  } catch { /* no earlier report */ }
   for (const [path, text] of Object.entries(renderReport(r, opts))) {
     mkdirSync(dirname(join(dir, path)), { recursive: true });
     writeFileSync(join(dir, path), text);
@@ -633,7 +650,7 @@ function renderObject(o: ObjectResult, idx: number, tip: (html: string) => strin
     if (lp && !lp.nf) {
       const goals = lp.kind === 'loop' ? 2 : 3;
       const cov = (lp.kind === 'loop' ? 0 : +(lp.zero > 0)) + +(lp.one > 0) + +(lp.many > 0);
-      const id = tip(`<b>Loop (${lp.kind})</b><hr>${lp.kind === 'loop' ? '' : `<div class="row"><span>0 iterations</span><span>${lp.zero}×</span></div>`}<div class="row"><span>exactly 1 iteration</span><span>${lp.one}×</span></div><div class="row"><span>several iterations</span><span>${lp.many}×</span></div>`);
+      const id = tip(`<b>Loop (${esc(lp.kind)})</b><hr>${lp.kind === 'loop' ? '' : `<div class="row"><span>0 iterations</span><span>${lp.zero}×</span></div>`}<div class="row"><span>exactly 1 iteration</span><span>${lp.one}×</span></div><div class="row"><span>several iterations</span><span>${lp.many}×</span></div>`);
       badge += `<span class="br t-${tone((cov / goals) * 100)}" data-tip="${id}" tabindex="0">↻ ${cov}/${goals}</span>`;
     }
     const ms = muts?.get(line);
@@ -642,7 +659,7 @@ function renderObject(o: ObjectResult, idx: number, tip: (html: string) => strin
       const id = tip(`<b>Mutants on line ${line}</b><hr>${ms.map((m) => `<div class="row"><span><code>${esc(one(m.original))}</code> → <code>${esc(one(m.mutated))}</code> <span style="opacity:.7">${esc(m.op)}</span></span><span>${STATUS_TEXT[m.status] ?? esc(m.status)}</span></div>${m.status === 'KILLED' && m.killedBy ? `<div style="opacity:.75">by ${esc(m.killedBy)}</div>` : ''}`).join('')}`);
       badge += `<span class="br mut t-${tone(pctNum(v))}" data-tip="${id}" tabindex="0">✱ ${v.covered}/${v.total} mutants</span>`;
     }
-    return `<tr id="o${idx}-L${line}" class="${st ? `s-${st}` : ''}"><td class="ln">${line}</td><td class="ut">${utMark}</td><td class="hits">${hits === undefined ? '' : o.lineTests?.[line]?.length || hits === 0
+    return `<tr id="o${idx}-L${line}" class="${st ? `s-${esc(st)}` : ''}"><td class="ln">${line}</td><td class="ut">${utMark}</td><td class="hits">${hits === undefined ? '' : o.lineTests?.[line]?.length || hits === 0
       ? `<span data-tip="${tip(`<b>Line ${line}: executed ${hits.toLocaleString('en-US')}×</b><hr>${testList(o.lineTests?.[line], names)}`)}" tabindex="0">${hits.toLocaleString('en-US')}×</span>`
       : `${hits.toLocaleString('en-US')}×`}</td><td class="src">${htmlLines[k] ?? ''}${badge}</td></tr>`;
   }).join('');
@@ -653,7 +670,7 @@ function renderObject(o: ObjectResult, idx: number, tip: (html: string) => strin
   }));
   const all = [...o.findings, ...mutFindings].sort((a, b) => a.line - b.line);
   const findings = all.length
-    ? `<ol>${all.map((f) => `<li><a href="#o${idx}-L${f.line}"><span class="fl">L. ${f.line}</span><span class="ft"><span class="kind ${f.kind}">${KIND[f.kind]}</span>${md(f.title)}${f.detail ? `<small>${md(f.detail)}</small>` : ''}</span></a></li>`).join('')}</ol>`
+    ? `<ol>${all.map((f) => `<li><a href="#o${idx}-L${f.line}"><span class="fl">L. ${f.line}</span><span class="ft"><span class="kind ${esc(f.kind)}">${KIND[f.kind] ?? esc(f.kind)}</span>${md(f.title)}${f.detail ? `<small>${md(f.detail)}</small>` : ''}</span></a></li>`).join('')}</ol>`
     : `<div class="none">No gaps found.</div>`;
   const gaps = o.gaps.length
     ? `<h4>Not measured</h4><ol class="gaps">${o.gaps.map((g) => `<li><span class="fl">L. ${g.line}</span><span>${esc(g.reason)}</span></li>`).join('')}</ol>`
