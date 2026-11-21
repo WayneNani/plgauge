@@ -1,8 +1,11 @@
 # CI of plgauge itself: offline tests on every push, database tests (Oracle 23ai Free) after them.
+# Version tags run it through release.yml before the package is staged on npm.
 name: CI
 on:
   push:
+    branches: ['**']
   pull_request:
+  workflow_call:
 
 jobs:
   offline:

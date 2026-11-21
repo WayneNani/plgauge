@@ -92,9 +92,18 @@ The npm package `plgauge` is one file, `dist/plgauge.mjs`, that esbuild bundles 
 A release:
 
 1. Set the version everywhere: `npm version <x.y.z> --no-git-tag-version --workspaces --include-workspace-root`.
-2. Add a section to `CHANGELOG.md`, commit.
-3. `npm publish`. `prepublishOnly` runs the typecheck, the tests, the build and the package test first.
-4. Tag `v<x.y.z>`, push branch and tag, and create the GitHub release from the changelog section.
+2. Add a section `## [x.y.z] - <date>` to `CHANGELOG.md`, commit, push.
+3. Tag `v<x.y.z>` and push the tag. The workflow `release.yml` runs the full CI, checks that the tag matches
+   `package.json`, stages the package on npm and creates the GitHub release from the changelog section.
+4. Approve the staged version (2FA): `npm stage list plgauge`, then `npm stage approve <stage-id>` (npm 11.15 or
+   newer), or on npmjs.com under Staged Packages. Until then the version is not public.
+
+The workflow publishes through npm trusted publishing: no npm token is stored in the repository. The trust
+relationship is set up once by a maintainer and allows only staging, not direct publishing:
+`npm trust github plgauge --repo WayneNani/plgauge --file release.yml --allow-stage-publish`.
+
+Without the workflow, `npm publish` from a checkout still works; `prepublishOnly` runs the typecheck, the tests,
+the build and the package test first.
 
 
 plgauge merges two prototypes:
