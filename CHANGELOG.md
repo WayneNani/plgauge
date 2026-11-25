@@ -3,7 +3,7 @@
 All notable changes to plgauge are listed here. Versions follow [Semantic Versioning](https://semver.org/);
 until 1.0, a minor version may change options, file formats and output.
 
-## [Unreleased]
+## [0.2.1] - 2026-11-25
 
 ### Fixed
 
@@ -98,6 +98,7 @@ onto one TypeScript core with a single PL/SQL parser.
 - Oracle Database 23ai/26ai only.
 - Not on npm yet: run it from a checkout (`bin/plgauge`).
 
+[0.2.1]: https://github.com/WayneNani/plgauge/releases/tag/v0.2.1
 [0.2.0]: https://github.com/WayneNani/plgauge/releases/tag/v0.2.0
 [0.1.1]: https://github.com/WayneNani/plgauge/releases/tag/v0.1.1
 [0.1.0]: https://github.com/WayneNani/plgauge/releases/tag/v0.1.0
