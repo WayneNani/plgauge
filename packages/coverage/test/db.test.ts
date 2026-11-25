@@ -672,3 +672,46 @@ test('tests failing before instrumentation: messages in the outputs, warning, ex
     await conn.close();
   }
 });
+
+// runCommand: another program's sessions do the work (UI tests against ORDS, say); only those of
+// backgroundProgram count, and a probe must leave SQL%ROWCOUNT alone. Needs CREATE ANY CONTEXT.
+test('runCommand measures other sessions of the matching program, SQL%ROWCOUNT intact', { skip: !m && 'PLGAUGE_COV_DB not set', timeout: 300_000 }, async () => {
+  const conn = await oracledb.getConnection({ user: m![1], password: m![2], connectString: m![3] });
+  try {
+    await conn.execute(`create table plgauge_rc_t (id number)`).catch(() => undefined);
+    await conn.execute(`delete from plgauge_rc_t`);
+    await conn.execute(`insert into plgauge_rc_t values (1)`);
+    await conn.commit();
+    await conn.execute(`create or replace procedure plgauge_rc_ui is
+    begin
+      update plgauge_rc_t set id = id;
+      if sql%rowcount = 0 then
+        raise_application_error(-20001, 'SQL%ROWCOUNT changed by a probe');
+      end if;
+      commit;
+    end;`);
+    await conn.execute(`create or replace procedure plgauge_rc_other is
+      n number;
+    begin
+      n := 1;
+    end;`);
+    const { runCoverage } = await import('@plgauge/coverage');
+    const client = new URL('./fixtures/run-command-client.mjs', import.meta.url).pathname;
+    const r = await runCoverage({
+      user: m![1], password: m![2], connectString: m![3], schema: m![1], include: '^PLGAUGE_RC_(UI|OTHER)$', tests: [],
+      runCommand: [process.execPath, client, m![1], m![2], m![3]], backgroundProgram: '^plgauge-ui$',
+    }, () => {});
+    assert.equal(r.runCommand?.exitCode, 0, 'the client ran through: SQL%ROWCOUNT was intact');
+    const ui = r.objects.find((x) => x.name === 'PLGAUGE_RC_UI')!;
+    assert.deepEqual(ui.metrics.stmt, { covered: 3, total: 4 }, 'everything but the raise');
+    assert.equal(ui.metrics.branch.covered, 1, 'only the FALSE outcome of the check');
+    const other = r.objects.find((x) => x.name === 'PLGAUGE_RC_OTHER')!;
+    assert.equal(other.metrics.stmt.covered, 0, 'another program does not count');
+    assert.ok(r.tests.some((t) => t.path === '#background'), 'background bucket');
+  } finally {
+    await conn.execute(`drop procedure plgauge_rc_ui`).catch(() => undefined);
+    await conn.execute(`drop procedure plgauge_rc_other`).catch(() => undefined);
+    await conn.execute(`drop table plgauge_rc_t purge`).catch(() => undefined);
+    await conn.close();
+  }
+});

@@ -56,6 +56,7 @@ $C exec "$NAME" bash -c "sqlplus -s -L / as sysdba <<SQL >/tmp/grants.log 2>&1
 whenever sqlerror exit failure
 alter session set container=FREEPDB1;
 grant select on v_\\\$session to $APP;
+grant select on v_\\\$globalcontext to $APP;
 grant alter system to $APP;
 grant create any context to $APP;
 grant create view, create synonym, create materialized view, create job to $APP;

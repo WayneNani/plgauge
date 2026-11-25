@@ -3,6 +3,30 @@
 All notable changes to plgauge are listed here. Versions follow [Semantic Versioning](https://semver.org/);
 until 1.0, a minor version may change options, file formats and output.
 
+## [Unreleased]
+
+### Added
+
+- Coverage: `runCommand` measures tests that run elsewhere (Playwright against APEX, say): the measuring run starts
+  that command instead of utPLSQL and counts what other sessions execute until it ends. `coverage.json` records
+  the command and its exit code.
+- Coverage: `backgroundProgram`, a regular expression on `CLIENT_PROGRAM_NAME`, limits other sessions to one client
+  program (`^Oracle REST Data Services$`: APEX and ORDS requests, not the scripts that prepare their data).
+
+### Changed
+
+- Coverage: with `CREATE ANY CONTEXT` and `SELECT` on `V_$GLOBALCONTEXT`, other sessions keep their probe keys in
+  the global context `PLGAUGE_COV_<hash>`, read at the end of the run. Pooled sessions that reset their package state after a
+  request lose nothing, and the probes no longer commit while instrumented code runs. Hit counts of other sessions
+  are 1. Without the privileges they flush as before. `plgauge uninstall` drops the context. `ci/setup-db.sh`
+  grants `SELECT` on `V_$GLOBALCONTEXT`.
+
+### Fixed
+
+- Coverage: a periodic write of another session (every 1000 statements) committed in the middle of instrumented
+  code and set `SQL%ROWCOUNT` to 0, so `update …; if sql%rowcount = 0 then` took the wrong branch. With the
+  global context the probes no longer write.
+
 ## [0.1.1] - 2026-11-20
 
 ### Added

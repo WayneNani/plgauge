@@ -145,6 +145,10 @@ async function main() {
       const index = writeReport(out, report);
       for (const l of summaryLines(report)) console.error(l);
       console.error(`Report: ${index}`);
+      if (report.runCommand && report.runCommand.exitCode !== 0) {
+        console.error(`The run command exited with ${report.runCommand.exitCode}`);
+        if (failOnTestErrors || cfg.failOnTestErrors) process.exitCode = 5;
+      }
       if (!report.equivalent) {
         console.error('Test results differ with instrumentation');
         process.exitCode = 4;

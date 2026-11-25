@@ -119,6 +119,8 @@ Example: [`examples/order_pricing/coverage-config.json`](../../examples/order_pr
 | `warmup` | A warm-up test run before them (default `true`); `false` = `--no-warmup` |
 | `utplsqlCompare` | A test run with utPLSQL's own coverage for the line-rate comparison (default `true`); `false` = `--no-utplsql-compare` |
 | `failOnTestErrors` | Exit code 5 when tests fail or error without instrumentation (like `--fail-on-test-errors`) |
+| `runCommand` | Measure another tool's tests instead of utPLSQL, see [Tests that run elsewhere](#tests-that-run-elsewhere-runcommand) |
+| `backgroundProgram` | Regular expression on `USERENV` `CLIENT_PROGRAM_NAME`: only other sessions whose program matches count (default: all) |
 | `schemas`, `runtimeSchema` | Measure several schemas, see [Multiple schemas](#multiple-schemas) |
 | `beforeTests`, `afterTests` | SQL*Plus-style scripts, relative to the config file. `beforeTests` runs once before the objects are read and the first test run (switch test seams: synonyms to mocks, say), so a unit it replaces is measured as replaced; `afterTests` runs once at the very end, after the originals are restored, also when the run fails or is cancelled, and also without `beforeTests` |
 
@@ -265,13 +267,37 @@ Minimum privileges of the connected user:
 | `EXECUTE ANY PROCEDURE` or `EXECUTE` on the objects | Seeing the source in `ALL_SOURCE` and running the tests |
 | Own: `CREATE PROCEDURE`, `CREATE TABLE` | `cov$`, hit table, restore journal |
 
+## Tests that run elsewhere (`runCommand`)
+
+UI or API tests (Playwright against APEX, say) reach PL/SQL through other database sessions. With `runCommand`, the
+measuring run starts that command instead of utPLSQL and counts what other sessions execute until it ends:
+
+```json
+{
+  "user": "deploy", "connectString": "localhost:1521/FREEPDB1", "schema": "DEPLOY",
+  "schemas": ["SALES", "BILLING"], "tests": [],
+  "runCommand": ["npx", "playwright", "test"],
+  "backgroundProgram": "^Oracle REST Data Services$"
+}
+```
+
+- There is no baseline, warm-up, utPLSQL comparison or equivalence check; `tests` may be empty. `coverage.json`
+  records the command and its exit code (`runCommand`); a nonzero exit code is reported, and with
+  `--fail-on-test-errors` the CLI exits with code 5.
+- `backgroundProgram` keeps out sessions that only prepare data: with `^Oracle REST Data Services$` only APEX and
+  ORDS requests count, not SQL*Plus or SQLcl scripts and scheduler jobs.
+- It needs `CREATE ANY CONTEXT` and `SELECT` on `V_$GLOBALCONTEXT`: pooled sessions (ORDS) reset their package
+  state after every request, so the probes keep their keys in a global context, which the run reads at the end
+  (see [Limitations](#limitations)). Hit counts of other sessions are 1.
+
 ## Removing the runtime
 
 A run leaves its runtime in the runtime schema for the next run: the package `cov$` and the tables
 `plgauge_hits`, `plgauge_runs`, `plgauge_journal` and `plgauge_lock` (the last two are shared with mutation runs).
 `plgauge uninstall --config coverage-config.json` removes them, together with the logoff trigger of an aborted run
 and every `EXECUTE` grant on `cov$`. It also removes what mutation runs leave there: the packages `plgauge_ctl` and
-`plgauge_rt` with every `EXECUTE` grant on them, the table `plgauge_marker` and the context `PLGAUGE_CTX_<hash>`.
+`plgauge_rt` with every `EXECUTE` grant on them, the table `plgauge_marker` and the context `PLGAUGE_CTX_<hash>`, and
+the context `PLGAUGE_COV_<hash>` of coverage runs.
 Dropping the context needs `DROP ANY CONTEXT`; without it, the context stays and `uninstall` prints the
 `drop context` statement for a DBA. With `--db` (or `PLGAUGE_DB`) instead of a config, it works on the user's own
 schema and the session's `CURRENT_SCHEMA`.
@@ -332,12 +358,18 @@ npm run typecheck
 
 - **Hits from other sessions.** During the measuring run, the run is registered in `plgauge_runs`. Another session of
   the schema user that executes instrumented code (e.g. a scheduler job started by a test) counts under the entry
-  `#background`. It writes its hits every 1000 statements and at logoff:
-  - via the trigger `cov$_logoff`, which needs `CREATE TRIGGER` and exists only during the run (one left by an
-    aborted run is removed by the next run or by `plgauge restore`);
-  - the run waits up to one minute for running jobs.
-
-  Sessions of other users, and parallel query slaves that execute fewer than 1000 statements, are still lost.
+  `#background`; `backgroundProgram` narrows that to one client program. The run waits up to one minute for
+  running jobs.
+  - With `CREATE ANY CONTEXT` and `SELECT` on `V_$GLOBALCONTEXT`, the run creates the global context
+    `PLGAUGE_COV_<hash>`. Another session puts each probe key into it the first time it reaches it, and the run
+    reads the context at the end. Nothing is lost
+    when a connection pool resets the package state after a request, and the probes run no SQL and no `COMMIT`,
+    which would change `SQL%ROWCOUNT` and `SQL%FOUND` of the instrumented code. Hit counts of other sessions are 1.
+    Sessions of other users (APEX, ORDS) count too, as long as they run instrumented code.
+  - Without it, another session writes its hits every 1000 statements and at logoff, via the trigger `cov$_logoff`
+    (needs `CREATE TRIGGER`, exists only during the run; one left by an aborted run is removed by the next run or
+    by `plgauge restore`). Sessions of other users, and parallel query slaves that execute fewer than 1000
+    statements, are lost, and the periodic write commits, which resets `SQL%ROWCOUNT` at that point.
 - **Not measured:** dynamic SQL (the `EXECUTE IMMEDIATE` statement itself counts), code encrypted with `wrap`, and
   trigger `WHEN` clauses (Oracle allows no PL/SQL calls there; whether the body ran shows in its first statement).
   CASE expressions in conditions and in loop bounds are not measured either, nor a CASE in SQL with `IN`, `NOT IN`,

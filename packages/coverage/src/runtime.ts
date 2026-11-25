@@ -5,9 +5,14 @@
  * per hit. flush() persists the counters in one autonomous transaction.
  *
  * Other sessions (A8): while a run is registered in plgauge_runs, a session that is not the
- * runner (a scheduler job started by a test, say) records its hits under the test name
- * "#background" and writes them itself: every 1000 statements and at logoff (trigger
- * cov$_logoff, only present during the run).
+ * runner (a scheduler job started by a test, a pooled ORDS session serving UI tests) records its
+ * hits under the test name "#background". With the run's global context (CREATE ANY CONTEXT) it
+ * puts each probe key there the first time it reaches it, without SQL or COMMIT, and the runner
+ * reads the context from V$GLOBALCONTEXT at the end: that survives the package state reset that a
+ * connection pool does after every request, and it leaves SQL%ROWCOUNT alone (a COMMIT, even an
+ * autonomous one, sets it to 0). Hit counts of other sessions are then 1. Without the context a
+ * session writes its counters itself: every 1000 statements and at logoff (trigger cov$_logoff,
+ * only present during the run).
  */
 
 export const RUNS_TABLE = `
@@ -78,7 +83,8 @@ end cov$;`;
 const PROBE_DECL = `l_v pls_integer; k pls_integer; b pls_integer;`;
 const PROBE_BODY = `if p_v then l_v := 0; elsif not p_v then l_v := 1; else l_v := 2; end if;
     k := p_d * 256 + p_i * 4 + l_v;
-    if g_c.exists(k) then g_c(k) := g_c(k) + 1; else g_c(k) := 1; end if;
+    if g_c.exists(k) then g_c(k) := g_c(k) + 1;
+    else g_c(k) := 1; if g_seen then seen('C', p_d || ':' || p_i || ':' || tfn(l_v)); end if; end if;
     if g_top > 0 and p_i <= 30 then
       if g_fd(g_top) = p_d then
         b := g_pow(p_i);
@@ -88,7 +94,23 @@ const PROBE_BODY = `if p_v then l_v := 0; elsif not p_v then l_v := 1; else l_v 
     end if;
     if g_pt and g_tid > 0 then g_pc(g_tid)(k) := 1; end if;`;
 
-export const RUNTIME_BODY = `
+/** Quoted for a PL/SQL literal; '' is NULL. */
+const lit = (v: string | undefined) => `'${(v ?? '').replace(/'/g, "''")}'`;
+
+/**
+ * The body of cov$. context: the run's global context for other sessions (none: they flush
+ * themselves). program: a regular expression on USERENV CLIENT_PROGRAM_NAME; only other sessions
+ * whose program matches count (none: all). utInfo: the name of utPLSQL's UT3_INFO context.
+ */
+export function runtimeBody(opts: { context?: string; program?: string; utInfo?: string } = {}): string {
+  // replacer functions: a "$'" or "$&" in a value is text, not a replacement pattern
+  return RUNTIME_BODY_TEMPLATE
+    .replace('gc_ctx     constant varchar2(128)  := null;', () => `gc_ctx     constant varchar2(128)  := ${lit(opts.context)};`)
+    .replace('gc_program constant varchar2(4000) := null;', () => `gc_program constant varchar2(4000) := ${lit(opts.program)};`)
+    .replace(/UT3_INFO/g, () => opts.utInfo ?? 'UT3_INFO');
+}
+
+const RUNTIME_BODY_TEMPLATE = `
 create or replace package body cov$ is
   /*
     Hot path uses integer keys only:
@@ -130,6 +152,33 @@ create or replace package body cov$ is
   g_bg_run varchar2(64);
   g_bg_cnt pls_integer := 0;
   g_partial boolean := false;   -- periodic flush of another session: keep open loops
+  g_seen   boolean := false;   -- another session that keeps its keys in the global context
+  gc_ctx     constant varchar2(128)  := null;
+  gc_program constant varchar2(4000) := null;
+
+  function tfn(p pls_integer) return varchar2 is
+  begin
+    return case p when 0 then 'T' when 1 then 'F' else 'N' end;
+  end;
+
+  /*
+    Another session: a key reached for the first time since its package state began goes into the
+    global context (the value is the key; an attribute holds at most 30 bytes, so a longer one
+    is hashed). No SQL and no COMMIT here: both would change SQL%ROWCOUNT / SQL%FOUND of the
+    instrumented code's last statement.
+  */
+  procedure seen(p_kind varchar2, p_k varchar2) is
+    l_a varchar2(200) := p_kind || p_k;
+  begin
+    if lengthb(l_a) > 30 then
+      l_a := p_kind || dbms_utility.get_hash_value(p_k, 0, 1073741824) || '_'
+             || dbms_utility.get_hash_value(p_k || '#', 0, 1073741824);
+    end if;
+    if sys_context(gc_ctx, l_a) is null then
+      dbms_session.set_context(gc_ctx, l_a, p_kind || '|' || p_k);
+    end if;
+  exception when others then null;
+  end;
 
   procedure set_test is
     l_name varchar2(400) := case when g_bg then '#background' else sys_context('UT3_INFO', 'TEST_NAME') end;
@@ -197,7 +246,8 @@ create or replace package body cov$ is
   begin
     if p_v then l_v := 0; elsif not p_v then l_v := 1; else l_v := 2; end if;
     k := p_d * 4 + l_v;
-    if g_d.exists(k) then g_d(k) := g_d(k) + 1; else g_d(k) := 1; end if;
+    if g_d.exists(k) then g_d(k) := g_d(k) + 1;
+    else g_d(k) := 1; if g_seen then seen('D', p_d || ':' || tfn(l_v)); end if; end if;
     if g_pt and g_tid > 0 then g_pd(g_tid)(k) := 1; end if;
     k := g_top;
     while k > 0 and g_fd(k) != p_d loop
@@ -205,7 +255,8 @@ create or replace package body cov$ is
     end loop;
     if k > 0 then
       ks := p_d || '|' || g_fe(k) || '|' || g_ft(k) || '|' || g_fn(k) || '|' || l_v;
-      if g_v.exists(ks) then g_v(ks) := g_v(ks) + 1; else g_v(ks) := 1; end if;
+      if g_v.exists(ks) then g_v(ks) := g_v(ks) + 1;
+      else g_v(ks) := 1; if g_seen then seen('V', ks); end if; end if;
       g_top := k - 1;
     end if;
     return p_v;
@@ -214,12 +265,13 @@ create or replace package body cov$ is
 
   procedure s(p_s pls_integer) is
   begin
-    if g_s.exists(p_s) then g_s(p_s) := g_s(p_s) + 1; else g_s(p_s) := 1; end if;
+    if g_s.exists(p_s) then g_s(p_s) := g_s(p_s) + 1;
+    else g_s(p_s) := 1; if g_seen then seen('S', p_s); end if; end if;
     if g_pt then
       set_test;
       g_ps(g_tid)(p_s) := 1;
     end if;
-    if g_bg then
+    if g_bg and not g_seen then
       g_bg_cnt := g_bg_cnt + 1;
       if g_bg_cnt >= 1000 then
         g_partial := true;
@@ -232,7 +284,8 @@ create or replace package body cov$ is
 
   procedure b(p_b pls_integer) is
   begin
-    if g_b.exists(p_b) then g_b(p_b) := g_b(p_b) + 1; else g_b(p_b) := 1; end if;
+    if g_b.exists(p_b) then g_b(p_b) := g_b(p_b) + 1;
+    else g_b(p_b) := 1; if g_seen then seen('B', p_b); end if; end if;
     if g_pt and g_tid > 0 then g_pb(g_tid)(p_b) := 1; end if;
   exception when others then null;
   end;
@@ -253,7 +306,8 @@ create or replace package body cov$ is
   begin
     if g_li.exists(p_l) then
       ks := p_l || ':' || case when g_li(p_l) = 0 then '0' when g_li(p_l) = 1 then '1' else 'n' end;
-      if g_l.exists(ks) then g_l(ks) := g_l(ks) + 1; else g_l(ks) := 1; end if;
+      if g_l.exists(ks) then g_l(ks) := g_l(ks) + 1;
+      else g_l(ks) := 1; if g_seen then seen('L', ks); end if; end if;
       g_li.delete(p_l);
     end if;
   end;
@@ -299,10 +353,6 @@ create or replace package body cov$ is
     begin
       insert into plgauge_hits (run_id, kind, k, hits, test) values (p_run, p_kind, p_k, p_hits, p_test);
     end;
-    function tfn(p pls_integer) return varchar2 is
-    begin
-      return case p when 0 then 'T' when 1 then 'F' else 'N' end;
-    end;
   begin
     if g_partial then
       l_li := g_li;
@@ -347,9 +397,17 @@ create or replace package body cov$ is
     if g_partial then g_li := l_li; end if;
   end;
 
+  procedure clear_seen is
+  begin
+    if gc_ctx is not null then
+      dbms_session.clear_all_context(gc_ctx);
+    end if;
+  end;
+
   procedure start_run(p_run varchar2) is
     pragma autonomous_transaction;
   begin
+    clear_seen;
     delete from plgauge_runs;
     insert into plgauge_runs (run_id) values (p_run);
     commit;
@@ -367,11 +425,12 @@ create or replace package body cov$ is
   begin
     delete from plgauge_runs where run_id = p_run;
     commit;
+    clear_seen;
   end;
 
   procedure flush_background is
   begin
-    if g_bg and not g_runner and g_bg_run is not null then
+    if g_bg and not g_seen and not g_runner and g_bg_run is not null then
       g_bg_cnt := 0;
       flush(g_bg_run);
       g_tid := 0;
@@ -394,9 +453,12 @@ begin
   -- a session that loads cov$ while a run is registered is not the runner: record for it
   begin
     g_bg_run := registered_run;
-    if g_bg_run is not null then
+    if g_bg_run is not null
+      and (gc_program is null or regexp_like(sys_context('userenv', 'client_program_name'), gc_program))
+    then
       g_bg := true;
-      g_pt := true;
+      g_seen := gc_ctx is not null;
+      g_pt := not g_seen;   -- with the context, the runner writes the "#background" entries
     end if;
   exception when others then null;
   end;
@@ -404,3 +466,6 @@ begin
     g_pow(i) := power(2, i - 1);
   end loop;
 end cov$;`;
+
+/** The body without a context or program filter (the corpus check compiles it). */
+export const RUNTIME_BODY = runtimeBody();

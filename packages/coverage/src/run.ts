@@ -10,9 +10,13 @@
  *  5. restore original code (always, also on failure)
  *  6. compare test results of 1 and 4 (instrumentation must not change behaviour;
  *     flaky tests left aside)
+ *
+ * With runCommand, step 4 starts that command instead of utPLSQL and measures what other
+ * sessions run meanwhile (UI tests against ORDS, say); steps 1, 2 and 6 are left out.
  */
 import oracledb from 'oracledb';
-import { randomUUID } from 'node:crypto';
+import { spawn } from 'node:child_process';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import {
   connect, contextName, databaseInfo, dbIdent, failureSummary, firstLine, utInfoContext, restoreJournal, ensureJournal, journalEntries, loadObjects, lockRun, replaceSourceDetailed, restoreAll, RUN_LOCK, runScript, runTestHooks, sha256, splitScript,
@@ -21,7 +25,7 @@ import {
 import { instrument } from './instrument.js';
 import { analyze, type ObjectResult } from './analyze.js';
 import { newIds, type Hits, type ObjectMap, type TestHits, type TestInfo } from './model.js';
-import { HITS_TABLE, LOGOFF_TRIGGER, RUNS_TABLE, RUNTIME_BODY, RUNTIME_SPEC } from './runtime.js';
+import { HITS_TABLE, LOGOFF_TRIGGER, RUNS_TABLE, RUNTIME_SPEC, runtimeBody } from './runtime.js';
 
 export interface RunConfig {
   user: string;
@@ -65,6 +69,19 @@ export interface RunConfig {
   afterTests?: string[];
   /** Exit with code 5 (CLI) when tests fail or error already without instrumentation. */
   failOnTestErrors?: boolean;
+  /**
+   * Instead of utPLSQL, the measuring run starts this command (program and arguments) and counts
+   * what other sessions execute until it ends: UI or API tests against ORDS, say. There is no
+   * baseline, warm-up, utPLSQL comparison or equivalence check, and `tests` may be empty. Needs
+   * CREATE ANY CONTEXT: pooled sessions reset their package state after every request.
+   */
+  runCommand?: string[];
+  /**
+   * A regular expression on USERENV CLIENT_PROGRAM_NAME: only other sessions whose program
+   * matches count, e.g. "^Oracle REST Data Services$" for APEX and ORDS requests without the
+   * scripts that prepare their data. Default: every other session.
+   */
+  backgroundProgram?: string;
 }
 
 export type { TestCase, TestRun } from '@plgauge/core';
@@ -100,6 +117,23 @@ export interface RunReport {
   unrestored?: number;
   /** An afterTests script failed: the test seams may still be switched. */
   afterTestsFailed?: string;
+  /** The run measured a runCommand instead of utPLSQL tests: the command and its exit code. */
+  runCommand?: { command: string[]; exitCode: number | null };
+}
+
+/** The global context in which other sessions keep their keys (one per runtime schema). */
+export function coverageContextName(schema: string): string {
+  return `PLGAUGE_COV_${createHash('sha256').update(schema.toUpperCase()).digest('hex').slice(0, 12).toUpperCase()}`;
+}
+
+/** Runs the command of runCommand with the terminal attached; resolves with its exit code. */
+function runExternal(command: string[]): Promise<{ run: TestRun; exitCode: number | null }> {
+  const t0 = performance.now();
+  return new Promise((resolve, reject) => {
+    const child = spawn(command[0], command.slice(1), { stdio: 'inherit' });
+    child.on('error', reject);
+    child.on('close', (code) => resolve({ run: { tests: [], ms: performance.now() - t0 }, exitCode: code }));
+  });
 }
 
 export async function runCoverage(cfg: RunConfig, log: (m: string) => void = console.error): Promise<RunReport> {
@@ -239,7 +273,12 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     // then the project's install scripts: the new code is the original
     for (const path of cfg.installScripts ?? []) await runScript(conn, splitScript(readFileSync(path, 'utf8')), path);
     if (cfg.installScripts?.length) say(`${cfg.installScripts.length} scripts installed`);
-    await installRuntime(conn);
+    const external = cfg.runCommand?.length ? cfg.runCommand : undefined;
+    const context = await installRuntime(conn, rtOwner, cfg.backgroundProgram);
+    if (!context) {
+      if (external) throw new Error('runCommand needs CREATE ANY CONTEXT and SELECT on V_$GLOBALCONTEXT: the other sessions keep their hits in a global context');
+      say('  Note: no global context (CREATE ANY CONTEXT or SELECT on V_$GLOBALCONTEXT missing): other sessions write their hits every 1000 statements and at logoff');
+    }
     // left by a run that died during its instrumented test run
     await conn.execute(`drop trigger cov$_logoff`).catch(() => {});
 
@@ -266,17 +305,17 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       granted.push(owner);
     }
     // warm-up: utPLSQL builds its annotation cache on the first run
-    const warmup = cfg.warmup !== false;
+    const warmup = !external && cfg.warmup !== false;
     if (warmup) await testRun(cfg.tests, null);
-    say('1/4 Test run without coverage …');
-    const repeat = Math.max(1, cfg.baselineRuns ?? 2);
+    say(external ? '1/4 Test run without coverage skipped (runCommand)' : '1/4 Test run without coverage …');
+    const repeat = external ? 0 : Math.max(1, cfg.baselineRuns ?? 2);
     // without the warm-up the first baseline run is cold: its results count, its time does not
     // (the last run gives the timing, so only a single cold run leaves none)
     const timed = warmup || repeat > 1;
     // Every run starts with fresh package state, like the instrumented run after compiling:
     // tests that depend on state left by earlier tests then behave the same in all runs.
     const fresh = () => conn.execute('begin dbms_session.reset_package; end;');
-    let baseline!: Awaited<ReturnType<typeof testRun>>;
+    let baseline: Awaited<ReturnType<typeof testRun>> = { run: { tests: [], ms: 0 }, sonar: new Map() };
     const observed: TestCase[][] = [];
     for (let k = 0; k < repeat; k++) {
       await fresh();
@@ -286,7 +325,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     // red before any instrumentation: their objects' coverage is low for that reason, not for missing tests
     for (const w of failureSummary(baseline.run.tests, 'before instrumentation')) say(w);
     let utCov: Awaited<ReturnType<typeof testRun>> | undefined;
-    if (cfg.utplsqlCompare !== false) {
+    if (!external && cfg.utplsqlCompare !== false) {
       say('2/4 Test run with utPLSQL coverage (DBMS_PROFILER) …');
       await fresh();
       utCov = await testRun(cfg.tests, schemas);
@@ -343,18 +382,27 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     const perTest = cfg.perTest !== false;
     await fresh();
     await conn.execute(`begin cov$.reset; cov$.per_test(:p = 1); cov$.start_run(:r); end;`, { p: perTest ? 1 : 0, r: runId });
-    await conn.execute(LOGOFF_TRIGGER).then(() => { logoff = true; }, (e) => say(`  Note: no logoff trigger (${firstLine(e)}), other sessions write only every 1000 statements`));
+    // without the context, other sessions write their counters at logoff (with it, they need not)
+    if (!context) await conn.execute(LOGOFF_TRIGGER).then(() => { logoff = true; }, (e) => say(`  Note: no logoff trigger (${firstLine(e)}), other sessions write only every 1000 statements`));
     let instrumentedRun;
+    let exitCode: number | null = null;
     // compiling left the last object's length semantics in the session; the tests (DDL in them)
     // run with the session's own, as in the baseline
     await conn.execute(`alter session set nls_length_semantics = ${nls === 'CHAR' ? 'CHAR' : 'BYTE'}`);
     try {
-      instrumentedRun = await testRun(cfg.tests, null);
+      if (external) {
+        checkpoint();
+        say(`  running ${external.join(' ')}`);
+        ({ run: instrumentedRun, exitCode } = await runExternal(external).then(({ run, exitCode: c }) => ({ run: { run, sonar: new Map() }, exitCode: c })));
+        say(`  command exited with ${exitCode}`);
+        checkpoint();
+      } else instrumentedRun = await testRun(cfg.tests, null);
       // a test that reset all package state took the counters with it
       const intact = (await conn.execute<[number]>(`select cov$.intact from dual`)).rows?.[0]?.[0];
       if (intact !== 1) say('WARNING: the state of cov$ was reset during the tests (DBMS_SESSION.RESET_PACKAGE in a test?): the coverage of this run is incomplete');
       await conn.execute(`begin cov$.flush(:r); end;`, { r: runId });
       await waitForJobs(conn, say);
+      if (context) await collectContext(conn, context, runId, perTest);
     } finally {
       await conn.execute(`begin cov$.stop_run(:r); end;`, { r: runId }).catch(() => {});
       await dropLogoff();
@@ -387,10 +435,10 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
     const equivalent = differing.length === 0 && baseline.run.tests.filter((t) => !flaky.has(key(t))).every((t) => instrumentedRun.run.tests.some((u) => key(u) === key(t)));
     for (const f of flaky) say(`  flaky (result changes without instrumentation): ${f}`);
     for (const d of differing) say(`  differs with instrumentation: ${d}`);
-    const tests = await loadTestCatalog(conn, rtOwner, cfg.tests, baseline.run.tests, instrumentedRun.run.tests, hits);
+    const tests = await loadTestCatalog(conn, rtOwner, external ? [] : cfg.tests, baseline.run.tests, instrumentedRun.run.tests, hits);
     const testIndex = new Map(tests.map((t, k) => [t.path, k]));
     for (const t of tests) if (!t.setup && flaky.has(`${t.suite}::${t.description}`)) t.status = 'flaky';
-    say(equivalent ? `Test results identical with and without instrumentation ✓${flaky.size ? ` (${flaky.size} flaky tests excluded)` : ''}` : 'WARNING: test results differ!');
+    if (!external) say(equivalent ? `Test results identical with and without instrumentation ✓${flaky.size ? ` (${flaky.size} flaky tests excluded)` : ''}` : 'WARNING: test results differ!');
 
     const objectsOut: ObjectResult[] = maps.map((m) => {
       if ('error' in m) {
@@ -419,6 +467,7 @@ export async function runCoverage(cfg: RunConfig, log: (m: string) => void = con
       equivalent, flakyTests: [...flaky].sort(), baselineRuns: repeat, warmup, utplsqlCompare: !!utCov, differingTests: differing,
       tests, perTest, objects: objectsOut, log: messages,
       ...(unrestored ? { unrestored } : {}),
+      ...(external ? { runCommand: { command: external, exitCode } } : {}),
     });
   } finally {
     clearInterval(ping);
@@ -477,17 +526,48 @@ async function waitForJobs(conn: oracledb.Connection, say: (m: string) => void) 
   await new Promise((r) => setTimeout(r, 1000)); // their logoff writes the hits
 }
 
-export async function installRuntime(conn: oracledb.Connection) {
+/**
+ * The keys that other sessions left in the global context become hits of the run, also as the
+ * "#background" entry of the per-test coverage. The runner reads them from V$GLOBALCONTEXT
+ * (DBMS_SESSION.LIST_CONTEXT lists only what the session itself set).
+ */
+async function collectContext(conn: oracledb.Connection, context: string, runId: string, perTest: boolean) {
+  await conn.execute(`insert into plgauge_hits (run_id, kind, k, hits)
+    select :r, substr(value, 1, 1), substr(value, 3), 1 from v$globalcontext where namespace = :c`, { r: runId, c: context });
+  if (perTest) {
+    await conn.execute(`insert into plgauge_hits (run_id, kind, k, hits, test)
+      select :r, lower(substr(value, 1, 1)), substr(value, 3), 1, '#background' from v$globalcontext
+       where namespace = :c and substr(value, 1, 1) in ('S', 'B', 'C', 'D')`, { r: runId, c: context });
+  }
+  await conn.commit();
+}
+
+/**
+ * Installs the hit tables and cov$ in rtOwner (the session's current schema), with the global
+ * context of other sessions when the user may create it and read V$GLOBALCONTEXT. Returns the
+ * context's name, or undefined without one of the two privileges.
+ */
+export async function installRuntime(conn: oracledb.Connection, rtOwner?: string, program?: string): Promise<string | undefined> {
+  rtOwner ??= (await conn.execute<[string]>(`select sys_context('userenv', 'current_schema') from dual`)).rows![0][0];
   await tryExecute(conn, HITS_TABLE, 'ORA-00955');
   await tryExecute(conn, RUNS_TABLE, 'ORA-00955');
+  const ctx = coverageContextName(rtOwner);
+  const missing = (e: Error) => {
+    if (e.message.includes('ORA-01031') || e.message.includes('ORA-00942')) return undefined;
+    throw e;
+  };
+  const context = await conn.execute(`create or replace context ${ctx} using ${dbIdent(rtOwner)}.cov$ accessed globally`)
+    .then(() => conn.execute(`select count(*) from v$globalcontext where namespace = :c`, { c: ctx }))
+    .then(() => ctx, missing);
   await conn.execute(RUNTIME_SPEC);
-  await conn.execute(RUNTIME_BODY.replace(/UT3_INFO/g, await utInfoContext(conn)));
+  await conn.execute(runtimeBody({ context, program, utInfo: await utInfoContext(conn) }));
   // Native compilation makes the probes cheaper; it does not affect the instrumented code itself.
   await conn.execute(`alter package cov$ compile body plsql_code_type = native plsql_optimize_level = 3`);
   const nativeErr = await conn.execute(`select 1 from user_errors where name = 'COV$'`);
   if (nativeErr.rows?.length) await conn.execute(`alter package cov$ compile body plsql_code_type = interpreted plsql_optimize_level = 3`);
   const err = await conn.execute<[number, string]>(`select line, text from user_errors where name = 'COV$' order by sequence`);
   if (err.rows?.length) throw new Error(`Runtime cov$ does not compile: ${err.rows.map((r) => `${r[0]}: ${r[1]}`).join('; ')}`);
+  return context;
 }
 
 /**
@@ -509,8 +589,9 @@ const RUNTIME_TABLES = ['PLGAUGE_HITS', 'PLGAUGE_RUNS', 'PLGAUGE_JOURNAL', 'PLGA
 /**
  * plgauge uninstall: removes what runs of either tool leave in the runtime schema home (logoff
  * trigger, the grants on cov$ and plgauge_ctl, cov$, plgauge_ctl, plgauge_rt, the tables
- * plgauge_hits, plgauge_runs, plgauge_journal, plgauge_marker, plgauge_lock, the context of
- * mutation runs). Refused while the journal has entries: their originals would be lost. Idempotent.
+ * plgauge_hits, plgauge_runs, plgauge_journal, plgauge_marker, plgauge_lock, the contexts of
+ * mutation runs and of other sessions in coverage runs). Refused while the journal has entries:
+ * their originals would be lost. Idempotent.
  */
 export async function uninstallRuntime(cfg: ConnectConfig, home: string, say: (m: string) => void): Promise<void> {
   const conn = await connect(cfg);
@@ -520,15 +601,21 @@ export async function uninstallRuntime(cfg: ConnectConfig, home: string, say: (m
     const tables = await rows(`select table_name from all_tables where owner = :o and table_name in ('PLGAUGE_HITS', 'PLGAUGE_RUNS', 'PLGAUGE_JOURNAL', 'PLGAUGE_MARKER', 'PLGAUGE_LOCK')`);
     const objs = await rows(`select object_type || ' ' || object_name from all_objects where owner = :o and object_name in ('COV$', 'COV$_LOGOFF', 'PLGAUGE_CTL', 'PLGAUGE_RT') and object_type in ('PACKAGE', 'TRIGGER')`);
     // contexts belong to SYS; one may outlive its package (an uninstall without DROP ANY CONTEXT)
-    const ctx = contextName(home);
-    const hasCtx = objs.includes('PACKAGE PLGAUGE_CTL') || (await rows(`select object_name from all_objects where owner = 'SYS' and object_type = 'CONTEXT' and object_name = :c`, { c: ctx })).length > 0;
+    const ctxs = await rows(`select object_name from all_objects where owner = 'SYS' and object_type = 'CONTEXT' and object_name in (:m, :c)`, { m: contextName(home), c: coverageContextName(home) });
+    if (objs.includes('PACKAGE PLGAUGE_CTL') && !ctxs.includes(contextName(home))) ctxs.push(contextName(home));
     // CREATE ANY CONTEXT does not include dropping one: then a DBA does it, the rest goes anyway
-    const dropContext = () => tryExecute(conn, `drop context ${ctx}`, 'ORA-04043').then(() => true, (e: Error) => {
-      say(`  Context ${ctx} stays (${firstLine(e)}); a user with DROP ANY CONTEXT removes it: drop context ${ctx};`);
-      return false;
-    });
+    const dropContexts = async () => {
+      const gone: string[] = [];
+      for (const ctx of ctxs) {
+        await tryExecute(conn, `drop context ${ctx}`, 'ORA-04043').then(() => gone.push(ctx), (e: Error) => {
+          say(`  Context ${ctx} stays (${firstLine(e)}); a user with DROP ANY CONTEXT removes it: drop context ${ctx};`);
+        });
+      }
+      return gone;
+    };
     if (!tables.length && !objs.length) {
-      say(hasCtx && (await dropContext()) ? `Schema ${home}: context ${ctx.toLowerCase()} removed` : `Schema ${home}: nothing to remove`);
+      const gone = await dropContexts();
+      say(gone.length ? `Schema ${home}: ${gone.map((c) => `context ${c.toLowerCase()}`).join(', ')} removed` : `Schema ${home}: nothing to remove`);
       return;
     }
     await conn.execute(`alter session set current_schema = ${dbIdent(home)}`);
@@ -549,12 +636,12 @@ export async function uninstallRuntime(cfg: ConnectConfig, home: string, say: (m
       if (revoked.length) say(`Execute on ${pkg.toLowerCase()} revoked from ${revoked.join(', ')}`);
     }
     for (const t of RUNTIME_TABLES.filter((x) => tables.includes(x))) await tryExecute(conn, `drop table ${t} purge`, 'ORA-00942');
-    const ctxGone = hasCtx && (await dropContext());
+    const ctxGone = await dropContexts();
     // the lock table last, after the lock is given up; a run that started in between keeps it
     await lock.close();
     lock = undefined;
     if (!(await tryExecute(conn, `drop table plgauge_lock purge`, 'ORA-00942', 'ORA-00054'))) say('  (a run started meanwhile: its table plgauge_lock stays)');
-    say(`Schema ${home}: plgauge runtime removed (${[...objs.map((o) => o.toLowerCase()), ...tables.map((t) => `table ${t.toLowerCase()}`), ...(ctxGone ? [`context ${ctx.toLowerCase()}`] : [])].join(', ')})`);
+    say(`Schema ${home}: plgauge runtime removed (${[...objs.map((o) => o.toLowerCase()), ...tables.map((t) => `table ${t.toLowerCase()}`), ...ctxGone.map((c) => `context ${c.toLowerCase()}`)].join(', ')})`);
   } finally {
     await lock?.close().catch(() => {});
     await conn.close().catch(() => {});
