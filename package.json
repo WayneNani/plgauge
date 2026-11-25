@@ -1,6 +1,6 @@
 {
   "name": "plgauge",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Measures how good your utPLSQL tests are: branch, condition and MC/DC coverage plus mutation testing",
   "keywords": [
     "plsql",

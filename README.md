@@ -175,7 +175,7 @@ The parser is also checked offline on a corpus of about 900 PL/SQL bodies from t
 
 ## Status
 
-plgauge is young (version 0.1). There are 178 automated tests, 31 of them against a real Oracle database,
+plgauge is young (version 0.2). There are 181 automated tests, 32 of them against a real Oracle database,
 including full mutation runs in both modes. Known gap: only Oracle 23ai/26ai is tested.
 
 How the code is organised, how to run the tests against a database and how parity with the earlier prototypes

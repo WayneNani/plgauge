@@ -2,7 +2,7 @@
 # Copy into .gitlab-ci.yml of a project with plgauge.json. Needs a runner with Docker-in-Docker.
 # Coverage appears in merge requests (Cobertura), test results as JUnit.
 variables:
-  PLGAUGE_VERSION: "0.1"                                   # npm version range of plgauge
+  PLGAUGE_VERSION: "0.2"                                   # npm version range of plgauge
   DOCKER_HOST: tcp://docker:2375
   DOCKER_TLS_CERTDIR: ""
   GIT_DEPTH: 0                                             # the diff mode needs the merge base

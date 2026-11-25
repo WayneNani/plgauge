@@ -7,7 +7,7 @@ on:
   pull_request:
 
 env:
-  PLGAUGE_VERSION: "0.1"
+  PLGAUGE_VERSION: "0.2"
 
 jobs:
   plsql:
