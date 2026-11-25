@@ -24,7 +24,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
+          # no registry-url: its .npmrc carries a placeholder token that npm sends instead of the OIDC one (E401)
       - name: npm with staged publishing
         run: npm install -g npm@^11.15.0
       - name: Tag matches the package version
@@ -34,7 +34,8 @@ jobs:
       - run: npm ci
       # the CI job above has run the tests and the package test on this commit
       - run: npm run build
-      - run: npm stage publish --ignore-scripts
+      # verbose: npm logs why the OIDC token exchange was refused only at this level
+      - run: npm stage publish --ignore-scripts --loglevel verbose
 
   github-release:
     needs: stage
