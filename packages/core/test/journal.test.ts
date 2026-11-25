@@ -292,3 +292,19 @@ test('a unit compiled with implicit BOOLEAN conversion keeps it through change a
     }
   });
 });
+
+test('a NONEDITIONABLE unit stays so through change and restore (ORA-38824 otherwise)', { skip: !m && 'PLGAUGE_COV_DB not set' }, async () => {
+  await withConn(async (conn, owner) => {
+    const editionable = async () => (await conn.execute<[string]>(`select editionable from user_objects where object_name = 'PLGAUGE_JOURNAL_NONED'`)).rows![0][0];
+    try {
+      await conn.execute(`create or replace noneditionable procedure plgauge_journal_noned is begin null; end;`);
+      const obj = await loadObject(conn, owner, 'PLGAUGE_JOURNAL_NONED', 'PROCEDURE');
+      assert.equal(await replaceSource(conn, obj, 'procedure plgauge_journal_noned is begin dbms_output.put_line(1); end;', 'test'), null);
+      assert.equal(await editionable(), 'N');
+      await restoreAll(conn, [obj], () => {});
+      assert.equal(await editionable(), 'N');
+    } finally {
+      await conn.execute(`drop procedure plgauge_journal_noned`).catch(() => {});
+    }
+  });
+});

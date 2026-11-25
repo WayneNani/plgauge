@@ -33,10 +33,13 @@ export class CoverageIndex {
   private objects = new Map<string, CoverageObject>();
   /** Tests marked flaky by the coverage run. */
   flaky: Set<string>;
+  /** Tests the coverage run measured: any other test's reach is unknown. */
+  measured: Set<string>;
 
   constructor(public exp: CoverageExport) {
     if (exp.format !== 'plgauge-coverage/1') throw new Error(`unknown coverage format: ${exp.format}`);
     this.flaky = new Set(exp.tests.filter((t) => t.status === 'flaky').map((t) => t.path));
+    this.measured = new Set(exp.tests.map((t) => t.path));
     for (const o of exp.objects) this.objects.set(`${o.type} ${o.name}`, o);
   }
 

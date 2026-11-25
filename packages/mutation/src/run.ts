@@ -171,6 +171,8 @@ export function sample<T>(items: T[], n: number, seed: number): T[] {
 
 const isCompanion = (text: string) => text.includes('Statement ignored') || text.includes('Item ignored');
 const lostConnection = (e?: Error) => !!e && /NJS-500|NJS-003|NJS-521|DPI-1010|DPI-1080|ORA-00028|ORA-03113|ORA-03135|ORA-07445/.test(e.message);
+/** Errors of state left from replaced code (type or package specs created anew): gone in the next run. */
+const STALE_STATE = /ORA-(21700|04061|04065|04068|06508)\b/;
 /** A quoted identifier, exactly as written. */
 const quoted = (x: string) => `"${x.replace(/"/g, '""')}"`;
 /** detail of a TIMEOUT from the loop guard (not a time limit; never re-checked). */
@@ -908,6 +910,8 @@ class Run {
   }
 
   private covIndex?: CoverageIndex;
+  /** Passing tests the coverage file does not know (with --coverage). */
+  private unmeasured: string[] = [];
   private covUsable = new Map<string, boolean>();
   /** Schema mode: covering tests per mutant from the recording run. */
   covering = new Map<number, string[]>();
@@ -950,7 +954,13 @@ class Run {
   async selection(w: Worker, m: Mutant): Promise<string[] | null> {
     if (this.recorded.has(m.id)) return this.covering.get(m.id) ?? [];
     if (!this.opt.coverage) return null;
-    this.covIndex ??= new CoverageIndex(this.opt.coverage);
+    if (!this.covIndex) {
+      this.covIndex = new CoverageIndex(this.opt.coverage);
+      // a test the coverage run did not measure (another schema's tests, added since) may reach
+      // any mutant: it runs against all of them
+      this.unmeasured = this.passing.filter((t) => !this.covIndex!.measured.has(t));
+      if (this.unmeasured.length) this.logf(`WARNING: ${this.unmeasured.length} of ${this.passing.length} tests are not in the coverage file and run against every mutant (e.g. ${this.unmeasured[0]})`);
+    }
     const obj = this.covIndex.object(m.unit);
     if (!obj) return null;
     const key = unitKey(m);
@@ -965,7 +975,7 @@ class Run {
     const line = m.line - unitLineOf(m) + 1;
     const sel = this.covIndex.testsAt(obj, line, line > 1 ? m.col : undefined);
     // a flaky test may reach the mutant in this run although it did not when measured
-    return sel && [...sel, ...[...this.covIndex.flaky].filter((t) => !sel.includes(t))];
+    return sel && [...new Set([...sel, ...this.covIndex.flaky, ...this.unmeasured])];
   }
 
   progress(w: Worker, r: Result) {
@@ -1090,7 +1100,11 @@ class Run {
         this.testsCommit = true;
         this.logf('Note: the tests commit even without mutants; commits under mutants do not count as side effects, no reset');
       }
-      for (const t of r.tests) if (t.failed) failedNames.set(t.name, t.message);
+      for (const t of r.tests) {
+        // the first run after an install may meet state of the replaced code (ORA-21700 when type
+        // or package specs were created anew, ORA-04068 …): such a test counts if the second passes
+        if (t.failed && !(i === 0 && STALE_STATE.test(t.message))) failedNames.set(t.name, t.message);
+      }
       slowest = Math.max(slowest, r.elapsedMs);
       last = r.tests;
     }

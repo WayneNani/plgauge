@@ -199,11 +199,15 @@ export async function loadObject(conn: oracledb.Connection, owner: string, name:
   const status = type === 'TRIGGER'
     ? (await conn.execute<[string]>(`select status from all_triggers where owner = :o and trigger_name = :n`, { o: owner, n: name })).rows?.[0]?.[0]
     : undefined;
+  // CREATE OR REPLACE may not change it (ORA-38824), and ALL_SOURCE does not show it
+  const editionable = (await conn.execute<[string | null]>(
+    `select editionable from all_objects where owner = :o and object_name = :n and object_type = :t`, { o: owner, n: name, t: type })).rows?.[0]?.[0];
   return {
     owner, name, type, original, processed,
     settings: {
       ...(s ? { plsql_optimize_level: String(s[0]), plsql_code_type: s[1], plsql_ccflags: s[2] ?? '', nls_length_semantics: s[3], plscope_settings: s[4] ?? '', ...(s[5] ? { plsql_warnings: s[5] } : {}), ...(s[6] === 'TRUE' ? { plsql_debug: 'TRUE' } : {}), ...(icb === 'TRUE' ? { plsql_implicit_conversion_bool: 'TRUE' } : {}) } : {}),
       ...(status === 'DISABLED' ? { trigger_status: 'DISABLED' } : {}),
+      ...(editionable === 'N' ? { noneditionable: 'TRUE' } : {}),
     },
   };
 }
@@ -384,7 +388,7 @@ async function compileHere(conn: oracledb.Connection, obj: SourceObject, source:
   if (obj.type !== 'VIEW') await conn.execute(`alter session set plsql_debug = ${st.plsql_debug === 'TRUE' ? 'TRUE' : 'FALSE'}`);
   // likewise implicit BOOLEAN conversion (a unit may need it to compile at all); refused before 23.26
   if (obj.type !== 'VIEW') await conn.execute(`alter session set plsql_implicit_conversion_bool = ${st.plsql_implicit_conversion_bool === 'TRUE' ? 'TRUE' : 'FALSE'}`).catch(() => {});
-  const prefix = 'create or replace ';
+  const prefix = st.noneditionable === 'TRUE' ? 'create or replace noneditionable ' : 'create or replace ';
   try {
     await conn.execute(prefix + source.replace(/\s*$/, ''));
   } catch (e) {

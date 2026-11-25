@@ -3,6 +3,20 @@
 All notable changes to plgauge are listed here. Versions follow [Semantic Versioning](https://semver.org/);
 until 1.0, a minor version may change options, file formats and output.
 
+## [Unreleased]
+
+### Fixed
+
+- A `NONEDITIONABLE` unit (utPLSQL's own packages, say) lost the property when plgauge compiled its instrumented
+  or mutated code, and Oracle refused that (`ORA-38824`): nothing could be measured. It is kept now, also on
+  restore.
+- Mutation testing with `--coverage`: tests the coverage file does not know (another schema's tests, tests
+  added since) ran against no mutant, so mutants they would kill survived. They now run against every mutant,
+  and the run says how many there are.
+- Mutation testing: a test that failed only in the first baseline run after an install, with an error of state
+  left from replaced code (`ORA-21700` when type or package specs were created anew, `ORA-04068`, …), was left
+  out of the whole run. It counts when the second baseline run passes.
+
 ## [0.2.0] - 2026-11-25
 
 ### Added

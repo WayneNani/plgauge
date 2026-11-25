@@ -52,6 +52,12 @@ test('example: coverage, cross-check with the recording run, oracle mode with co
   check(naive.results);
   const selected = naive.results.filter((r) => r.coveredBy).map((r) => r.coveredBy!.length);
   assert.ok(selected.length > 40 && selected.reduce((a, b) => a + b, 0) / selected.length < 10, 'weniger Tests pro Mutant');
+  // a test the coverage file does not know (another schema's, say) runs against every mutant
+  const gone = cov.tests.find((t) => !t.setup)!.path;
+  const partial = { ...cov, tests: cov.tests.map((t) => (t.path === gone ? { ...t, path: 'elsewhere.not_measured' } : t)) };
+  const some = await runMutation({ dir, dbUrls: [db!], mode: 'naive', coverage: partial, sample: 8, seed: 1 });
+  const covered = some.results.filter((r) => r.coveredBy);
+  assert.ok(covered.length > 0 && covered.every((r) => r.coveredBy!.includes(gone)), `${gone} selected for every mutant`);
 });
 
 for (const mode of ['naive', 'schema'] as const) {

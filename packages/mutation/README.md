@@ -89,7 +89,7 @@ Options of `mutate run`:
 | `--seed S` | Seed for `--sample`. Default 1. |
 | `--json FILE` | Write the results as JSON. |
 | `--report FILE` | Write a report: HTML if the name ends in `.html`, otherwise JSON in the mutation-testing-report-schema (Stryker). |
-| `--coverage FILE` | Measured coverage (`plgauge-coverage.json`). Oracle mode: run only the tests that executed the statement around the mutant. |
+| `--coverage FILE` | Measured coverage (`plgauge-coverage.json`). Oracle mode: run only the tests that executed the statement around the mutant. Tests the coverage run did not measure (another schema's, added since) run against every mutant. |
 | `--reset-cmd CMD` | Shell command that resets a worker database after a side effect; `{port}` is replaced by the worker's port. |
 | `--skip-install` | Do not run the `install` scripts. |
 | `--no-confirm` | Turn off the second attempt of the [second look at verdicts](#second-look-at-verdicts). |
