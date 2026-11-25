@@ -342,3 +342,15 @@ test('schema: a view whose points all run one by one keeps a recording wrapper; 
   assert.equal(plain.text, plain.original);
   assert.deepEqual(plain.recorded, []);
 });
+
+test('schema: "a || b → a" stays text in its CASE (a NUMBER first branch made the original a number: ORA-06502)', () => {
+  const path = join(mkdtempSync(join(tmpdir(), 'plgauge-')), 'c.prc');
+  writeFileSync(path, "create or replace procedure c(n number, m number) is\nbegin\n  raise_application_error(-20000, n || ' value(s) given, but ' || m || ' parameter(s)');\nend;\n/\n");
+  const ms = expand(findPoints([path]));
+  const concat = ms.filter((m) => m.op === 'AOR');
+  assert.deepEqual(concat.map((m) => m.mutated.trim()), ['n', "n || ' value(s) given, but '", "n || ' value(s) given, but ' || m"]);
+  const text = buildSchema(ms)[0].text;
+  for (const m of concat) assert.ok(text.includes(`THEN (${m.mutated.trim()} || NULL)`), text);
+  // the oracle rewriter's mutant stays as it is: the operand after n is gone, nothing added
+  assert.ok(mutatedUnit(concat[0]).includes("raise_application_error(-20000, n || m || ' parameter(s)');"));
+});

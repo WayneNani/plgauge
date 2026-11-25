@@ -226,6 +226,17 @@ const identByte = (c: number) =>
   c === 0x5f || c === 0x24 || c === 0x23 || (c >= 0x30 && c <= 0x39) || (c >= 0x61 && c <= 0x7a) || (c >= 0x41 && c <= 0x5a) || c >= 0x80;
 const identChar = (s: string) => s.length > 0 && identByte(s.charCodeAt(0));
 
+/**
+ * A variant as a CASE branch. "a || b → a" stays text: the first branch gives the CASE its type,
+ * and a NUMBER a would turn the original (the ELSE) into a number too (ORA-06502 without any
+ * active mutant). a || NULL has a's value as text, as the concatenation had.
+ */
+export function caseVariant(m: Pick<Mutant, 'op' | 'original' | 'mutated'>): string {
+  const kept = m.mutated.trim();
+  const concat = m.op === 'AOR' && m.original.trim().startsWith(kept) && m.original.trim().slice(kept.length).trimStart().startsWith('||');
+  return concat ? `(${kept} || NULL)` : `(${m.mutated})`;
+}
+
 class Renderer {
   b = '';
   constructor(private src: Buffer, private su: SchemaUnit, public active: string, private ctl = 'plgauge_ctl', private ctx = 'PLGAUGE_CTX', private inserts: NonNullable<Unit['inserts']> = []) {}
@@ -410,7 +421,7 @@ class Renderer {
     const p = n.p;
     this.spaceBefore();
     const start = this.b.length;
-    this.cases(n, `SYS_CONTEXT('${this.ctx}', 'ACTIVE')`, n.ms, (m) => `'${m.id}'`, (m) => `(${m.mutated})`);
+    this.cases(n, `SYS_CONTEXT('${this.ctx}', 'ACTIVE')`, n.ms, (m) => `'${m.id}'`, caseVariant);
     this.region(start, p, 0);
     this.spaceAfter(p.end);
   }
@@ -443,7 +454,7 @@ class Renderer {
       }
     } else {
       // bool in PL/SQL, value anywhere
-      this.cases(n, `CASE ${a} WHEN -1 THEN ${this.ctl}.hit(${base}, ${count}) ELSE ${a} END`, n.ms, (m) => `${m.id}`, (m) => `(${m.mutated})`);
+      this.cases(n, `CASE ${a} WHEN -1 THEN ${this.ctl}.hit(${base}, ${count}) ELSE ${a} END`, n.ms, (m) => `${m.id}`, caseVariant);
     }
     this.region(start, p, 0);
     this.spaceAfter(p.end);
